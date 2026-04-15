@@ -156,12 +156,18 @@ Claude Code and Agent SDK sessions are stored at `~/.claude/projects/` as JSONL 
 ```
 ~/.claude/projects/
 ├── -home-user-project-name/
-│   ├── session-uuid-1.jsonl
+│   ├── session-uuid-1.jsonl              # main session
+│   ├── session-uuid-1/
+│   │   └── subagents/
+│   │       ├── agent-<agentId-1>.jsonl   # full subagent trace
+│   │       └── agent-<agentId-2>.jsonl
 │   ├── session-uuid-2.jsonl
 │   └── ...
 └── -home-user-other-project/
     └── ...
 ```
+
+**Subagent JSONL files** contain complete internal traces (tool_use/tool_result pairs, per-step token usage, `is_error` flags, reasoning steps). All messages have `isSidechain: true`. The `agentId` links subagent files to the parent session's `tool_result` metadata. MVP enumerates these files; deep parsing is deferred to v1.1 (see D008).
 
 ### Message types AgentFluent extracts
 

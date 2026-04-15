@@ -315,32 +315,44 @@ The positioning would be: **"The tools that exist tell you what your agent did. 
 
 ### How Subagent Data Appears in JSONL
 
-Subagent activity is **inlined into the parent session file** — no separate JSONL files are created. When Claude spawns a subagent, the sequence in the parent session is:
+Subagent data exists in **two locations**:
 
+**1. Parent session (summary only):**
+When Claude spawns a subagent, the parent session contains:
 1. Assistant message with `tool_use` block where `name: "Agent"` and `input` contains `subagent_type`, `description`, and `prompt`
-2. The subagent runs in its own isolated context (not visible in the parent JSONL)
-3. A `tool_result` block returns only the subagent's final summary to the parent session
+2. A `tool_result` block with the subagent's final summary + metadata (`total_tokens`, `tool_uses`, `duration_ms`, `agentId`)
 
-The `isSidechain` flag exists in the schema but is not set to `true` for any observed session files. All 14 JSONL files in the codefluent project are primary sessions.
+**2. Separate subagent JSONL files (full internal traces):**
+Each subagent session is written to `~/.claude/projects/<project>/<session-uuid>/subagents/agent-<agentId>.jsonl`. These files contain **complete session data** — user prompts, assistant responses with token usage, tool_use/tool_result pairs, and all internal reasoning steps. All messages have `isSidechain: true`.
 
-### Observable vs Hidden Data
+**Updated 2026-04-15:** Earlier analysis incorrectly stated "no separate JSONL files are created." In fact, 350 subagent files were found across projects, containing full traces. The original analysis only examined top-level JSONL files and missed the `<session-uuid>/subagents/` subdirectory structure.
 
-**Updated 2026-04-14** based on analysis of actual custom PM agent invocations. The metadata block on `tool_result` provides significantly more data than initially expected.
+### Data Availability
 
-| Data Point | Visible in Parent JSONL | Hidden (Subagent Internal) |
+| Data Point | Parent JSONL (summary) | Subagent JSONL (full trace) |
 |---|---|---|
-| Which agent was invoked | Yes (`subagent_type` field) | — |
-| Delegation prompt | Yes (`prompt` in Agent tool input) | — |
+| Which agent was invoked | Yes (`subagent_type` field) | Yes (`agentId` on all messages) |
+| Delegation prompt | Yes (`prompt` in Agent tool input) | Yes (first user message) |
 | Agent description | Yes (`description` field) | — |
-| Final result/summary | Yes (`tool_result` content) | — |
-| Total tokens per invocation | **Yes** (metadata `total_tokens`) | Per-tool-call breakdown |
-| Tool use count per invocation | **Yes** (metadata `tool_uses`) | Which specific tools were called |
-| Duration per invocation | **Yes** (metadata `duration_ms`) | Per-step timing |
-| Agent session ID | **Yes** (metadata `agentId`) | — |
-| Agent self-reported issues | **Yes** (extractable from output text) | Internal error details |
-| Internal tool calls | No | Yes (Read, Grep, Bash, etc.) |
-| Internal reasoning steps | No | Yes |
-| Retries and errors (internal) | No | Yes |
+| Final result/summary | Yes (`tool_result` content) | Yes (last assistant message) |
+| Total tokens per invocation | Yes (metadata `total_tokens`) | Yes (sum of assistant usage) |
+| Tool use count per invocation | Yes (metadata `tool_uses`) | Yes (individual tool_use blocks) |
+| Duration per invocation | Yes (metadata `duration_ms`) | Yes (timestamp span) |
+| Agent session ID | Yes (metadata `agentId`) | Yes (`agentId` field) |
+| **Internal tool calls** | **No** | **Yes** — Read (348), Bash (230), Grep (100), Edit (71), etc. |
+| **Internal tool results** | **No** | **Yes** — including `is_error`, exit codes, error content |
+| **Internal reasoning steps** | **No** | **Yes** — full assistant response content |
+| **Retries and errors** | **No** | **Yes** — tool_result with `is_error: true` |
+| **Per-step token usage** | **No** | **Yes** — usage on each assistant message |
+
+### Implications
+
+This discovery significantly upgrades the feasibility of agent analytics:
+
+1. **Error recovery analysis extends to subagents.** Full tool_use/tool_result sequences with error flags enable the same error-recovery detection used in main sessions.
+2. **Prompt-to-behavior correlation is possible without Agent SDK.** The subagent's delegation prompt (from parent) + full internal traces (from subagent file) provide the complete picture. This was previously thought to require Agent SDK migration.
+3. **Token attribution is precise.** Per-step token usage in subagent files enables exact cost attribution per agent invocation, not just the summary `total_tokens` from metadata.
+4. **AgentFluent's "hidden data" requirement is eliminated.** The key features listed as "requires Agent SDK data" (prompt-to-behavior correlation, detailed error analysis, internal reasoning) are all available in subagent JSONL files.
 
 ### Observed Subagent Usage Patterns (CodeFluent Project)
 
@@ -392,31 +404,37 @@ These fields enable per-agent analytics cards without any Agent SDK migration:
 
 ### Implications for AgentFluent Prototype
 
-**What's testable with subagent data (more than initially expected):**
+**Updated 2026-04-15:** The discovery of full subagent JSONL traces eliminates the previously assumed data barrier. All features listed below are now feasible with Claude Code subagent data alone.
+
+**Fully available from subagent JSONL files:**
 - Invocation frequency and patterns — which agents are used, how often, for what tasks
 - Delegation effectiveness — is the agent description triggering appropriate delegation?
 - Output quality — does the returned summary lead to course-corrections by the user?
 - Configuration quality — tool restrictions, model selection, description clarity
-- **Cost attribution per agent invocation** — `total_tokens` from metadata
-- **Efficiency metrics** — tokens per tool use, duration per tool use
-- **Failure detection** — self-reported issues extractable from output text
-- **Agent continuity patterns** — fresh spawn vs SendMessage continuation
+- Cost attribution per agent invocation — per-step token usage from assistant messages
+- Efficiency metrics — tokens per tool use, duration per tool use
+- Failure detection — `is_error: true` on tool_result blocks, error content extraction
+- Agent continuity patterns — fresh spawn vs SendMessage continuation
+- **Prompt-to-behavior correlation** — delegation prompt (parent) + full internal traces (subagent file) provide the complete picture
+- **Detailed error analysis** — which tool failed, what the error was, how many retries — all in tool_result blocks
+- **Internal reasoning analysis** — full assistant response content available
+- **Error recovery patterns** — same detection algorithm applies to subagent sessions
 
-**What still requires Agent SDK data (AgentFluent-specific features):**
-- Prompt-to-behavior correlation — connecting system prompt phrasing to *specific* internal tool errors, retries, and stuck patterns (need per-tool-call traces)
-- Detailed error analysis — which tool failed, what the error was, how many retries
-- Prompt regression detection — comparing internal behavior across prompt versions
-- Internal reasoning analysis — did the agent follow its instructions or drift?
+**What genuinely requires Agent SDK (production agent use case only):**
+- Programmatic prompt version management — hardcoded prompts in application code vs interactive prompts
+- CI/CD integration — automated agent runs without a human in the loop
+- Custom instrumentation hooks — programmatic callbacks vs shell command hooks
 
 ### Bootstrap Strategy
 
-**Updated 2026-04-14:** The metadata block discovery makes subagent data more useful than initially expected. Custom Claude Code subagents provide enough data for meaningful agent analytics — not just configuration quality, but cost tracking, efficiency metrics, failure detection, and continuity analysis.
+**Updated 2026-04-15:** The discovery of full subagent JSONL traces fundamentally changes the bootstrap path. The question "why did my agent make 22 tool calls?" **can** be answered from subagent JSONL files — no Agent SDK migration needed. The trigger for AgentFluent shifts from "data availability" to "audience divergence" (interactive users vs production agent developers).
 
 1. **Done:** Deploy custom PM agent for real work in Claude Code. First invocations produced actionable data (April 14).
-2. **CodeFluent v1.2:** Capture metadata block in agent invocation tracking (#239) — `total_tokens`, `tool_uses`, `duration_ms`, `agentId`
-3. **CodeFluent v1.3:** Agent config scanning (#238), agent-aware recommendations (#240), agent advisor (#241)
-4. **When the gap hurts:** If lack of internal visibility (per-tool-call traces) becomes a blocker for optimizing subagent prompts, rebuild key agents using the Agent SDK to get full traces — that's the trigger for an AgentFluent prototype
-5. **AgentFluent signal:** The trigger is when you find yourself asking "why did my agent make 22 tool calls?" and the metadata alone can't answer it. That's when per-tool-call traces from the Agent SDK become essential.
+2. **Done:** Discovered full subagent traces in `<session-uuid>/subagents/agent-<id>.jsonl` — eliminates the "hidden data" barrier (April 15).
+3. **AgentFluent MVP (v1.0):** Execution analytics + config assessment + diagnostics preview using parent session metadata. Subagent files enumerated but not parsed.
+4. **AgentFluent v1.1:** Subagent trace parser + deep diagnostics with per-tool-call evidence. This is the "wow" release where recommendations come with specific tool-call evidence.
+5. **AgentFluent v1.2+:** Agent SDK source parsing, CI/CD integration, prompt regression detection, LLM-powered analysis.
+6. **AgentFluent trigger for audience split:** Not data availability (solved), but audience divergence — when the product needs to serve Agent SDK/production users with different workflows (CI/CD, programmatic prompt versioning, batch analysis) that don't fit the interactive focus.
 
 ---
 
