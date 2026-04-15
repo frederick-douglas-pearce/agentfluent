@@ -26,16 +26,18 @@ CodeFluent asks: "How fluent is the developer?" AgentFluent asks: "How do we mak
 
 ## Project Status
 
-Early stage -- scaffolding and research phase. No application code yet. The research document at `docs/AGENT_ANALYTICS_RESEARCH.md` contains the full market analysis, competitive landscape, technical feasibility study, and bootstrap strategy.
+MVP in progress. Package scaffolding and CLI skeleton are complete. See `.claude/specs/prd-mvp.md` for the full MVP spec and `.claude/specs/backlog-mvp.md` for the implementation backlog (issues #1-#42). The research document at `docs/AGENT_ANALYTICS_RESEARCH.md` contains the market analysis, competitive landscape, and technical feasibility study.
 
 ## Architecture Context
 
 ### Code Reuse from CodeFluent
 
-- **JSONL parser** (`parser.ts`) -- same session format
-- **Token analytics** (`analytics.ts`) -- same metrics
-- **Config scanner** (`configScanner.ts`) -- needs agent-specific categories
-- **Pricing lookup** (`pricing.ts`) -- identical
+CodeFluent's Python webapp (FastAPI backend) contains working implementations that can be ported/adapted:
+
+- **JSONL parser** (`parser.py`) -- same session format
+- **Token analytics** (`analytics.py`) -- same metrics
+- **Config scanner** (`config_scanner.py`) -- needs agent-specific categories
+- **Pricing lookup** (`pricing.py`) -- identical
 - **Cache infrastructure** -- same pattern
 - **Conversation assembly** -- same gap-based splitting
 
@@ -104,7 +106,11 @@ When implementing from a PM-produced spec or issue:
 
 - Keep files small: if a file exceeds 300 lines, consider splitting
 - Use descriptive variable names over comments
-- Error handling: wrap external calls (API, file I/O) in try/catch with user-friendly messages
+- Error handling: wrap external calls (API, file I/O) in try/except with user-friendly messages
+- Type annotations on all public functions (mypy strict mode is enabled)
+- Use Pydantic v2 models for data structures that cross module boundaries
+- Linting: `uv run ruff check src/` -- auto-fixable with `--fix`
+- Type checking: `uv run mypy src/agentfluent/`
 
 ## Branching & PR Workflow
 
@@ -132,6 +138,15 @@ This project uses [Conventional Commits](https://www.conventionalcommits.org/).
 - **All new features must have tests.** No merging without test coverage for the change.
 - **No regressions:** All tests must pass before any commit to main.
 - **Security:** Sanitize user-controlled strings before rendering. Never interpolate untrusted input into shell commands. Redact API keys in error messages.
+- **Update CLAUDE.md** when a story changes conventions, architecture, or package structure.
+
+### Testing Conventions
+
+- **Framework:** pytest via `uv run pytest`
+- **Coverage:** `uv run pytest --cov=agentfluent`
+- **Unit tests:** `tests/unit/` -- use anonymized JSONL fixtures in `tests/fixtures/`
+- **Integration tests:** `tests/integration/` -- marked with `@pytest.mark.integration`, run against real `~/.claude/projects/` data, skipped in CI
+- **CI runs:** `pytest -m "not integration"` (unit tests only)
 
 ## JSONL Data Format
 
@@ -220,4 +235,24 @@ Claude Code and Agent SDK sessions are stored at `~/.claude/projects/` as JSONL 
 
 ## Tech Stack
 
-TypeScript and Python (Agent SDK support). Node.js runtime. JSONL as the primary data format.
+**Python-only for MVP** (see decision D001 in `.claude/specs/decisions.md`).
+
+- **Language:** Python >=3.12
+- **Package/dependency management:** [uv](https://docs.astral.sh/uv/)
+- **CLI framework:** Typer (built on Click) + Rich for terminal formatting
+- **Data models:** Pydantic v2
+- **Testing:** pytest + pytest-cov
+- **Linting:** ruff
+- **Type checking:** mypy (strict mode)
+- **Data format:** JSONL (Claude Code session files)
+
+### Package Layout
+
+Uses `src/` layout (`src/agentfluent/`). See `.claude/specs/prd-mvp.md` Section 4 for the full package tree. Key subpackages:
+
+- `cli/` -- Typer app, commands, formatters
+- `core/` -- JSONL parser, session models, project discovery
+- `agents/` -- agent invocation extraction and models
+- `analytics/` -- token/cost metrics, tool patterns, pricing
+- `config/` -- agent definition scanner and scoring
+- `diagnostics/` -- behavior signals, correlation, recommendations
