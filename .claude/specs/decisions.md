@@ -97,3 +97,33 @@ Append-only log of significant trade-off decisions made during AgentFluent devel
 - uv is fast, supports pyproject.toml natively, handles lockfiles, and replaces pip/pip-tools/virtualenv
 - Aligns with modern Python tooling trends
 - Project scaffolding should use `uv init` and `pyproject.toml`, not `setup.py` or `requirements.txt`
+
+---
+
+## D008: Subagent trace discovery does NOT expand MVP scope
+
+**Date:** 2026-04-15
+**Context:** Full subagent session JSONL traces discovered at `~/.claude/projects/<project>/<session-uuid>/subagents/agent-<agentId>.jsonl` (350 files across projects). Contains complete tool_use/tool_result sequences with `is_error` flags, per-step token usage, internal reasoning, all with `isSidechain: true`. Features previously classified as "requires Agent SDK data" (prompt-to-behavior correlation, detailed error analysis, internal reasoning analysis) are now feasible with existing Claude Code subagent data. See CodeFluent decisions D6-D8 for the discovery details.
+
+**Options considered:**
+- A) Expand MVP to parse subagent traces -- adds E8 (subagent trace parser) and E9 (deep diagnostics) to MVP scope
+- B) Keep MVP scope fixed; subagent trace parsing becomes v1.1, with minor MVP adjustments to acknowledge the data exists
+
+**Decision:** Option B -- MVP scope stays fixed. Subagent trace parsing is v1.1.
+
+**Rationale:**
+- The MVP is already a stretch scope (D002) with 7 epics and 35 stories
+- Subagent trace parsing has real complexity: discovering `<session-uuid>/subagents/` directories, linking subagent files to parent session invocations via `agentId`, parsing a second JSONL format with `isSidechain: true`, handling parent-child relationships
+- The MVP's value proposition ("tells you what to change") works with parent-session metadata. Full traces improve recommendation *quality* but don't change whether the concept works
+- More data does not mean more MVP scope -- it means a better v1.1 with genuine per-tool-call evidence behind every recommendation
+- The discovery is better served as the headline feature of v1.1 ("deep diagnostics") than as MVP scope creep
+
+**MVP changes (minimal):**
+- #14 (session discovery): add subagent file counting (enumerate, don't parse)
+- #36 (diagnostics integration): add forward-looking note when subagent traces are detected
+
+**Post-MVP additions (v1.1 roadmap):**
+- E8: Subagent Trace Parser (discover, model, parse, link subagent JSONL files)
+- E9: Deep Diagnostics (retry sequences, error recovery patterns, prompt-to-behavior correlation with per-tool-call evidence)
+
+**Impact on positioning:** CodeFluent Decision D8 correctly identifies that AgentFluent's trigger is now "audience divergence, not data availability." For the MVP, this means AgentFluent demonstrates its value with existing metadata-level analysis. In v1.1, it leapfrogs to full-trace analysis that no other local-first tool offers. The phased approach turns the discovery into two product moments instead of one.
