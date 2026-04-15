@@ -1,0 +1,4 @@
+{"type": "user", "message": {"role": "user", "content": "Analyze the project structure"}, "timestamp": "2026-04-10T10:00:00.000Z"}
+{"type": "assistant", "message": {"model": "claude-sonnet-4-20250514", "role": "assistant", "content": [{"type": "text", "text": "I'll look at the project structure for you."}], "usage": {"input_tokens": 150, "output_tokens": 25, "cache_creation_input_tokens": 5000, "cache_read_input_tokens": 0}}, "timestamp": "2026-04-10T10:00:05.000Z"}
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Now check the config files"}]}, "timestamp": "2026-04-10T10:00:30.000Z"}
+{"type": "assistant", "message": {"model": "claude-sonnet-4-20250514", "role": "assistant", "content": [{"type": "text", "text": "Let me check the configuration."}], "usage": {"input_tokens": 200, "output_tokens": 30, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 5000}}, "timestamp": "2026-04-10T10:00:35.000Z"}
