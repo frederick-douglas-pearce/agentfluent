@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if git diff --name-only HEAD 2>/dev/null | grep -qE '\\.(ts|js|py|tsx|jsx)$'; then echo 'Reminder: Run /simplify to review changed code for reuse, quality, and efficiency before committing.'; fi"
+          }
+        ]
+      }
+    ]
+  }
+}
