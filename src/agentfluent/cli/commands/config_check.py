@@ -9,9 +9,8 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from agentfluent.config import assess_agents
 from agentfluent.config.models import ConfigScore, Severity
-from agentfluent.config.scanner import scan_agents
-from agentfluent.config.scoring import score_agent
 
 app = typer.Typer(help="Check agent configuration quality.")
 console = Console()
@@ -31,23 +30,6 @@ def _score_color(score: int) -> str:
     if score >= 50:
         return "yellow"
     return "red"
-
-
-def assess_agents(
-    scope: str = "all",
-    *,
-    agent_filter: str | None = None,
-) -> list[ConfigScore]:
-    """Scan and score agent definitions.
-
-    Reusable orchestration function for CLI, diagnostics, and tests.
-    """
-    agents = scan_agents(scope)
-
-    if agent_filter:
-        agents = [a for a in agents if a.name.lower() == agent_filter.lower()]
-
-    return [score_agent(a) for a in agents]
 
 
 def _print_quiet(scores: list[ConfigScore]) -> None:

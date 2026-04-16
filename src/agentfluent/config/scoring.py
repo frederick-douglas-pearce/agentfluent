@@ -15,8 +15,6 @@ from agentfluent.config.models import (
     Severity,
 )
 
-# --- Scoring configuration ---
-
 # Read-only tools suggest simpler tasks where cheaper models suffice
 READ_ONLY_TOOLS: frozenset[str] = frozenset({
     "Read", "Glob", "Grep", "WebFetch", "WebSearch",
@@ -51,8 +49,6 @@ SUCCESS_KEYWORDS: frozenset[str] = frozenset({
 })
 
 
-# --- Dimension scoring functions ---
-
 
 def _score_description(config: AgentConfig) -> tuple[int, list[ConfigRecommendation]]:
     """Score the agent description quality (0-25)."""
@@ -86,8 +82,7 @@ def _score_description(config: AgentConfig) -> tuple[int, list[ConfigRecommendat
 
     # Contains action verbs (5 pts)
     desc_lower = desc.lower()
-    found_verbs = [v for v in ACTION_VERBS if v in desc_lower]
-    if found_verbs:
+    if any(v in desc_lower for v in ACTION_VERBS):
         score += 5
     else:
         recs.append(ConfigRecommendation(
@@ -239,8 +234,7 @@ def _score_prompt_body(config: AgentConfig) -> tuple[int, list[ConfigRecommendat
         ))
 
     # Has structured sections (5 pts)
-    sections = SECTION_PATTERN.findall(body)
-    if sections:
+    if SECTION_PATTERN.search(body):
         score += 5
     else:
         recs.append(ConfigRecommendation(
@@ -275,8 +269,6 @@ def _score_prompt_body(config: AgentConfig) -> tuple[int, list[ConfigRecommendat
 
     return score, recs
 
-
-# --- Main scoring function ---
 
 
 def score_agent(config: AgentConfig) -> ConfigScore:
