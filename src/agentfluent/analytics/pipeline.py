@@ -10,9 +10,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from agentfluent.agents.extractor import extract_agent_invocations
-from agentfluent.analytics.agent_metrics import AgentMetrics, compute_agent_metrics
-from agentfluent.analytics.tokens import TokenMetrics, compute_token_metrics
-from agentfluent.analytics.tools import ToolMetrics, compute_tool_metrics
+from agentfluent.analytics.agent_metrics import (
+    AgentMetrics,
+    AgentTypeMetrics,
+    compute_agent_metrics,
+)
+from agentfluent.analytics.tokens import (
+    ModelTokenBreakdown,
+    TokenMetrics,
+    compute_token_metrics,
+)
+from agentfluent.analytics.tools import (
+    ConcentrationEntry,
+    ToolMetrics,
+    compute_tool_metrics,
+)
 from agentfluent.core.parser import parse_session
 from agentfluent.core.session import SessionMessage
 
@@ -88,6 +100,9 @@ def analyze_sessions(
 ) -> AnalysisResult:
     """Run analytics across multiple session files and aggregate results.
 
+    Calls analyze_session per file, then merges results mathematically
+    rather than re-processing raw messages.
+
     Args:
         paths: List of .jsonl session file paths.
         agent_filter: If set, only include this agent type in agent metrics.
@@ -95,48 +110,17 @@ def analyze_sessions(
     Returns:
         AnalysisResult with per-session and aggregated metrics.
     """
-    session_analyses: list[SessionAnalysis] = []
+    session_analyses = [analyze_session(p, agent_filter=agent_filter) for p in paths]
 
-    all_messages: list[SessionMessage] = []
-    for path in paths:
-        messages = parse_session(path)
-        all_messages.extend(messages)
+    if not session_analyses:
+        return AnalysisResult()
 
-        token_metrics = compute_token_metrics(messages)
-        tool_metrics = compute_tool_metrics(messages)
-
-        invocations = extract_agent_invocations(messages)
-        if agent_filter:
-            invocations = [
-                inv for inv in invocations if inv.agent_type.lower() == agent_filter.lower()
-            ]
-
-        agent_metrics = compute_agent_metrics(
-            invocations, session_total_tokens=token_metrics.total_tokens
-        )
-
-        session_analyses.append(
-            SessionAnalysis(
-                session_path=path,
-                token_metrics=token_metrics,
-                tool_metrics=tool_metrics,
-                agent_metrics=agent_metrics,
-                message_count=len(messages),
-                user_message_count=_count_type(messages, "user"),
-                assistant_message_count=_count_type(messages, "assistant"),
-            )
-        )
-
-    # Aggregate across all sessions
-    agg_token = compute_token_metrics(all_messages)
-    agg_tool = compute_tool_metrics(all_messages)
-
-    all_invocations = extract_agent_invocations(all_messages)
-    if agent_filter:
-        all_invocations = [
-            inv for inv in all_invocations if inv.agent_type.lower() == agent_filter.lower()
-        ]
-    agg_agent = compute_agent_metrics(all_invocations, session_total_tokens=agg_token.total_tokens)
+    agg_token = _merge_token_metrics([s.token_metrics for s in session_analyses])
+    agg_tool = _merge_tool_metrics([s.tool_metrics for s in session_analyses])
+    agg_agent = _merge_agent_metrics(
+        [s.agent_metrics for s in session_analyses],
+        session_total_tokens=agg_token.total_tokens,
+    )
 
     return AnalysisResult(
         sessions=session_analyses,
@@ -144,6 +128,144 @@ def analyze_sessions(
         tool_metrics=agg_tool,
         agent_metrics=agg_agent,
         session_count=len(session_analyses),
+    )
+
+
+def _merge_token_metrics(metrics_list: list[TokenMetrics]) -> TokenMetrics:
+    """Merge multiple TokenMetrics by summing per-model breakdowns."""
+    merged_models: dict[str, ModelTokenBreakdown] = {}
+    api_call_count = 0
+
+    for tm in metrics_list:
+        api_call_count += tm.api_call_count
+        for model_name, breakdown in tm.by_model.items():
+            existing = merged_models.get(model_name)
+            if existing is None:
+                merged_models[model_name] = ModelTokenBreakdown(
+                    model=model_name,
+                    input_tokens=breakdown.input_tokens,
+                    output_tokens=breakdown.output_tokens,
+                    cache_creation_input_tokens=breakdown.cache_creation_input_tokens,
+                    cache_read_input_tokens=breakdown.cache_read_input_tokens,
+                    cost=breakdown.cost,
+                )
+            else:
+                existing.input_tokens += breakdown.input_tokens
+                existing.output_tokens += breakdown.output_tokens
+                existing.cache_creation_input_tokens += breakdown.cache_creation_input_tokens
+                existing.cache_read_input_tokens += breakdown.cache_read_input_tokens
+                existing.cost += breakdown.cost
+
+    total_input = sum(b.input_tokens for b in merged_models.values())
+    total_output = sum(b.output_tokens for b in merged_models.values())
+    total_cache_creation = sum(b.cache_creation_input_tokens for b in merged_models.values())
+    total_cache_read = sum(b.cache_read_input_tokens for b in merged_models.values())
+    total_cost = sum(b.cost for b in merged_models.values())
+
+    cache_denom = total_cache_read + total_input + total_cache_creation
+    cache_efficiency = (
+        round(total_cache_read / cache_denom * 100, 1) if cache_denom > 0 else 0.0
+    )
+
+    return TokenMetrics(
+        input_tokens=total_input,
+        output_tokens=total_output,
+        cache_creation_input_tokens=total_cache_creation,
+        cache_read_input_tokens=total_cache_read,
+        total_cost=total_cost,
+        cache_efficiency=cache_efficiency,
+        api_call_count=api_call_count,
+        by_model=merged_models,
+    )
+
+
+def _merge_tool_metrics(metrics_list: list[ToolMetrics]) -> ToolMetrics:
+    """Merge multiple ToolMetrics by summing frequency dicts."""
+    merged_counts: dict[str, int] = {}
+    for tm in metrics_list:
+        for name, count in tm.tool_frequency.items():
+            merged_counts[name] = merged_counts.get(name, 0) + count
+
+    if not merged_counts:
+        return ToolMetrics()
+
+    sorted_tools = sorted(merged_counts.items(), key=lambda x: (-x[1], x[0]))
+    sorted_freq = dict(sorted_tools)
+    total = sum(merged_counts.values())
+
+    concentration: list[ConcentrationEntry] = []
+    cumulative = 0
+    for i, (_name, count) in enumerate(sorted_tools, start=1):
+        cumulative += count
+        concentration.append(
+            ConcentrationEntry(
+                top_n=i,
+                call_count=cumulative,
+                percentage=round(cumulative / total * 100, 1),
+            )
+        )
+
+    return ToolMetrics(
+        tool_frequency=sorted_freq,
+        unique_tool_count=len(merged_counts),
+        total_tool_calls=total,
+        concentration=concentration,
+    )
+
+
+def _merge_agent_metrics(
+    metrics_list: list[AgentMetrics],
+    session_total_tokens: int = 0,
+) -> AgentMetrics:
+    """Merge multiple AgentMetrics by summing per-type breakdowns."""
+    merged: dict[str, AgentTypeMetrics] = {}
+
+    for am in metrics_list:
+        for key, m in am.by_agent_type.items():
+            existing = merged.get(key)
+            if existing is None:
+                merged[key] = AgentTypeMetrics(
+                    agent_type=m.agent_type,
+                    is_builtin=m.is_builtin,
+                    invocation_count=m.invocation_count,
+                    total_tokens=m.total_tokens,
+                    total_tool_uses=m.total_tool_uses,
+                    total_duration_ms=m.total_duration_ms,
+                )
+            else:
+                existing.invocation_count += m.invocation_count
+                existing.total_tokens += m.total_tokens
+                existing.total_tool_uses += m.total_tool_uses
+                existing.total_duration_ms += m.total_duration_ms
+
+    # Recompute averages on merged data
+    for m in merged.values():
+        if m.total_tool_uses > 0:
+            if m.total_tokens > 0:
+                m.avg_tokens_per_tool_use = m.total_tokens / m.total_tool_uses
+            if m.total_duration_ms > 0:
+                m.avg_duration_per_tool_use = m.total_duration_ms / m.total_tool_uses
+
+    total_invocations = sum(m.invocation_count for m in merged.values())
+    total_agent_tokens = sum(m.total_tokens for m in merged.values())
+    total_agent_duration = sum(m.total_duration_ms for m in merged.values())
+    builtin_count = sum(m.invocation_count for m in merged.values() if m.is_builtin)
+    custom_count = sum(m.invocation_count for m in merged.values() if not m.is_builtin)
+
+    agent_token_pct = (
+        round(total_agent_tokens / session_total_tokens * 100, 1)
+        if session_total_tokens > 0 and total_agent_tokens > 0
+        else 0.0
+    )
+
+    return AgentMetrics(
+        by_agent_type=merged,
+        total_invocations=total_invocations,
+        total_agent_tokens=total_agent_tokens,
+        total_agent_duration_ms=total_agent_duration,
+        builtin_invocations=builtin_count,
+        custom_invocations=custom_count,
+        agent_token_percentage=agent_token_pct,
     )
 
 

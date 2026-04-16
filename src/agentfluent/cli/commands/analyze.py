@@ -10,7 +10,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from agentfluent.analytics.pipeline import AnalysisResult, analyze_session, analyze_sessions
+from agentfluent.analytics.pipeline import AnalysisResult, analyze_sessions
 from agentfluent.core.discovery import find_project
 
 app = typer.Typer(help="Analyze agent sessions.")
@@ -209,17 +209,7 @@ def analyze(
         console.print("[yellow]Diagnostics not yet implemented (E6).[/yellow]")
 
     # Run analysis
-    if len(paths) == 1:
-        session_result = analyze_session(paths[0], agent_filter=agent)
-        result = AnalysisResult(
-            sessions=[session_result],
-            token_metrics=session_result.token_metrics,
-            tool_metrics=session_result.tool_metrics,
-            agent_metrics=session_result.agent_metrics,
-            session_count=1,
-        )
-    else:
-        result = analyze_sessions(paths, agent_filter=agent)
+    result = analyze_sessions(paths, agent_filter=agent)
 
     # Output
     if format == "json":

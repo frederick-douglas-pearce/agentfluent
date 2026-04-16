@@ -82,18 +82,7 @@ def compute_cost(
     cache_creation_input_tokens: int = 0,
     cache_read_input_tokens: int = 0,
 ) -> float:
-    """Compute dollar cost from token counts and pricing.
-
-    Args:
-        pricing: Per-token rates for the model.
-        input_tokens: Number of input tokens.
-        output_tokens: Number of output tokens.
-        cache_creation_input_tokens: Number of cache creation tokens.
-        cache_read_input_tokens: Number of cache read tokens.
-
-    Returns:
-        Total cost in USD.
-    """
+    """Compute dollar cost in USD from token counts and pricing rates."""
     return (
         input_tokens * pricing.input
         + output_tokens * pricing.output
