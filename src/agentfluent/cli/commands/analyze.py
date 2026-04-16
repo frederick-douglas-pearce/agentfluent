@@ -12,9 +12,17 @@ from rich.table import Table
 
 from agentfluent.analytics.pipeline import AnalysisResult, analyze_sessions
 from agentfluent.core.discovery import find_project
+from agentfluent.diagnostics import run_diagnostics
+from agentfluent.diagnostics.models import DiagnosticsResult
 
 app = typer.Typer(help="Analyze agent sessions.")
 console = Console()
+
+_SEVERITY_COLORS = {
+    "critical": "red",
+    "warning": "yellow",
+    "info": "cyan",
+}
 
 
 def _format_cost(cost: float) -> str:
@@ -33,15 +41,89 @@ def _print_quiet(result: AnalysisResult) -> None:
     """Print a one-line summary."""
     tm = result.token_metrics
     am = result.agent_metrics
-    console.print(
-        f"Sessions: {result.session_count} | "
-        f"Tokens: {_format_tokens(tm.total_tokens)} | "
-        f"Cost: {_format_cost(tm.total_cost)} | "
-        f"Agent invocations: {am.total_invocations}"
-    )
+    parts = [
+        f"Sessions: {result.session_count}",
+        f"Tokens: {_format_tokens(tm.total_tokens)}",
+        f"Cost: {_format_cost(tm.total_cost)}",
+        f"Agent invocations: {am.total_invocations}",
+    ]
+    if result.diagnostics and result.diagnostics.signals:
+        parts.append(f"Diagnostic signals: {len(result.diagnostics.signals)}")
+    console.print(" | ".join(parts))
 
 
-def _print_table(result: AnalysisResult, *, verbose: bool = False) -> None:
+def _print_diagnostics_table(diag: DiagnosticsResult, *, verbose: bool = False) -> None:
+    """Print diagnostics signals and recommendations."""
+    if diag.signals:
+        sig_table = Table(title="Diagnostic Signals", show_header=True)
+        sig_table.add_column("Agent", style="cyan")
+        sig_table.add_column("Type")
+        sig_table.add_column("Severity")
+        sig_table.add_column("Message")
+
+        for sig in diag.signals:
+            color = _SEVERITY_COLORS.get(sig.severity.value, "white")
+            sig_table.add_row(
+                sig.agent_type,
+                sig.signal_type.value,
+                f"[{color}]{sig.severity.value}[/{color}]",
+                sig.message,
+            )
+        console.print(sig_table)
+
+    if diag.recommendations:
+        rec_table = Table(title="Recommendations", show_header=True)
+        rec_table.add_column("Agent", style="cyan")
+        rec_table.add_column("Target")
+        rec_table.add_column("Severity")
+        if verbose:
+            rec_table.add_column("Observation")
+            rec_table.add_column("Action")
+        else:
+            rec_table.add_column("Recommendation")
+
+        for rec in diag.recommendations:
+            color = _SEVERITY_COLORS.get(rec.severity.value, "white")
+            if verbose:
+                rec_table.add_row(
+                    rec.agent_type,
+                    rec.target,
+                    f"[{color}]{rec.severity.value}[/{color}]",
+                    rec.observation,
+                    rec.action,
+                )
+            else:
+                rec_table.add_row(
+                    rec.agent_type,
+                    rec.target,
+                    f"[{color}]{rec.severity.value}[/{color}]",
+                    rec.message,
+                )
+        console.print(rec_table)
+
+    if diag.subagent_trace_count > 0:
+        console.print(
+            f"\n[dim]{diag.subagent_trace_count} subagent trace files available. "
+            "Deep diagnostics (per-tool-call analysis) coming in v1.1.[/dim]"
+        )
+
+
+def _print_diagnostics_summary(diag: DiagnosticsResult) -> None:
+    """Print a brief diagnostics summary when --diagnostics is not passed."""
+    signal_count = len(diag.signals)
+    if signal_count > 0:
+        console.print(
+            f"\n[yellow]{signal_count} diagnostic signal(s) detected.[/yellow] "
+            "Run with [bold]--diagnostics[/bold] for details."
+        )
+
+
+def _print_table(
+    result: AnalysisResult,
+    *,
+    verbose: bool = False,
+    show_diagnostics: bool = False,
+) -> None:
     """Print Rich-formatted tables."""
     tm = result.token_metrics
     am = result.agent_metrics
@@ -123,6 +205,14 @@ def _print_table(result: AnalysisResult, *, verbose: bool = False) -> None:
         )
         console.print(agent_table)
 
+    # Diagnostics
+    diag = result.diagnostics
+    if diag:
+        if show_diagnostics:
+            _print_diagnostics_table(diag, verbose=verbose)
+        else:
+            _print_diagnostics_summary(diag)
+
     # Session summary
     console.print(
         f"\n[bold]Sessions analyzed:[/bold] {result.session_count}"
@@ -136,6 +226,10 @@ def _print_json(result: AnalysisResult) -> None:
     for session in data.get("sessions", []):
         if "session_path" in session:
             session["session_path"] = str(session["session_path"])
+    # Replace diagnostics with Pydantic serialization
+    diag = result.diagnostics
+    if diag:
+        data["diagnostics"] = diag.model_dump(mode="json")
     console.print_json(json.dumps(data, default=str))
 
 
@@ -169,7 +263,7 @@ def analyze(
         False,
         "--diagnostics",
         "-d",
-        help="Show detailed diagnostics (not yet implemented).",
+        help="Show detailed behavior diagnostics.",
     ),
     format: str = typer.Option(
         "table",
@@ -205,11 +299,22 @@ def analyze(
 
     paths = [s.path for s in session_infos]
 
-    if diagnostics:
-        console.print("[yellow]Diagnostics not yet implemented (E6).[/yellow]")
-
     # Run analysis
     result = analyze_sessions(paths, agent_filter=agent)
+
+    # Run diagnostics using invocations already extracted by the pipeline
+    all_invocations = [inv for s in result.sessions for inv in s.invocations]
+    total_subagent_traces = sum(si.subagent_count for si in session_infos)
+
+    if all_invocations:
+        result.diagnostics = run_diagnostics(
+            all_invocations, subagent_trace_count=total_subagent_traces,
+        )
+    elif result.agent_metrics.total_invocations == 0 and diagnostics:
+        console.print(
+            "[dim]No agent invocations found -- "
+            "diagnostics require agent activity.[/dim]"
+        )
 
     # Output
     if format == "json":
@@ -217,4 +322,4 @@ def analyze(
     elif quiet:
         _print_quiet(result)
     else:
-        _print_table(result, verbose=verbose)
+        _print_table(result, verbose=verbose, show_diagnostics=diagnostics)

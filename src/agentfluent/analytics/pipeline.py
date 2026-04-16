@@ -8,8 +8,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from agentfluent.agents.extractor import extract_agent_invocations
+from agentfluent.agents.models import AgentInvocation
 from agentfluent.analytics.agent_metrics import (
     AgentMetrics,
     AgentTypeMetrics,
@@ -28,6 +30,9 @@ from agentfluent.analytics.tools import (
 from agentfluent.core.parser import parse_session
 from agentfluent.core.session import SessionMessage
 
+if TYPE_CHECKING:
+    from agentfluent.diagnostics.models import DiagnosticsResult
+
 
 @dataclass
 class SessionAnalysis:
@@ -37,6 +42,8 @@ class SessionAnalysis:
     token_metrics: TokenMetrics
     tool_metrics: ToolMetrics
     agent_metrics: AgentMetrics
+    invocations: list[AgentInvocation] = field(default_factory=list)
+    """Agent invocations extracted from this session (for diagnostics)."""
     message_count: int = 0
     user_message_count: int = 0
     assistant_message_count: int = 0
@@ -51,6 +58,7 @@ class AnalysisResult:
     tool_metrics: ToolMetrics = field(default_factory=ToolMetrics)
     agent_metrics: AgentMetrics = field(default_factory=AgentMetrics)
     session_count: int = 0
+    diagnostics: DiagnosticsResult | None = None
 
 
 def analyze_session(
@@ -87,6 +95,7 @@ def analyze_session(
         token_metrics=token_metrics,
         tool_metrics=tool_metrics,
         agent_metrics=agent_metrics,
+        invocations=invocations,
         message_count=len(messages),
         user_message_count=_count_type(messages, "user"),
         assistant_message_count=_count_type(messages, "assistant"),
