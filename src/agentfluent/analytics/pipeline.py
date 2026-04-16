@@ -51,6 +51,8 @@ class AnalysisResult:
     tool_metrics: ToolMetrics = field(default_factory=ToolMetrics)
     agent_metrics: AgentMetrics = field(default_factory=AgentMetrics)
     session_count: int = 0
+    diagnostics: object | None = None
+    """Optional DiagnosticsResult (from diagnostics package)."""
 
 
 def analyze_session(
