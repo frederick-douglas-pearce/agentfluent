@@ -100,6 +100,7 @@ def _parse_assistant_message(data: dict[str, Any]) -> SessionMessage:
     return SessionMessage(
         type="assistant",
         timestamp=_parse_timestamp(data.get("timestamp")),
+        message_id=message.get("id"),
         model=message.get("model"),
         content_blocks=_normalize_content(message.get("content")),
         usage=usage,
@@ -126,15 +127,74 @@ def _parse_tool_result(data: dict[str, Any]) -> SessionMessage:
     )
 
 
-def parse_session(path: Path) -> list[SessionMessage]:
+def deduplicate_messages(messages: list[SessionMessage]) -> list[SessionMessage]:
+    """Deduplicate streaming snapshot assistant messages by message_id.
+
+    Claude Code writes multiple assistant messages per API call as streaming
+    snapshots. All snapshots share the same message.id. Within a group:
+    - input_tokens/cache tokens are identical across snapshots
+    - output_tokens increases with each snapshot (partial -> final)
+
+    This function keeps the entry with the highest output_tokens per message_id.
+    Non-assistant messages and assistant messages without a message_id pass
+    through unchanged.
+    """
+    # Track best assistant message per message_id
+    best_by_id: dict[str, SessionMessage] = {}
+    # Track insertion order for stable output
+    id_order: list[str] = []
+
+    result: list[SessionMessage] = []
+
+    for msg in messages:
+        if msg.type != "assistant" or not msg.message_id:
+            result.append(msg)
+            continue
+
+        mid = msg.message_id
+        existing = best_by_id.get(mid)
+        if existing is None:
+            best_by_id[mid] = msg
+            id_order.append(mid)
+            # Insert a placeholder — we'll replace later
+            result.append(msg)
+        else:
+            # Keep the one with higher output_tokens
+            existing_output = existing.usage.output_tokens if existing.usage else 0
+            new_output = msg.usage.output_tokens if msg.usage else 0
+            if new_output > existing_output:
+                best_by_id[mid] = msg
+
+    # Replace placeholders with the best version
+    seen: set[str] = set()
+    final: list[SessionMessage] = []
+    for msg in result:
+        if msg.type == "assistant" and msg.message_id:
+            mid = msg.message_id
+            if mid not in seen:
+                seen.add(mid)
+                final.append(best_by_id[mid])
+            # Skip duplicates (placeholders for IDs we've already emitted)
+        else:
+            final.append(msg)
+
+    return final
+
+
+def parse_session(path: Path, *, deduplicate: bool = True) -> list[SessionMessage]:
     """Parse a JSONL session file into a list of SessionMessage objects.
 
     Reads the file line by line. Skips non-analytical message types and
     malformed lines (with a warning log). Returns an empty list for
     empty files or files that contain no analytical messages.
 
+    Streaming snapshot deduplication is applied by default: assistant
+    messages sharing the same message.id are collapsed, keeping the
+    entry with the highest output_tokens.
+
     Args:
         path: Path to the .jsonl session file.
+        deduplicate: Whether to deduplicate streaming snapshots. Default True.
 
     Returns:
         List of parsed SessionMessage objects in file order.
@@ -184,5 +244,8 @@ def parse_session(path: Path) -> list[SessionMessage]:
                     "Failed to parse message at %s:%d", path.name, line_num, exc_info=True
                 )
                 continue
+
+    if deduplicate:
+        messages = deduplicate_messages(messages)
 
     return messages

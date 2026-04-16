@@ -44,6 +44,12 @@ def malformed_session_path() -> Path:
 
 
 @pytest.fixture()
+def streaming_dupes_session_path() -> Path:
+    """Path to a session with duplicate streaming snapshot assistant messages."""
+    return FIXTURES_DIR / "session_streaming_dupes.jsonl"
+
+
+@pytest.fixture()
 def empty_session_path(tmp_path: Path) -> Path:
     """Path to an empty JSONL file."""
     p = tmp_path / "empty.jsonl"
