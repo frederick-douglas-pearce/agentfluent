@@ -1,6 +1,6 @@
 """Tests for tool pattern analytics."""
 
-from agentfluent.analytics.tools import ToolMetrics, compute_tool_metrics
+from agentfluent.analytics.tools import compute_tool_metrics
 from agentfluent.core.session import ContentBlock, SessionMessage
 
 

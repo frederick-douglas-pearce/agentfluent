@@ -1,6 +1,6 @@
 """Tests for token and cost analytics."""
 
-from agentfluent.analytics.tokens import TokenMetrics, compute_token_metrics
+from agentfluent.analytics.tokens import compute_token_metrics
 from agentfluent.core.session import ContentBlock, SessionMessage, Usage
 
 
