@@ -84,6 +84,10 @@ class SessionMessage(BaseModel):
     For tool_result, a single text block with the result content."""
 
     # Assistant-specific fields
+    message_id: str | None = None
+    """Anthropic message ID (e.g., 'msg_...'). Used to deduplicate streaming snapshots.
+    All snapshots for the same API call share the same message_id."""
+
     model: str | None = None
     """Model name (e.g., 'claude-opus-4-6'). Only on assistant messages."""
 
