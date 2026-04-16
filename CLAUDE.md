@@ -94,10 +94,27 @@ Do NOT invoke the PM agent for:
 - **Epics:** GitHub issues with `epic:` label prefix
 - **Stories:** GitHub issues tagged with parent epic label
 
+### When to invoke the Architect agent
+
+Delegate to the architect subagent (`~/.claude/agents/architect.md`) for design review **before implementation begins**. The architect agent is read-only -- it reviews plans, not code. It posts its findings as comments on the relevant GitHub issue so they persist across sessions.
+
+Invoke the architect agent when:
+- You're about to start a non-trivial feature (new module, schema change, new analytics pipeline)
+- The implementation plan touches cross-module interfaces or shared data models (e.g., `SessionMessage`, `AgentInvocation`)
+- The feature involves a new diagnostics rule, correlation engine logic, or recommendation template
+- The roadmap shows upcoming features that could be affected by design decisions
+
+Do NOT invoke the architect agent for:
+- Simple bug fixes with clear solutions
+- Documentation-only changes
+- Dependency updates or CI changes
+- Post-implementation code review (use `/simplify` or `/review` instead)
+
 ### Working from specs
 
 When implementing from a PM-produced spec or issue:
 - Reference the story's acceptance criteria as your definition of done
+- Check for architect review comments on the issue -- address any blocking concerns before implementing
 - Do not exceed the scope defined in the spec
 - If the spec is technically infeasible or incomplete, STOP and report
   back to the human before proceeding -- do not silently adapt
