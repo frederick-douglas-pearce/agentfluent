@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+
 from agentfluent.agents.models import AgentInvocation
 from agentfluent.config.models import AgentConfig
 from agentfluent.config.scanner import scan_agents
 from agentfluent.diagnostics.correlator import correlate
 from agentfluent.diagnostics.models import DiagnosticsResult
 from agentfluent.diagnostics.signals import extract_signals
+
+logger = logging.getLogger(__name__)
 
 
 def run_diagnostics(
@@ -35,8 +39,8 @@ def run_diagnostics(
         agent_configs = scan_agents("all")
         if agent_configs:
             configs = {c.name.lower(): c for c in agent_configs}
-    except Exception:  # noqa: BLE001
-        pass
+    except OSError:
+        logger.debug("Could not scan agent config files", exc_info=True)
 
     recommendations = correlate(signals, configs)
 

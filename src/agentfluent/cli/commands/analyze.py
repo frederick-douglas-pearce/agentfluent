@@ -47,17 +47,9 @@ def _print_quiet(result: AnalysisResult) -> None:
         f"Cost: {_format_cost(tm.total_cost)}",
         f"Agent invocations: {am.total_invocations}",
     ]
-    diag = _get_diagnostics(result)
-    if diag and diag.signals:
-        parts.append(f"Diagnostic signals: {len(diag.signals)}")
+    if result.diagnostics and result.diagnostics.signals:
+        parts.append(f"Diagnostic signals: {len(result.diagnostics.signals)}")
     console.print(" | ".join(parts))
-
-
-def _get_diagnostics(result: AnalysisResult) -> DiagnosticsResult | None:
-    """Safely extract DiagnosticsResult from AnalysisResult."""
-    if isinstance(result.diagnostics, DiagnosticsResult):
-        return result.diagnostics
-    return None
 
 
 def _print_diagnostics_table(diag: DiagnosticsResult, *, verbose: bool = False) -> None:
@@ -214,7 +206,7 @@ def _print_table(
         console.print(agent_table)
 
     # Diagnostics
-    diag = _get_diagnostics(result)
+    diag = result.diagnostics
     if diag:
         if show_diagnostics:
             _print_diagnostics_table(diag, verbose=verbose)
@@ -235,7 +227,7 @@ def _print_json(result: AnalysisResult) -> None:
         if "session_path" in session:
             session["session_path"] = str(session["session_path"])
     # Replace diagnostics with Pydantic serialization
-    diag = _get_diagnostics(result)
+    diag = result.diagnostics
     if diag:
         data["diagnostics"] = diag.model_dump(mode="json")
     console.print_json(json.dumps(data, default=str))
@@ -310,21 +302,9 @@ def analyze(
     # Run analysis
     result = analyze_sessions(paths, agent_filter=agent)
 
-    # Run diagnostics (signal extraction is cheap; always run)
-    from agentfluent.agents.extractor import extract_agent_invocations
-    from agentfluent.core.parser import parse_session
-
-    all_invocations = []
-    total_subagent_traces = 0
-    for si in session_infos:
-        messages = parse_session(si.path)
-        invocations = extract_agent_invocations(messages)
-        if agent:
-            invocations = [
-                inv for inv in invocations if inv.agent_type.lower() == agent.lower()
-            ]
-        all_invocations.extend(invocations)
-        total_subagent_traces += si.subagent_count
+    # Run diagnostics using invocations already extracted by the pipeline
+    all_invocations = [inv for s in result.sessions for inv in s.invocations]
+    total_subagent_traces = sum(si.subagent_count for si in session_infos)
 
     if all_invocations:
         result.diagnostics = run_diagnostics(
