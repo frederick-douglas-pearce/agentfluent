@@ -7,6 +7,7 @@ from typing import Optional
 import typer
 from rich.console import Console
 
+from agentfluent.cli.exit_codes import EXIT_NO_DATA, EXIT_USER_ERROR
 from agentfluent.cli.formatters.helpers import average_score
 from agentfluent.cli.formatters.json_output import format_json_output
 from agentfluent.cli.formatters.table import format_config_check_table
@@ -86,20 +87,20 @@ def config_check(
     if scope not in ("user", "project", "all"):
         err_console.print(f"[red]Invalid scope:[/red] {scope}")
         err_console.print("Valid scopes: user, project, all")
-        raise typer.Exit(code=2)
+        raise typer.Exit(code=EXIT_USER_ERROR)
 
     scores = assess_agents(scope, agent_filter=agent)
 
     if not scores:
         if agent:
             err_console.print(f"[yellow]No agent found named:[/yellow] {agent}")
-        else:
-            err_console.print("[yellow]No agent definition files found.[/yellow]")
-            err_console.print(
-                "Agent definitions are `.md` files in "
-                "`~/.claude/agents/` (user) or `.claude/agents/` (project)."
-            )
-        raise typer.Exit(code=2)
+            raise typer.Exit(code=EXIT_USER_ERROR)
+        err_console.print("[yellow]No agent definition files found.[/yellow]")
+        err_console.print(
+            "Agent definitions are `.md` files in "
+            "`~/.claude/agents/` (user) or `.claude/agents/` (project)."
+        )
+        raise typer.Exit(code=EXIT_NO_DATA)
 
     if format == "json":
         _print_json(scores, quiet=quiet)

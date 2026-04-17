@@ -8,6 +8,7 @@ import typer
 from rich.console import Console
 
 from agentfluent.analytics.pipeline import AnalysisResult, analyze_sessions
+from agentfluent.cli.exit_codes import EXIT_NO_DATA, EXIT_USER_ERROR
 from agentfluent.cli.formatters.helpers import format_cost, format_tokens
 from agentfluent.cli.formatters.json_output import format_json_output
 from agentfluent.cli.formatters.table import format_analysis_table
@@ -117,19 +118,19 @@ def analyze(
     if project_info is None:
         err_console.print(f"[red]Project not found:[/red] {project}")
         err_console.print("Use [bold]agentfluent list[/bold] to see available projects.")
-        raise typer.Exit(code=2)
+        raise typer.Exit(code=EXIT_USER_ERROR)
 
     session_infos = project_info.sessions
     if not session_infos:
         name = project_info.display_name
         err_console.print(f"[yellow]No sessions found for project:[/yellow] {name}")
-        raise typer.Exit(code=2)
+        raise typer.Exit(code=EXIT_NO_DATA)
 
     if session:
         session_infos = [s for s in session_infos if s.filename == session]
         if not session_infos:
             err_console.print(f"[red]Session not found:[/red] {session}")
-            raise typer.Exit(code=2)
+            raise typer.Exit(code=EXIT_USER_ERROR)
 
     if latest is not None and latest > 0:
         session_infos = session_infos[:latest]
