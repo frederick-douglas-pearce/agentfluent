@@ -6,9 +6,9 @@ analysis pipeline. Reusable by the CLI, future webapp, and tests.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+
+from pydantic import BaseModel, Field
 
 from agentfluent.agents.extractor import extract_agent_invocations
 from agentfluent.agents.models import AgentInvocation
@@ -29,34 +29,29 @@ from agentfluent.analytics.tools import (
 )
 from agentfluent.core.parser import parse_session
 from agentfluent.core.session import SessionMessage
-
-if TYPE_CHECKING:
-    from agentfluent.diagnostics.models import DiagnosticsResult
+from agentfluent.diagnostics.models import DiagnosticsResult
 
 
-@dataclass
-class SessionAnalysis:
+class SessionAnalysis(BaseModel):
     """Complete analysis results for a single session."""
 
     session_path: Path
     token_metrics: TokenMetrics
     tool_metrics: ToolMetrics
     agent_metrics: AgentMetrics
-    invocations: list[AgentInvocation] = field(default_factory=list)
-    """Agent invocations extracted from this session (for diagnostics)."""
+    invocations: list[AgentInvocation] = Field(default_factory=list)
     message_count: int = 0
     user_message_count: int = 0
     assistant_message_count: int = 0
 
 
-@dataclass
-class AnalysisResult:
+class AnalysisResult(BaseModel):
     """Aggregated analysis results across one or more sessions."""
 
-    sessions: list[SessionAnalysis] = field(default_factory=list)
-    token_metrics: TokenMetrics = field(default_factory=TokenMetrics)
-    tool_metrics: ToolMetrics = field(default_factory=ToolMetrics)
-    agent_metrics: AgentMetrics = field(default_factory=AgentMetrics)
+    sessions: list[SessionAnalysis] = Field(default_factory=list)
+    token_metrics: TokenMetrics = Field(default_factory=TokenMetrics)
+    tool_metrics: ToolMetrics = Field(default_factory=ToolMetrics)
+    agent_metrics: AgentMetrics = Field(default_factory=AgentMetrics)
     session_count: int = 0
     diagnostics: DiagnosticsResult | None = None
 

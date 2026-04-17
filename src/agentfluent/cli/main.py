@@ -7,9 +7,34 @@ import typer
 from agentfluent import __version__
 from agentfluent.cli.commands import analyze, config_check, list_cmd
 
+TOP_LEVEL_HELP = """\
+Local-first agent analytics for the Claude Agent SDK and Claude Code subagents.
+
+AgentFluent analyzes session JSONL files in ~/.claude/projects/ to diagnose
+agent quality -- token usage, tool patterns, behavior signals, and config
+health -- and produces specific recommendations for improving agent prompts,
+tool access, model selection, and other configuration surfaces.
+"""
+
+TOP_LEVEL_EPILOG = """\
+Common workflows:
+
+  agentfluent list
+      Discover which projects have session data.
+
+  agentfluent analyze --project <slug> --diagnostics
+      Full analytics with behavior diagnostics.
+
+  agentfluent config-check
+      Score agent definitions against best practices.
+
+Run any command with --help for command-specific options and examples.
+"""
+
 app = typer.Typer(
     name="agentfluent",
-    help="Local-first agent analytics with prompt diagnostics.",
+    help=TOP_LEVEL_HELP,
+    epilog=TOP_LEVEL_EPILOG,
     no_args_is_help=True,
 )
 
