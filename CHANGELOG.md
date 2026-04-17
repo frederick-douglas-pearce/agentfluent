@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.0.0 (2026-04-17)
+
+
+### Features
+
+* add versioned JSON envelope and help examples ([#39](https://github.com/frederick-douglas-pearce/agentfluent/issues/39), [#42](https://github.com/frederick-douglas-pearce/agentfluent/issues/42)) ([#61](https://github.com/frederick-douglas-pearce/agentfluent/issues/61)) ([a8036f2](https://github.com/frederick-douglas-pearce/agentfluent/commit/a8036f2c9f86438b0511f87e59b1f890db375810))
+* create CLI skeleton with Typer stub commands ([23e03e1](https://github.com/frederick-douglas-pearce/agentfluent/commit/23e03e187bb74a5d230aefec7c0300e6e2101a72)), closes [#9](https://github.com/frederick-douglas-pearce/agentfluent/issues/9)
+* define core data models for parsed JSONL sessions ([a1f16e5](https://github.com/frederick-douglas-pearce/agentfluent/commit/a1f16e5a8994966db5dba991e028a48338fc93db)), closes [#13](https://github.com/frederick-douglas-pearce/agentfluent/issues/13)
+* implement --verbose and --quiet output modes ([#40](https://github.com/frederick-douglas-pearce/agentfluent/issues/40)) ([#62](https://github.com/frederick-douglas-pearce/agentfluent/issues/62)) ([12f8b22](https://github.com/frederick-douglas-pearce/agentfluent/commit/12f8b222e69f5b4c54358042cdce6ad414c618c7))
+* implement agent configuration assessment ([#28](https://github.com/frederick-douglas-pearce/agentfluent/issues/28)-[#32](https://github.com/frederick-douglas-pearce/agentfluent/issues/32)) ([f2fe0dd](https://github.com/frederick-douglas-pearce/agentfluent/commit/f2fe0ddd91b772d9345ee99f39b4e0065620f24a))
+* implement agent configuration assessment (E5) ([88861a2](https://github.com/frederick-douglas-pearce/agentfluent/commit/88861a20ce7a4b3c97b37634839f6e192bfa2394))
+* implement agent invocation extraction from sessions ([f74c773](https://github.com/frederick-douglas-pearce/agentfluent/commit/f74c7734ca20a95c3b26690eae72ac24251f24bb))
+* implement diagnostics preview pipeline ([#33](https://github.com/frederick-douglas-pearce/agentfluent/issues/33)-[#37](https://github.com/frederick-douglas-pearce/agentfluent/issues/37)) ([c4d8348](https://github.com/frederick-douglas-pearce/agentfluent/commit/c4d8348342387479e02d7d9a52ce7d9176dda27d))
+* implement diagnostics preview pipeline (E6) ([22f7f53](https://github.com/frederick-douglas-pearce/agentfluent/commit/22f7f53d58f1535eeb527a0071b4b5178b438f4c))
+* implement execution analytics pipeline ([#22](https://github.com/frederick-douglas-pearce/agentfluent/issues/22)-[#27](https://github.com/frederick-douglas-pearce/agentfluent/issues/27)) ([155cb1a](https://github.com/frederick-douglas-pearce/agentfluent/commit/155cb1af9f96133907e42df945e287c8a5e4e79c))
+* implement execution analytics pipeline (E4) ([a95db23](https://github.com/frederick-douglas-pearce/agentfluent/commit/a95db23a1bc82e6a66dd57e88073366b3aaddec6))
+* implement project discovery and JSONL session parser ([13e567c](https://github.com/frederick-douglas-pearce/agentfluent/commit/13e567c6b40014b1e330af5f131b3aa5a78cf88d))
+* initialize Python package with uv and pyproject.toml ([db80861](https://github.com/frederick-douglas-pearce/agentfluent/commit/db8086164ed8f46001ea6095d7028886930b245d)), closes [#8](https://github.com/frederick-douglas-pearce/agentfluent/issues/8)
+* wire up agentfluent list command with discovery and parser ([23828a0](https://github.com/frederick-douglas-pearce/agentfluent/commit/23828a0b2dc63e7b2c3d596b82d359db6a06ebd2)), closes [#16](https://github.com/frederick-douglas-pearce/agentfluent/issues/16)
+
+
+### Bug Fixes
+
+* add message.id dedup for accurate token counting ([1d70a8d](https://github.com/frederick-douglas-pearce/agentfluent/commit/1d70a8d43dba102e820c95c9c3bea282505ef819)), closes [#55](https://github.com/frederick-douglas-pearce/agentfluent/issues/55)
+* remove unused imports in test files caught by CI lint ([e1337fc](https://github.com/frederick-douglas-pearce/agentfluent/commit/e1337fc44b4647b1329bc7c5759c6eafe93954bc))
+
+## Changelog
+
 All notable changes to AgentFluent will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),

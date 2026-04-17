@@ -1,6 +1,6 @@
 [project]
 name = "agentfluent"
-version = "0.0.0" # x-release-please-version
+version = "1.0.0" # x-release-please-version
 description = "Local-first agent analytics with prompt diagnostics"
 readme = "README.md"
 license = "MIT"
