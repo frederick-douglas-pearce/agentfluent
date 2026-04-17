@@ -30,3 +30,31 @@ def format_json_output(command: CommandName, data: Any) -> str:
         "data": data,
     }
     return json.dumps(envelope, indent=2, default=str)
+
+
+def parse_json_output(
+    text: str, *, expected_command: CommandName | None = None,
+) -> Any:
+    """Validate the envelope and return its `data` payload.
+
+    Raises ValueError on schema violation (missing keys, wrong version,
+    wrong command).
+    """
+    envelope = json.loads(text)
+    missing = {"version", "command", "data"} - envelope.keys()
+    if missing:
+        msg = f"JSON envelope missing keys: {sorted(missing)}"
+        raise ValueError(msg)
+    if envelope["version"] != SCHEMA_VERSION:
+        msg = (
+            f"JSON envelope version {envelope['version']!r} does not match "
+            f"SCHEMA_VERSION {SCHEMA_VERSION!r}"
+        )
+        raise ValueError(msg)
+    if expected_command is not None and envelope["command"] != expected_command:
+        msg = (
+            f"JSON envelope command {envelope['command']!r} does not match "
+            f"expected {expected_command!r}"
+        )
+        raise ValueError(msg)
+    return envelope["data"]

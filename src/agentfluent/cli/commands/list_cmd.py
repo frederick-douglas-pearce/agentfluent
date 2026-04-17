@@ -7,6 +7,7 @@ from typing import Optional
 import typer
 from rich.console import Console
 
+from agentfluent.cli.exit_codes import EXIT_NO_DATA, EXIT_USER_ERROR
 from agentfluent.cli.formatters.json_output import format_json_output
 from agentfluent.cli.formatters.table import (
     format_projects_table,
@@ -46,7 +47,7 @@ def _discover_or_exit() -> list[ProjectInfo]:
         return discover_projects()
     except FileNotFoundError as e:
         err_console.print(f"[red]{e}[/red]")
-        raise typer.Exit(code=1) from None
+        raise typer.Exit(code=EXIT_NO_DATA) from None
 
 
 def _list_projects_table(*, verbose: bool, quiet: bool) -> None:
@@ -93,7 +94,7 @@ def _find_or_exit(project_slug: str) -> ProjectInfo:
     project = find_project(project_slug)
     if project is None:
         err_console.print(f"[red]Project not found: {project_slug}[/red]")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_USER_ERROR)
     return project
 
 
