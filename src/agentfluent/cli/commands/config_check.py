@@ -7,6 +7,7 @@ from typing import Optional
 import typer
 from rich.console import Console
 
+from agentfluent.cli.formatters.helpers import average_score
 from agentfluent.cli.formatters.json_output import format_json_output
 from agentfluent.cli.formatters.table import format_config_check_table
 from agentfluent.config import assess_agents
@@ -35,18 +36,24 @@ err_console = Console(stderr=True)
 
 def _print_quiet(scores: list[ConfigScore]) -> None:
     """Print a one-line summary."""
-    avg = sum(s.overall_score for s in scores) // len(scores) if scores else 0
     total_recs = sum(len(s.recommendations) for s in scores)
     console.print(
         f"Agents: {len(scores)} | "
-        f"Avg score: {avg}/100 | "
+        f"Avg score: {average_score(scores)}/100 | "
         f"Recommendations: {total_recs}"
     )
 
 
-def _print_json(scores: list[ConfigScore]) -> None:
-    """Print JSON output."""
-    payload = {"scores": [s.model_dump(mode="json") for s in scores]}
+def _print_json(scores: list[ConfigScore], *, quiet: bool) -> None:
+    """Print JSON output. Quiet emits a minimal summary; default emits all scores."""
+    if quiet:
+        payload: dict[str, object] = {
+            "agent_count": len(scores),
+            "average_score": average_score(scores),
+            "recommendation_count": sum(len(s.recommendations) for s in scores),
+        }
+    else:
+        payload = {"scores": [s.model_dump(mode="json") for s in scores]}
     print(format_json_output("config-check", payload))
 
 
@@ -73,6 +80,9 @@ def config_check(
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Show summary only."),
 ) -> None:
     """Scan agent definitions and score them against best practices."""
+    if verbose and quiet:
+        raise typer.BadParameter("--verbose and --quiet are mutually exclusive")
+
     if scope not in ("user", "project", "all"):
         err_console.print(f"[red]Invalid scope:[/red] {scope}")
         err_console.print("Valid scopes: user, project, all")
@@ -92,7 +102,7 @@ def config_check(
         raise typer.Exit(code=2)
 
     if format == "json":
-        _print_json(scores)
+        _print_json(scores, quiet=quiet)
     elif quiet:
         _print_quiet(scores)
     else:

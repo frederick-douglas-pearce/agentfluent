@@ -35,24 +35,37 @@ console = Console()
 err_console = Console(stderr=True)
 
 
-def _print_quiet(result: AnalysisResult) -> None:
+def _print_quiet(result: AnalysisResult, project_name: str) -> None:
     """Print a one-line summary."""
     tm = result.token_metrics
     am = result.agent_metrics
-    parts = [
-        f"Sessions: {result.session_count}",
-        f"Tokens: {format_tokens(tm.total_tokens)}",
-        f"Cost: {format_cost(tm.total_cost)}",
-        f"Agent invocations: {am.total_invocations}",
-    ]
-    if result.diagnostics and result.diagnostics.signals:
-        parts.append(f"Diagnostic signals: {len(result.diagnostics.signals)}")
-    console.print(" | ".join(parts))
+    signal_count = len(result.diagnostics.signals) if result.diagnostics else 0
+    console.print(
+        f"Project {project_name}: "
+        f"{format_cost(tm.total_cost)} cost, "
+        f"{format_tokens(tm.total_tokens)} tokens, "
+        f"{am.total_invocations} agent invocations, "
+        f"{signal_count} diagnostic signals"
+    )
 
 
-def _print_json(result: AnalysisResult) -> None:
-    """Print JSON output."""
-    print(format_json_output("analyze", result.model_dump(mode="json")))
+def _print_json(result: AnalysisResult, *, quiet: bool, project_name: str) -> None:
+    """Print JSON output. Quiet emits a minimal summary; default emits the full tree."""
+    if quiet:
+        tm = result.token_metrics
+        am = result.agent_metrics
+        signal_count = len(result.diagnostics.signals) if result.diagnostics else 0
+        payload: dict[str, object] = {
+            "project": project_name,
+            "session_count": result.session_count,
+            "total_cost": tm.total_cost,
+            "total_tokens": tm.total_tokens,
+            "total_invocations": am.total_invocations,
+            "diagnostic_signal_count": signal_count,
+        }
+    else:
+        payload = result.model_dump(mode="json")
+    print(format_json_output("analyze", payload))
 
 
 @app.callback(invoke_without_command=True, epilog=ANALYZE_EPILOG)
@@ -97,6 +110,9 @@ def analyze(
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Show summary only."),
 ) -> None:
     """Analyze agent sessions for token usage, cost, and behavior diagnostics."""
+    if verbose and quiet:
+        raise typer.BadParameter("--verbose and --quiet are mutually exclusive")
+
     project_info = find_project(project)
     if project_info is None:
         err_console.print(f"[red]Project not found:[/red] {project}")
@@ -136,9 +152,9 @@ def analyze(
         )
 
     if format == "json":
-        _print_json(result)
+        _print_json(result, quiet=quiet, project_name=project_info.display_name)
     elif quiet:
-        _print_quiet(result)
+        _print_quiet(result, project_info.display_name)
     else:
         format_analysis_table(
             console, result, verbose=verbose, show_diagnostics=diagnostics,
