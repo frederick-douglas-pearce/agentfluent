@@ -12,7 +12,11 @@ from agentfluent.cli.formatters.table import (
     format_projects_table,
     format_sessions_table,
 )
-from agentfluent.core.discovery import discover_projects, find_project
+from agentfluent.core.discovery import (
+    ProjectInfo,
+    discover_projects,
+    find_project,
+)
 from agentfluent.core.parser import parse_session
 
 LIST_EPILOG = """\
@@ -36,74 +40,95 @@ console = Console()
 err_console = Console(stderr=True)
 
 
-def _list_projects_table() -> None:
+def _discover_or_exit() -> list[ProjectInfo]:
+    """Discover projects; print error and exit on failure."""
+    try:
+        return discover_projects()
+    except FileNotFoundError as e:
+        err_console.print(f"[red]{e}[/red]")
+        raise typer.Exit(code=1) from None
+
+
+def _list_projects_table(*, verbose: bool, quiet: bool) -> None:
     """Display all projects as a Rich table."""
-    try:
-        projects = discover_projects()
-    except FileNotFoundError as e:
-        err_console.print(f"[red]{e}[/red]")
-        raise typer.Exit(code=1) from None
+    projects = _discover_or_exit()
+    if quiet:
+        total_sessions = sum(p.session_count for p in projects)
+        console.print(f"{len(projects)} projects, {total_sessions} total sessions")
+        return
+    format_projects_table(console, projects, verbose=verbose)
 
-    format_projects_table(console, projects)
 
-
-def _list_projects_json() -> None:
+def _list_projects_json(*, quiet: bool) -> None:
     """Output all projects as JSON."""
-    try:
-        projects = discover_projects()
-    except FileNotFoundError as e:
-        err_console.print(f"[red]{e}[/red]")
-        raise typer.Exit(code=1) from None
-
-    payload = {
-        "projects": [
-            {
-                "name": p.display_name,
-                "slug": p.slug,
-                "session_count": p.session_count,
-                "total_size_bytes": p.total_size_bytes,
-                "earliest_session": (
-                    p.earliest_session.isoformat() if p.earliest_session else None
-                ),
-                "latest_session": p.latest_session.isoformat() if p.latest_session else None,
-            }
-            for p in projects
-        ]
-    }
+    projects = _discover_or_exit()
+    if quiet:
+        payload: dict[str, object] = {
+            "project_count": len(projects),
+            "total_sessions": sum(p.session_count for p in projects),
+        }
+    else:
+        payload = {
+            "projects": [
+                {
+                    "name": p.display_name,
+                    "slug": p.slug,
+                    "session_count": p.session_count,
+                    "total_size_bytes": p.total_size_bytes,
+                    "earliest_session": (
+                        p.earliest_session.isoformat() if p.earliest_session else None
+                    ),
+                    "latest_session": (
+                        p.latest_session.isoformat() if p.latest_session else None
+                    ),
+                }
+                for p in projects
+            ]
+        }
     print(format_json_output("list-projects", payload))
 
 
-def _list_sessions_table(project_slug: str) -> None:
+def _find_or_exit(project_slug: str) -> ProjectInfo:
+    """Look up a project by slug; print error and exit if not found."""
+    project = find_project(project_slug)
+    if project is None:
+        err_console.print(f"[red]Project not found: {project_slug}[/red]")
+        raise typer.Exit(code=1)
+    return project
+
+
+def _list_sessions_table(project_slug: str, *, verbose: bool, quiet: bool) -> None:
     """Display sessions for a project as a Rich table."""
-    project = find_project(project_slug)
-    if project is None:
-        err_console.print(f"[red]Project not found: {project_slug}[/red]")
-        raise typer.Exit(code=1)
-
+    project = _find_or_exit(project_slug)
+    if quiet:
+        console.print(f"Project {project.display_name}: {len(project.sessions)} sessions")
+        return
     sessions = [(s, len(parse_session(s.path))) for s in project.sessions]
-    format_sessions_table(console, project.display_name, sessions)
+    format_sessions_table(console, project.display_name, sessions, verbose=verbose)
 
 
-def _list_sessions_json(project_slug: str) -> None:
+def _list_sessions_json(project_slug: str, *, quiet: bool) -> None:
     """Output sessions for a project as JSON."""
-    project = find_project(project_slug)
-    if project is None:
-        err_console.print(f"[red]Project not found: {project_slug}[/red]")
-        raise typer.Exit(code=1)
-
-    sessions = []
-    for s in project.sessions:
-        messages = parse_session(s.path)
-        sessions.append(
-            {
-                "filename": s.filename,
-                "size_bytes": s.size_bytes,
-                "modified": s.modified.isoformat(),
-                "message_count": len(messages),
-                "subagent_count": s.subagent_count,
-            }
-        )
-    payload = {"project": project.display_name, "sessions": sessions}
+    project = _find_or_exit(project_slug)
+    if quiet:
+        payload: dict[str, object] = {
+            "project": project.display_name,
+            "session_count": len(project.sessions),
+        }
+    else:
+        sessions = []
+        for s in project.sessions:
+            messages = parse_session(s.path)
+            sessions.append(
+                {
+                    "filename": s.filename,
+                    "size_bytes": s.size_bytes,
+                    "modified": s.modified.isoformat(),
+                    "message_count": len(messages),
+                    "subagent_count": s.subagent_count,
+                }
+            )
+        payload = {"project": project.display_name, "sessions": sessions}
     print(format_json_output("list-sessions", payload))
 
 
@@ -125,13 +150,15 @@ def list_cmd(
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Show summary only."),
 ) -> None:
     """List available projects, or sessions within a project."""
+    if verbose and quiet:
+        raise typer.BadParameter("--verbose and --quiet are mutually exclusive")
     if project:
         if format == "json":
-            _list_sessions_json(project)
+            _list_sessions_json(project, quiet=quiet)
         else:
-            _list_sessions_table(project)
+            _list_sessions_table(project, verbose=verbose, quiet=quiet)
     else:
         if format == "json":
-            _list_projects_json()
+            _list_projects_json(quiet=quiet)
         else:
-            _list_projects_table()
+            _list_projects_table(verbose=verbose, quiet=quiet)

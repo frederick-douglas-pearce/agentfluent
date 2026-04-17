@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from agentfluent.config.models import Severity
+
+if TYPE_CHECKING:
+    from agentfluent.config.models import ConfigScore
 
 SEVERITY_COLORS: dict[Severity, str] = {
     Severity.CRITICAL: "red",
@@ -48,3 +52,8 @@ def score_color(score: int) -> str:
     if score >= 50:
         return "yellow"
     return "red"
+
+
+def average_score(scores: list[ConfigScore]) -> int:
+    """Integer average of overall_score across agents; 0 for an empty list."""
+    return sum(s.overall_score for s in scores) // len(scores) if scores else 0

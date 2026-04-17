@@ -15,6 +15,7 @@ from rich.table import Table
 
 from agentfluent.cli.formatters.helpers import (
     SEVERITY_COLORS,
+    average_score,
     format_cost,
     format_date,
     format_size,
@@ -32,6 +33,8 @@ if TYPE_CHECKING:
 def format_projects_table(
     console: Console,
     projects: list[ProjectInfo],
+    *,
+    verbose: bool = False,
 ) -> None:
     """Render discovered projects as a Rich table."""
     if not projects:
@@ -43,14 +46,19 @@ def format_projects_table(
     table.add_column("Sessions", justify="right")
     table.add_column("Size", justify="right")
     table.add_column("Latest", style="dim")
+    if verbose:
+        table.add_column("Slug", style="dim")
 
     for p in projects:
-        table.add_row(
+        row = [
             p.display_name,
             str(p.session_count),
             format_size(p.total_size_bytes),
             format_date(p.latest_session),
-        )
+        ]
+        if verbose:
+            row.append(p.slug)
+        table.add_row(*row)
 
     console.print(table)
 
@@ -59,6 +67,8 @@ def format_sessions_table(
     console: Console,
     project_name: str,
     sessions: list[tuple[SessionInfo, int]],
+    *,
+    verbose: bool = False,
 ) -> None:
     """Render per-session stats as a Rich table.
 
@@ -70,7 +80,8 @@ def format_sessions_table(
         return
 
     table = Table(title=f"Sessions — {project_name}")
-    table.add_column("File", style="cyan")
+    file_label = "Path" if verbose else "File"
+    table.add_column(file_label, style="cyan")
     table.add_column("Size", justify="right")
     table.add_column("Modified", style="dim")
     table.add_column("Messages", justify="right")
@@ -78,7 +89,7 @@ def format_sessions_table(
 
     for info, message_count in sessions:
         table.add_row(
-            info.filename,
+            str(info.path) if verbose else info.filename,
             format_size(info.size_bytes),
             format_date(info.modified),
             str(message_count),
@@ -171,6 +182,43 @@ def format_analysis_table(
             "",
         )
         console.print(agent_table)
+
+    if verbose and len(result.sessions) > 1:
+        session_table = Table(title="Per-Session Breakdown", show_header=True)
+        session_table.add_column("Session", style="cyan")
+        session_table.add_column("Tokens", justify="right")
+        session_table.add_column("Cost", justify="right")
+        session_table.add_column("Tool calls", justify="right")
+        session_table.add_column("Invocations", justify="right")
+        for s in result.sessions:
+            session_table.add_row(
+                s.session_path.name,
+                format_tokens(s.token_metrics.total_tokens),
+                format_cost(s.token_metrics.total_cost),
+                str(s.tool_metrics.total_tool_calls),
+                str(s.agent_metrics.total_invocations),
+            )
+        console.print(session_table)
+
+    if verbose and am.total_invocations > 0:
+        inv_table = Table(title="Per-Invocation Detail", show_header=True)
+        inv_table.add_column("Agent", style="cyan")
+        inv_table.add_column("Description")
+        inv_table.add_column("Tokens", justify="right")
+        inv_table.add_column("Tool uses", justify="right")
+        inv_table.add_column("Duration", justify="right")
+        for s in result.sessions:
+            for inv in s.invocations:
+                tokens = format_tokens(inv.total_tokens) if inv.total_tokens else "-"
+                tools = str(inv.tool_uses) if inv.tool_uses else "-"
+                duration = f"{inv.duration_ms / 1000:.1f}s" if inv.duration_ms else "-"
+                desc = (
+                    inv.description
+                    if len(inv.description) <= 60
+                    else inv.description[:57] + "..."
+                )
+                inv_table.add_row(inv.agent_type, desc, tokens, tools, duration)
+        console.print(inv_table)
 
     diag = result.diagnostics
     if diag:
@@ -303,9 +351,8 @@ def format_config_check_table(
             rec_table.add_row(*row)
         console.print(rec_table)
 
-    avg = sum(s.overall_score for s in scores) // len(scores) if scores else 0
     console.print(
         f"\n[bold]Agents scanned:[/bold] {len(scores)}, "
-        f"[bold]average score:[/bold] {avg}/100, "
+        f"[bold]average score:[/bold] {average_score(scores)}/100, "
         f"[bold]recommendations:[/bold] {len(all_recs)}"
     )
