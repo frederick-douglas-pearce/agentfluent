@@ -1,0 +1,59 @@
+name: Security Review
+
+on:
+  pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'images/**'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/PULL_REQUEST_TEMPLATE.md'
+      - 'LICENSE'
+      - 'CHANGELOG.md'
+
+concurrency:
+  group: security-review-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  security:
+    # Dependabot PRs don't have access to secrets.
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - uses: anthropics/claude-code-security-review@main
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        with:
+          comment-pr: true
+          claude-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          exclude-directories: .venv,dist,build,.mypy_cache,.pytest_cache,.ruff_cache,.claude
+          custom-security-scan-instructions: |
+            AgentFluent is a local-first Python CLI that reads user session data and
+            agent definitions from `~/.claude/projects/` and `~/.claude/agents/`.
+            It does NOT make network requests, store credentials, or transmit user data.
+
+            Attack surfaces to focus on:
+            1. JSONL parser (`src/agentfluent/core/parser.py`) — reads arbitrary user
+               content. Check for unsafe deserialization, resource-exhaustion risks on
+               malformed input, and any code path that evaluates or executes parsed
+               strings.
+            2. Agent definition parser (`src/agentfluent/config/scanner.py`) — parses
+               YAML frontmatter. Must use `yaml.safe_load` (never `yaml.load`) to
+               prevent arbitrary code execution.
+            3. Path handling in discovery (`src/agentfluent/core/discovery.py`) —
+               iterates user directories. Check for path traversal, symlink
+               following leading outside the projects root, and TOCTOU races.
+            4. CLI argument parsing (`src/agentfluent/cli/`) — user strings from
+               `--project`, `--agent`, `--session` are matched against discovered
+               data. Ensure none are passed to shell, subprocess, or eval-like APIs.
+
+            Low priority (non-issues): no web server, no HTML rendering, no webview.

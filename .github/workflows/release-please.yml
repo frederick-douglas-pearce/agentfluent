@@ -1,0 +1,75 @@
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      releases_created: ${{ steps.release.outputs.releases_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  build-release:
+    name: Build & Publish
+    needs: release-please
+    if: ${{ needs.release-please.outputs.releases_created == 'true' }}
+    runs-on: ubuntu-latest
+    environment: pypi
+
+    permissions:
+      contents: write  # upload release artifacts
+      id-token: write  # PyPI Trusted Publisher OIDC
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Verify version matches tag
+        env:
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          PKG_VERSION=$(uv run python -c "import agentfluent; print(agentfluent.__version__)")
+          echo "Tag: $TAG, package version: $PKG_VERSION"
+          if [ "v$PKG_VERSION" != "$TAG" ]; then
+            echo "ERROR: package version ($PKG_VERSION) does not match tag ($TAG)"
+            exit 1
+          fi
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Upload artifacts to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          gh release upload "$TAG" dist/*.tar.gz dist/*.whl --clobber
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          print-hash: true

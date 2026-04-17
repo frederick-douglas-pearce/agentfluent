@@ -1,3 +1,8 @@
 """AgentFluent: Local-first agent analytics with prompt diagnostics."""
 
-__version__ = "0.1.0"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("agentfluent")
+except PackageNotFoundError:
+    __version__ = "0.0.0"

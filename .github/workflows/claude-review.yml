@@ -1,0 +1,61 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [labeled]
+  pull_request_review_comment:
+    types: [created]
+  issue_comment:
+    types: [created]
+
+jobs:
+  claude-review:
+    if: |
+      (github.event_name == 'pull_request' && github.event.label.name == 'needs-review') ||
+      (github.event_name == 'pull_request_review_comment') ||
+      (github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request != null &&
+        contains(github.event.comment.body, '@claude'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          trigger_phrase: "@claude"
+          prompt: |
+            You are reviewing code for the AgentFluent project — a local-first Python CLI
+            that analyzes Claude Code / Agent SDK session data (JSONL) and agent definition
+            files (.md with YAML frontmatter) to produce analytics, behavior diagnostics,
+            and config improvement recommendations.
+
+            Stack: Python 3.12+, uv, Typer, Rich, Pydantic v2, pytest. Type checking is
+            strict (mypy). Lint is ruff. See `CLAUDE.md` for architecture and conventions.
+
+            Key standards to check:
+            - Type annotations on all public functions; mypy strict mode must pass.
+            - Pydantic v2 for models that cross module boundaries.
+            - CLI exit code invariant (see `src/agentfluent/cli/exit_codes.py`):
+              1 = user named something wrong; 2 = system found nothing.
+            - JSON output envelope is a public contract:
+              `{version, command, data}` via `format_json_output`.
+              No ANSI escapes in JSON output.
+            - Feature work requires test coverage (`tests/unit/`, `tests/unit/cli/`,
+              `tests/integration/`).
+
+            Review with focus on:
+            - Code quality and adherence to project conventions in `CLAUDE.md`
+            - Security: path traversal in discovery, unsafe YAML loading,
+              subprocess argument injection, deserialization of untrusted JSONL
+            - Correctness: aggregation math in analytics merges, session dedup,
+              diagnostics correlation logic
+            - Test coverage for new functionality and regression guards for
+              existing contracts (exit codes, envelope shape, diagnostics output)

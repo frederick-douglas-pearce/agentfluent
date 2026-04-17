@@ -1,0 +1,81 @@
+name: Bug Report
+description: Report a bug in AgentFluent
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - Linux
+        - macOS
+        - Windows
+    validations:
+      required: true
+
+  - type: input
+    id: os-version
+    attributes:
+      label: OS Version
+      placeholder: "e.g., Ubuntu 24.04, macOS 15.2, Windows 11 23H2"
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python Version
+      description: "Output of `python --version` or `uv run python --version`"
+      placeholder: "e.g., 3.12.3"
+    validations:
+      required: true
+
+  - type: input
+    id: agentfluent-version
+    attributes:
+      label: AgentFluent Version
+      description: "Output of `agentfluent --version`"
+      placeholder: "e.g., 0.1.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the bug.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: How can we reproduce the issue?
+      placeholder: |
+        1. Run `agentfluent list`
+        2. Run `agentfluent analyze --project my-project`
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Command invoked
+      description: The exact command you ran.
+      render: shell
+      placeholder: "agentfluent analyze --project foo --format json"
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error output or unexpected output
+      description: Paste the full error output. Redact any sensitive file paths or content.
+      render: text
