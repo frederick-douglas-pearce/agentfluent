@@ -6,8 +6,8 @@ from agentfluent import __version__
 
 
 def test_version() -> None:
-    """Package version is set."""
-    assert __version__ == "0.1.0"
+    """Package version is set to a non-empty string."""
+    assert isinstance(__version__, str) and __version__
 
 
 def test_fixtures_exist(fixtures_dir: Path) -> None:

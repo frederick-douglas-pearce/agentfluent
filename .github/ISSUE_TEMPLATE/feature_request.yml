@@ -1,0 +1,41 @@
+name: Feature Request
+description: Suggest a new feature or improvement
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of AgentFluent does this touch?
+      options:
+        - CLI (list / analyze / config-check)
+        - Analytics (token, cost, tool patterns, agent metrics)
+        - Diagnostics (behavior signals, correlation, recommendations)
+        - Config assessment (agent definition scoring)
+        - Parser / discovery
+        - JSON output schema
+        - Other / cross-cutting
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What would you like?
+      description: A clear description of the feature or improvement.
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Why?
+      description: What problem does this solve or what workflow does it improve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds you've tried, or alternative designs you considered.
