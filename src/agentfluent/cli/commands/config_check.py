@@ -2,15 +2,31 @@
 
 from __future__ import annotations
 
-import json
 from typing import Optional
 
 import typer
 from rich.console import Console
 
+from agentfluent.cli.formatters.json_output import format_json_output
 from agentfluent.cli.formatters.table import format_config_check_table
 from agentfluent.config import assess_agents
 from agentfluent.config.models import ConfigScore
+
+CONFIG_CHECK_EPILOG = """\
+Examples:
+
+  agentfluent config-check
+      Score all user and project agent definitions.
+
+  agentfluent config-check --scope user
+      Check only user-level agents in ~/.claude/agents/.
+
+  agentfluent config-check --agent pm --verbose
+      Score a specific agent with detailed recommendations.
+
+  agentfluent config-check --format json | jq '.data.scores[] | select(.overall_score < 60)'
+      Find agents that need improvement.
+"""
 
 app = typer.Typer(help="Check agent configuration quality.")
 console = Console()
@@ -30,11 +46,11 @@ def _print_quiet(scores: list[ConfigScore]) -> None:
 
 def _print_json(scores: list[ConfigScore]) -> None:
     """Print JSON output."""
-    data = [s.model_dump(mode="json") for s in scores]
-    console.print_json(json.dumps(data, default=str))
+    payload = {"scores": [s.model_dump(mode="json") for s in scores]}
+    print(format_json_output("config-check", payload))
 
 
-@app.callback(invoke_without_command=True)
+@app.callback(invoke_without_command=True, epilog=CONFIG_CHECK_EPILOG)
 def config_check(
     scope: str = typer.Option(
         "all",

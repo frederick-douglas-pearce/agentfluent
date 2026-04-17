@@ -2,19 +2,34 @@
 
 from __future__ import annotations
 
-import json
-import sys
 from typing import Optional
 
 import typer
 from rich.console import Console
 
+from agentfluent.cli.formatters.json_output import format_json_output
 from agentfluent.cli.formatters.table import (
     format_projects_table,
     format_sessions_table,
 )
 from agentfluent.core.discovery import discover_projects, find_project
 from agentfluent.core.parser import parse_session
+
+LIST_EPILOG = """\
+Examples:
+
+  agentfluent list
+      List all projects in ~/.claude/projects/.
+
+  agentfluent list --project codefluent
+      List sessions in the codefluent project.
+
+  agentfluent list --format json | jq '.data.projects[].name'
+      Extract project names (command is "list-projects").
+
+  agentfluent list --project codefluent --format json | jq '.data.sessions[].filename'
+      Extract session filenames (command is "list-sessions").
+"""
 
 app = typer.Typer(help="List projects and sessions.")
 console = Console()
@@ -37,21 +52,25 @@ def _list_projects_json() -> None:
     try:
         projects = discover_projects()
     except FileNotFoundError as e:
-        print(json.dumps({"error": str(e)}), file=sys.stderr)
+        err_console.print(f"[red]{e}[/red]")
         raise typer.Exit(code=1) from None
 
-    output = [
-        {
-            "name": p.display_name,
-            "slug": p.slug,
-            "session_count": p.session_count,
-            "total_size_bytes": p.total_size_bytes,
-            "earliest_session": p.earliest_session.isoformat() if p.earliest_session else None,
-            "latest_session": p.latest_session.isoformat() if p.latest_session else None,
-        }
-        for p in projects
-    ]
-    print(json.dumps(output, indent=2))
+    payload = {
+        "projects": [
+            {
+                "name": p.display_name,
+                "slug": p.slug,
+                "session_count": p.session_count,
+                "total_size_bytes": p.total_size_bytes,
+                "earliest_session": (
+                    p.earliest_session.isoformat() if p.earliest_session else None
+                ),
+                "latest_session": p.latest_session.isoformat() if p.latest_session else None,
+            }
+            for p in projects
+        ]
+    }
+    print(format_json_output("list-projects", payload))
 
 
 def _list_sessions_table(project_slug: str) -> None:
@@ -69,13 +88,13 @@ def _list_sessions_json(project_slug: str) -> None:
     """Output sessions for a project as JSON."""
     project = find_project(project_slug)
     if project is None:
-        print(json.dumps({"error": f"Project not found: {project_slug}"}), file=sys.stderr)
+        err_console.print(f"[red]Project not found: {project_slug}[/red]")
         raise typer.Exit(code=1)
 
-    output = []
+    sessions = []
     for s in project.sessions:
         messages = parse_session(s.path)
-        output.append(
+        sessions.append(
             {
                 "filename": s.filename,
                 "size_bytes": s.size_bytes,
@@ -84,10 +103,11 @@ def _list_sessions_json(project_slug: str) -> None:
                 "subagent_count": s.subagent_count,
             }
         )
-    print(json.dumps(output, indent=2))
+    payload = {"project": project.display_name, "sessions": sessions}
+    print(format_json_output("list-sessions", payload))
 
 
-@app.callback(invoke_without_command=True)
+@app.callback(invoke_without_command=True, epilog=LIST_EPILOG)
 def list_cmd(
     project: Optional[str] = typer.Option(  # noqa: UP007, UP045
         None,

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-from dataclasses import asdict
 from typing import Optional
 
 import typer
@@ -11,9 +9,26 @@ from rich.console import Console
 
 from agentfluent.analytics.pipeline import AnalysisResult, analyze_sessions
 from agentfluent.cli.formatters.helpers import format_cost, format_tokens
+from agentfluent.cli.formatters.json_output import format_json_output
 from agentfluent.cli.formatters.table import format_analysis_table
 from agentfluent.core.discovery import find_project
 from agentfluent.diagnostics import run_diagnostics
+
+ANALYZE_EPILOG = """\
+Examples:
+
+  agentfluent analyze --project codefluent
+      Analyze all sessions in the codefluent project.
+
+  agentfluent analyze --project codefluent --agent pm
+      Analyze only PM agent invocations.
+
+  agentfluent analyze --project codefluent --latest 5 --diagnostics
+      Analyze the 5 most recent sessions with behavior diagnostics.
+
+  agentfluent analyze --project codefluent --format json | jq '.data.token_metrics.total_cost'
+      Extract total cost programmatically.
+"""
 
 app = typer.Typer(help="Analyze agent sessions.")
 console = Console()
@@ -37,18 +52,10 @@ def _print_quiet(result: AnalysisResult) -> None:
 
 def _print_json(result: AnalysisResult) -> None:
     """Print JSON output."""
-    data = asdict(result)
-    for session in data.get("sessions", []):
-        if "session_path" in session:
-            session["session_path"] = str(session["session_path"])
-    # DiagnosticsResult is Pydantic; asdict() can't recurse into it.
-    diag = result.diagnostics
-    if diag:
-        data["diagnostics"] = diag.model_dump(mode="json")
-    console.print_json(json.dumps(data, default=str))
+    print(format_json_output("analyze", result.model_dump(mode="json")))
 
 
-@app.callback(invoke_without_command=True)
+@app.callback(invoke_without_command=True, epilog=ANALYZE_EPILOG)
 def analyze(
     project: str = typer.Option(
         ...,
