@@ -4,35 +4,21 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime
 from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.table import Table
 
+from agentfluent.cli.formatters.table import (
+    format_projects_table,
+    format_sessions_table,
+)
 from agentfluent.core.discovery import discover_projects, find_project
 from agentfluent.core.parser import parse_session
 
 app = typer.Typer(help="List projects and sessions.")
 console = Console()
 err_console = Console(stderr=True)
-
-
-def _format_size(size_bytes: int) -> str:
-    """Format bytes as human-readable size."""
-    if size_bytes < 1024:
-        return f"{size_bytes} B"
-    if size_bytes < 1024 * 1024:
-        return f"{size_bytes / 1024:.1f} KB"
-    return f"{size_bytes / (1024 * 1024):.1f} MB"
-
-
-def _format_date(dt: datetime | None) -> str:
-    """Format a datetime for display."""
-    if dt is None:
-        return "—"
-    return dt.strftime("%Y-%m-%d %H:%M")
 
 
 def _list_projects_table() -> None:
@@ -43,25 +29,7 @@ def _list_projects_table() -> None:
         err_console.print(f"[red]{e}[/red]")
         raise typer.Exit(code=1) from None
 
-    if not projects:
-        console.print("No projects found in ~/.claude/projects/")
-        return
-
-    table = Table(title="Projects")
-    table.add_column("Name", style="cyan")
-    table.add_column("Sessions", justify="right")
-    table.add_column("Size", justify="right")
-    table.add_column("Latest", style="dim")
-
-    for p in projects:
-        table.add_row(
-            p.display_name,
-            str(p.session_count),
-            _format_size(p.total_size_bytes),
-            _format_date(p.latest_session),
-        )
-
-    console.print(table)
+    format_projects_table(console, projects)
 
 
 def _list_projects_json() -> None:
@@ -93,28 +61,8 @@ def _list_sessions_table(project_slug: str) -> None:
         err_console.print(f"[red]Project not found: {project_slug}[/red]")
         raise typer.Exit(code=1)
 
-    if not project.sessions:
-        console.print(f"No sessions in project '{project.display_name}'")
-        return
-
-    table = Table(title=f"Sessions — {project.display_name}")
-    table.add_column("File", style="cyan")
-    table.add_column("Size", justify="right")
-    table.add_column("Modified", style="dim")
-    table.add_column("Messages", justify="right")
-    table.add_column("Subagents", justify="right", style="dim")
-
-    for s in project.sessions:
-        messages = parse_session(s.path)
-        table.add_row(
-            s.filename,
-            _format_size(s.size_bytes),
-            _format_date(s.modified),
-            str(len(messages)),
-            str(s.subagent_count) if s.subagent_count > 0 else "—",
-        )
-
-    console.print(table)
+    sessions = [(s, len(parse_session(s.path))) for s in project.sessions]
+    format_sessions_table(console, project.display_name, sessions)
 
 
 def _list_sessions_json(project_slug: str) -> None:
