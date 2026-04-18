@@ -20,3 +20,11 @@ See `docs/AGENT_ANALYTICS_RESEARCH.md` for the full market analysis and technica
 ## Status
 
 Early stage -- defining scope, architecture, and initial backlog.
+
+## Secrets handling
+
+AgentFluent reads local Claude Code session data from `~/.claude/projects/`. Those JSONL files can contain any file contents Claude (or its subagents) has ever read during a session -- including `.env` files, shell rc files, and other credential sources. `.gitignore` does not protect against this persistence.
+
+This repo ships Claude Code hooks (`.claude/settings.json` + `.claude/hooks/`) that block reads of common credential files and detect known API key patterns in tool output. See [`docs/SECURITY.md`](docs/SECURITY.md) for the leak vector, the layered defense, how to audit your existing session store for historical leaks, and the discipline rules that pair with the hooks.
+
+AgentFluent itself emits only aggregate metrics today, but the rule is forward-looking: any future feature that surfaces raw session content must re-apply secret-pattern redaction at the display layer.
