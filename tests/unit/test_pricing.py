@@ -1,6 +1,11 @@
 """Tests for model pricing lookup."""
 
+import logging
+
+import pytest
+
 from agentfluent.analytics.pricing import (
+    SYNTHETIC_MODELS,
     ModelPricing,
     compute_cost,
     get_known_models,
@@ -15,29 +20,46 @@ class TestGetPricing:
         assert pricing.input == 3.0
         assert pricing.output == 15.0
 
-    def test_opus_model(self) -> None:
+    def test_opus_4_6_model(self) -> None:
         pricing = get_pricing("claude-opus-4-6")
         assert pricing is not None
-        assert pricing.input == 15.0
-        assert pricing.output == 75.0
-        assert pricing.cache_creation == 18.75
-        assert pricing.cache_read == 1.875
+        assert pricing.input == 5.0
+        assert pricing.output == 25.0
+        assert pricing.cache_creation == 6.25
+        assert pricing.cache_read == 0.50
+
+    def test_opus_4_7_model(self) -> None:
+        # Verifies issue #75: claude-opus-4-7 must return non-None pricing.
+        pricing = get_pricing("claude-opus-4-7")
+        assert pricing is not None
+        assert pricing.input == 5.0
+        assert pricing.output == 25.0
+        assert pricing.cache_creation == 6.25
+        assert pricing.cache_read == 0.50
 
     def test_haiku_model(self) -> None:
         pricing = get_pricing("claude-haiku-4-5-20251001")
         assert pricing is not None
-        assert pricing.input == 0.80
-        assert pricing.output == 4.0
+        assert pricing.input == 1.0
+        assert pricing.output == 5.0
+        assert pricing.cache_creation == 1.25
+        assert pricing.cache_read == 0.10
 
-    def test_alias_short_name(self) -> None:
+    def test_alias_short_name_opus(self) -> None:
         pricing = get_pricing("opus")
         assert pricing is not None
-        assert pricing.input == 15.0
+        # "opus" now resolves to opus-4-7 (current flagship).
+        assert pricing.input == 5.0
 
-    def test_alias_with_context_suffix(self) -> None:
+    def test_alias_with_context_suffix_4_6(self) -> None:
         pricing = get_pricing("claude-opus-4-6[1m]")
         assert pricing is not None
-        assert pricing.input == 15.0
+        assert pricing.input == 5.0
+
+    def test_alias_with_context_suffix_4_7(self) -> None:
+        pricing = get_pricing("claude-opus-4-7[1m]")
+        assert pricing is not None
+        assert pricing.input == 5.0
 
     def test_sonnet_alias(self) -> None:
         pricing = get_pricing("sonnet")
@@ -49,6 +71,25 @@ class TestGetPricing:
 
     def test_empty_string_returns_none(self) -> None:
         assert get_pricing("") is None
+
+    def test_unknown_model_logs_at_debug_not_warning(
+        self, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Issue #75: the "Unknown model" message should be DEBUG, not WARNING,
+        # so it does not clutter stderr on normal CLI runs.
+        with caplog.at_level(logging.DEBUG, logger="agentfluent.analytics.pricing"):
+            assert get_pricing("some-future-model") is None
+        debug_records = [r for r in caplog.records if r.levelno == logging.DEBUG]
+        warning_records = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any("some-future-model" in r.getMessage() for r in debug_records)
+        assert warning_records == []
+
+
+class TestSyntheticModels:
+    def test_synthetic_sentinel_exported(self) -> None:
+        # Issue #75: <synthetic> is filtered at the aggregation layer, but the
+        # shared frozenset lives in pricing so other consumers can import it.
+        assert "<synthetic>" in SYNTHETIC_MODELS
 
 
 class TestComputeCost:
@@ -79,8 +120,8 @@ class TestComputeCost:
         pricing = get_pricing("claude-opus-4-6")
         assert pricing is not None
         cost = compute_cost(pricing, input_tokens=1_000_000, output_tokens=1_000_000)
-        # 1M * 15/1M + 1M * 75/1M = 15 + 75 = 90
-        assert cost == 90.0
+        # 1M * 5/1M + 1M * 25/1M = 5 + 25 = 30
+        assert cost == 30.0
 
 
 class TestGetKnownModels:
@@ -89,6 +130,10 @@ class TestGetKnownModels:
         assert isinstance(models, list)
         assert models == sorted(models)
         assert len(models) >= 6
+
+    def test_includes_opus_4_7(self) -> None:
+        models = get_known_models()
+        assert "claude-opus-4-7" in models
 
     def test_does_not_include_aliases(self) -> None:
         models = get_known_models()

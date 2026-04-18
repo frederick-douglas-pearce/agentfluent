@@ -1,5 +1,9 @@
 """Tests for token and cost analytics."""
 
+import logging
+
+import pytest
+
 from agentfluent.analytics.tokens import compute_token_metrics
 from agentfluent.core.session import ContentBlock, SessionMessage, Usage
 
@@ -95,15 +99,27 @@ class TestCostComputation:
         assert abs(metrics.total_cost - 4.5) < 0.001
 
     def test_opus_cost(self) -> None:
-        # Opus: input=15/1M, output=75/1M
+        # Opus 4.6 (as of 2026-04): input=5/1M, output=25/1M
         messages = [_assistant(
             model="claude-opus-4-6",
             input_tokens=1_000_000,
             output_tokens=100_000,
         )]
         metrics = compute_token_metrics(messages)
-        # 1M * 15/1M + 100K * 75/1M = 15.0 + 7.5 = 22.5
-        assert abs(metrics.total_cost - 22.5) < 0.001
+        # 1M * 5/1M + 100K * 25/1M = 5.0 + 2.5 = 7.5
+        assert abs(metrics.total_cost - 7.5) < 0.001
+
+    def test_opus_4_7_cost(self) -> None:
+        # Issue #75: opus-4-7 has known pricing and produces non-zero cost.
+        messages = [_assistant(
+            model="claude-opus-4-7",
+            input_tokens=1_000_000,
+            output_tokens=100_000,
+        )]
+        metrics = compute_token_metrics(messages)
+        # 1M * 5/1M + 100K * 25/1M = 5.0 + 2.5 = 7.5
+        assert abs(metrics.total_cost - 7.5) < 0.001
+        assert "claude-opus-4-7" in metrics.by_model
 
     def test_unknown_model_zero_cost(self) -> None:
         messages = [_assistant(model="unknown-model", input_tokens=1000, output_tokens=500)]
@@ -117,9 +133,45 @@ class TestCostComputation:
             _assistant(model="claude-opus-4-6", input_tokens=1_000_000, output_tokens=0),
         ]
         metrics = compute_token_metrics(messages)
-        # Sonnet: 1M * 3/1M = 3.0, Opus: 1M * 15/1M = 15.0
-        assert abs(metrics.total_cost - 18.0) < 0.001
+        # Sonnet: 1M * 3/1M = 3.0, Opus 4.6: 1M * 5/1M = 5.0
+        assert abs(metrics.total_cost - 8.0) < 0.001
         assert len(metrics.by_model) == 2
+
+
+class TestSyntheticFiltering:
+    def test_synthetic_model_skipped(self, caplog: pytest.LogCaptureFixture) -> None:
+        # Issue #75: <synthetic> is a Claude Code sentinel, not a real model.
+        # It must be filtered before pricing lookup -- no counter bump,
+        # no pricing warning, no entry in by_model.
+        messages = [_assistant(
+            model="<synthetic>",
+            input_tokens=1000,
+            output_tokens=500,
+        )]
+        with caplog.at_level(logging.DEBUG, logger="agentfluent.analytics.pricing"):
+            metrics = compute_token_metrics(messages)
+        assert metrics.input_tokens == 0
+        assert metrics.output_tokens == 0
+        assert metrics.total_cost == 0.0
+        assert metrics.api_call_count == 0
+        assert "<synthetic>" not in metrics.by_model
+        # No "Unknown model" log entry at any level.
+        assert not any(
+            "<synthetic>" in r.getMessage() for r in caplog.records
+        )
+
+    def test_synthetic_mixed_with_real_model(self) -> None:
+        # A real message alongside a synthetic one: real one is counted,
+        # synthetic is silently dropped.
+        messages = [
+            _assistant(model="<synthetic>", input_tokens=999, output_tokens=999),
+            _assistant(model="claude-sonnet-4-6", input_tokens=100, output_tokens=50),
+        ]
+        metrics = compute_token_metrics(messages)
+        assert metrics.input_tokens == 100
+        assert metrics.output_tokens == 50
+        assert metrics.api_call_count == 1
+        assert list(metrics.by_model.keys()) == ["claude-sonnet-4-6"]
 
 
 class TestPerModelBreakdown:
