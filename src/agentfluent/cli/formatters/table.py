@@ -23,6 +23,12 @@ from agentfluent.cli.formatters.helpers import (
     score_color,
 )
 
+API_RATE_FOOTNOTE = (
+    "API rate — pay-per-token equivalent. "
+    "Subscription plans (Pro/Max/Team/Enterprise) have fixed monthly cost "
+    "independent of usage."
+)
+
 if TYPE_CHECKING:
     from agentfluent.analytics.pipeline import AnalysisResult
     from agentfluent.config.models import ConfigScore
@@ -119,13 +125,13 @@ def format_analysis_table(
     token_table.add_row("Cache creation tokens", format_tokens(tm.cache_creation_input_tokens))
     token_table.add_row("Cache read tokens", format_tokens(tm.cache_read_input_tokens))
     token_table.add_row("Total tokens", format_tokens(tm.total_tokens))
-    token_table.add_row("Total cost", format_cost(tm.total_cost))
+    token_table.add_row("Total cost (API rate)", format_cost(tm.total_cost))
     token_table.add_row("Cache efficiency", f"{tm.cache_efficiency}%")
     token_table.add_row("API calls", str(tm.api_call_count))
     console.print(token_table)
 
     if tm.by_model and (verbose or len(tm.by_model) > 1):
-        model_table = Table(title="Cost by Model", show_header=True)
+        model_table = Table(title="Cost by Model (API rate)", show_header=True)
         model_table.add_column("Model", style="cyan")
         model_table.add_column("Tokens", justify="right")
         model_table.add_column("Cost", justify="right")
@@ -187,7 +193,7 @@ def format_analysis_table(
         session_table = Table(title="Per-Session Breakdown", show_header=True)
         session_table.add_column("Session", style="cyan")
         session_table.add_column("Tokens", justify="right")
-        session_table.add_column("Cost", justify="right")
+        session_table.add_column("Cost (API rate)", justify="right")
         session_table.add_column("Tool calls", justify="right")
         session_table.add_column("Invocations", justify="right")
         for s in result.sessions:
@@ -219,6 +225,8 @@ def format_analysis_table(
                 )
                 inv_table.add_row(inv.agent_type, desc, tokens, tools, duration)
         console.print(inv_table)
+
+    console.print(API_RATE_FOOTNOTE, style="dim")
 
     diag = result.diagnostics
     if diag:
