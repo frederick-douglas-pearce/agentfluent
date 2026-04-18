@@ -165,6 +165,17 @@ This project uses [Conventional Commits](https://www.conventionalcommits.org/).
 - **Integration tests:** `tests/integration/` -- marked with `@pytest.mark.integration`, run against real `~/.claude/projects/` data, skipped in CI
 - **CI runs:** `pytest -m "not integration"` (unit tests only)
 
+## Secrets handling
+
+Do not read `.env`, `.envrc`, `credentials.json`, `secrets.ya?ml`, SSH private keys (`id_rsa`, `id_ed25519`, `*.pem`), or shell rc files (`.bashrc`, `.bash_profile`, `.profile`, `.zshrc`, `.zshenv`, `.zprofile`). Anything you read via Read, Bash (`cat`, `grep`, `source`), or Grep is persisted verbatim in the Claude Code session JSONL at `~/.claude/projects/<slug>/*.jsonl`, where it stays in plaintext forever — `.gitignore` does not protect against this.
+
+Two hooks enforce this:
+
+- **`.claude/hooks/block_secret_reads.py`** (PreToolUse) — denies Read/Edit/Write/Grep/Glob/NotebookEdit/Bash calls targeting the filenames above. If you see a block message from this hook, the read was prevented *before* it executed, so nothing leaked.
+- **`.claude/hooks/detect_secrets_in_output.py`** (PostToolUse) — scans Read/Grep/Bash output for known secret patterns (`sk-ant-*`, `sk-proj-*`, `ghp_*`, `github_pat_*`, `AKIA*`, `AIza*`). If you see a block message from this hook, it means the tool already executed and the raw value was persisted to the JSONL transcript. You did not see the value, but it is on disk — report to the user that the key is compromised and should be rotated. Do not retry the same command.
+
+The rule generalizes beyond what the hooks catch: if a tool result happens to contain credential-looking values, never echo them in replies; do not emit generated code that prints env vars matching `KEY|TOKEN|SECRET|PASSWORD`; if you need to verify a credential file exists, use `test -f <path>` rather than reading it. See [`docs/SECURITY.md`](docs/SECURITY.md) for the full policy, the layered defense model, and the bypass surface the hooks do not cover.
+
 ## JSONL Data Format
 
 Claude Code and Agent SDK sessions are stored at `~/.claude/projects/` as JSONL files. AgentFluent's analysis targets differ from CodeFluent's -- we care about agent behavior signals, not human fluency signals.
