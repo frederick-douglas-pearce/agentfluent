@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from agentfluent.analytics.pricing import compute_cost, get_pricing
+from agentfluent.analytics.pricing import SYNTHETIC_MODELS, compute_cost, get_pricing
 from agentfluent.core.session import SessionMessage
 
 
@@ -83,6 +83,11 @@ def compute_token_metrics(messages: list[SessionMessage]) -> TokenMetrics:
 
     for msg in messages:
         if msg.type != "assistant" or msg.usage is None:
+            continue
+
+        # Skip synthetic/internal sentinel models emitted by Claude Code.
+        # These are not real API calls -- no tokens billed, no pricing needed.
+        if msg.model in SYNTHETIC_MODELS:
             continue
 
         api_call_count += 1

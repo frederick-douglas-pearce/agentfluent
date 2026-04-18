@@ -23,14 +23,22 @@ class ModelPricing:
 
 
 # Pricing data: USD per 1M tokens.
+# Source: https://platform.claude.com/docs/en/about-claude/pricing
+# Last verified: 2026-04-18
+# Cache write prices reflect the 5-minute TTL tier (1.25x input).
 # Update this dict when Anthropic changes pricing.
 _PRICING: dict[str, ModelPricing] = {
+    # Opus 4.5, 4.6, 4.7 share the same pricing tier ($5 / $25 / $6.25 / $0.50).
+    "claude-opus-4-7": ModelPricing(
+        input=5.0, output=25.0, cache_creation=6.25, cache_read=0.50,
+    ),
     "claude-opus-4-6": ModelPricing(
-        input=15.0, output=75.0, cache_creation=18.75, cache_read=1.875,
+        input=5.0, output=25.0, cache_creation=6.25, cache_read=0.50,
     ),
     "claude-opus-4-5-20251101": ModelPricing(
-        input=15.0, output=75.0, cache_creation=18.75, cache_read=1.875,
+        input=5.0, output=25.0, cache_creation=6.25, cache_read=0.50,
     ),
+    # Sonnet 4, 4.5, 4.6 share the same pricing tier ($3 / $15 / $3.75 / $0.30).
     "claude-sonnet-4-6": ModelPricing(
         input=3.0, output=15.0, cache_creation=3.75, cache_read=0.30,
     ),
@@ -40,19 +48,26 @@ _PRICING: dict[str, ModelPricing] = {
     "claude-sonnet-4-20250514": ModelPricing(
         input=3.0, output=15.0, cache_creation=3.75, cache_read=0.30,
     ),
+    # Haiku 4.5 is $1 / $5 / $1.25 / $0.10 (distinct from Haiku 3.5's $0.80 / $4).
     "claude-haiku-4-5-20251001": ModelPricing(
-        input=0.80, output=4.0, cache_creation=1.0, cache_read=0.08,
+        input=1.0, output=5.0, cache_creation=1.25, cache_read=0.10,
     ),
 }
 
 # Aliases map short names and variant identifiers to canonical model names.
 _ALIASES: dict[str, str] = {
-    "opus": "claude-opus-4-6",
+    "opus": "claude-opus-4-7",
     "sonnet": "claude-sonnet-4-6",
     "haiku": "claude-haiku-4-5-20251001",
+    "claude-opus-4-7[1m]": "claude-opus-4-7",
     "claude-opus-4-6[1m]": "claude-opus-4-6",
     "claude-sonnet-4-6[1m]": "claude-sonnet-4-6",
 }
+
+# Sentinel model names emitted by Claude Code for synthetic/internal messages.
+# These are not real API model calls and should be skipped before pricing lookup.
+SYNTHETIC_MODELS: frozenset[str] = frozenset({"<synthetic>"})
+
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
@@ -60,8 +75,9 @@ DEFAULT_MODEL = "claude-sonnet-4-6"
 def get_pricing(model: str) -> ModelPricing | None:
     """Look up pricing for a model name.
 
-    Checks exact match first, then aliases. Returns None with a warning
-    if the model is unknown.
+    Checks exact match first, then aliases. Returns None and logs at DEBUG
+    level if the model is unknown. The caller is expected to skip synthetic
+    sentinel values (see ``SYNTHETIC_MODELS``) before invoking this function.
     """
     pricing = _PRICING.get(model)
     if pricing:
@@ -71,7 +87,7 @@ def get_pricing(model: str) -> ModelPricing | None:
     if canonical:
         return _PRICING.get(canonical)
 
-    logger.warning("Unknown model '%s' -- no pricing available", model)
+    logger.debug("Unknown model '%s' -- no pricing available", model)
     return None
 
 
