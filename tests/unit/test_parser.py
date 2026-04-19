@@ -4,6 +4,16 @@ import json
 from pathlib import Path
 
 from agentfluent.core.parser import parse_session
+from agentfluent.core.session import SessionMessage
+
+
+def _agent_result_messages(messages: list[SessionMessage]) -> list[SessionMessage]:
+    return [
+        m
+        for m in messages
+        if m.type == "user"
+        and any(b.type == "tool_result" for b in m.content_blocks)
+    ]
 
 
 class TestParseBasicSession:
@@ -59,20 +69,9 @@ class TestParseAgentSession:
         assert tool_uses[0].input["subagent_type"] == "pm"
 
     def test_extracts_tool_result_metadata(self, agent_session_path: Path) -> None:
-        """Real-shape: agent metadata lives on the outer user message's
-        `toolUseResult` key and is surfaced on SessionMessage.metadata."""
-        messages = parse_session(agent_session_path)
-
-        # User messages that carry a tool_result block (agent results)
-        agent_result_msgs = [
-            m
-            for m in messages
-            if m.type == "user"
-            and any(b.type == "tool_result" for b in m.content_blocks)
-        ]
+        agent_result_msgs = _agent_result_messages(parse_session(agent_session_path))
         assert len(agent_result_msgs) == 2
 
-        # First agent result has metadata populated from toolUseResult (camelCase)
         first = agent_result_msgs[0]
         assert first.metadata is not None
         assert first.metadata.total_tokens == 31621
@@ -81,15 +80,7 @@ class TestParseAgentSession:
         assert first.metadata.agent_id == "agent-abc123"
 
     def test_tool_result_content(self, agent_session_path: Path) -> None:
-        messages = parse_session(agent_session_path)
-        agent_result_msgs = [
-            m
-            for m in messages
-            if m.type == "user"
-            and any(b.type == "tool_result" for b in m.content_blocks)
-        ]
-
-        # tool_result content blocks capture the block's content text
+        agent_result_msgs = _agent_result_messages(parse_session(agent_session_path))
         first_result_block = next(
             b for b in agent_result_msgs[0].content_blocks if b.type == "tool_result"
         )
@@ -97,14 +88,7 @@ class TestParseAgentSession:
         assert "Created 5 issues" in first_result_block.text
 
     def test_tool_use_id_captured(self, agent_session_path: Path) -> None:
-        messages = parse_session(agent_session_path)
-        agent_result_msgs = [
-            m
-            for m in messages
-            if m.type == "user"
-            and any(b.type == "tool_result" for b in m.content_blocks)
-        ]
-
+        agent_result_msgs = _agent_result_messages(parse_session(agent_session_path))
         first_block = next(
             b for b in agent_result_msgs[0].content_blocks if b.type == "tool_result"
         )

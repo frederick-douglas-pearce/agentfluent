@@ -56,12 +56,8 @@ def _normalize_content(raw_content: str | list[dict[str, Any]] | None) -> list[C
                     )
                 )
             elif block_type == "tool_result":
-                # tool_result content blocks appear inside user messages and
-                # carry the tool_use_id that links them back to the originating
-                # Agent (or other tool) invocation. The block's `content` field
-                # may be a plain string or a list of sub-blocks — we capture
-                # the string form as text; richer sub-block handling can be
-                # added later if needed.
+                # `content` can be a string or a list of sub-blocks; richer
+                # sub-block shapes are captured as None pending a use case.
                 result_content = item.get("content")
                 result_text = (
                     result_content if isinstance(result_content, str) else None
@@ -94,11 +90,9 @@ def _parse_timestamp(raw: str | None) -> datetime | None:
 def _parse_user_message(data: dict[str, Any]) -> SessionMessage:
     """Parse a 'user' type message.
 
-    Claude Code attaches agent invocation results to user messages via a
-    top-level `toolUseResult` key (sibling to `message`, not inside it).
-    When present, it's deserialized into `ToolResultMetadata` and attached
-    to `SessionMessage.metadata` so the agent extractor can correlate it
-    to the originating Agent tool_use.
+    Agent tool results arrive as a `toolUseResult` sibling to `message`;
+    when present it lands on `SessionMessage.metadata`. See CLAUDE.md's
+    JSONL format section for the shape.
     """
     message = data.get("message", {})
 
