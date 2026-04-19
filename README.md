@@ -1,6 +1,6 @@
 # AgentFluent
 
-**Local-first agent analytics with behavior-to-improvement diagnostics. The tools that exist tell you what your agent did — AgentFluent tells you what to change.**
+**Local-first agent analytics with behavior-to-improvement diagnostics. The tools that exist tell you what your agent did — AgentFluent tells you how to make it better.**
 
 [![PyPI version](https://img.shields.io/pypi/v/agentfluent.svg)](https://pypi.org/project/agentfluent/)
 [![Python versions](https://img.shields.io/pypi/pyversions/agentfluent.svg)](https://pypi.org/project/agentfluent/)
