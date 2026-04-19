@@ -357,6 +357,7 @@ Browse [open issues](https://github.com/frederick-douglas-pearce/agentfluent/iss
 | **Zero tokens / dashes in Agent Invocations** | If you're on AgentFluent ≤ 0.1.0, this is the [#84 parser bug](https://github.com/frederick-douglas-pearce/agentfluent/issues/84) — upgrade with `uv tool upgrade agentfluent`. |
 | **Python version error** | AgentFluent requires Python 3.12+. Check with `python --version` and upgrade if needed. |
 | **Non-default session path** | If `~/.claude/` is stored somewhere unusual, AgentFluent currently uses the default path only. Custom path support is planned. |
+| **`Malformed JSON at <file>:<line>` warning** | A session file has a corrupted line — usually null bytes left behind when Claude Code was killed mid-write. The parser skips the line and continues; analytics are unaffected. Safe to ignore, or delete the line with `sed -i '<line>d' <file>` to silence the warning. |
 | **Stale tool install after local build** | If `uv tool install --from <path> agentfluent` seems to reuse cached code, run `uv tool uninstall agentfluent && uv cache clean agentfluent` before reinstalling. |
 
 ## Research Foundations
