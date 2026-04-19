@@ -52,9 +52,8 @@ CodeFluent's Python webapp (FastAPI backend) contains working implementations th
 ### Data Sources
 
 Agent SDK and Claude Code subagent sessions are stored as JSONL in `~/.claude/projects/`. Key fields:
-- `type: "user"` -- programmatic prompt (system prompt + user message)
+- `type: "user"` -- programmatic prompt (system prompt + user message); also carries agent tool results as `tool_result` content blocks with a sibling `toolUseResult` object containing `totalTokens`, `totalToolUseCount`, `totalDurationMs`, `agentId`
 - `type: "assistant"` -- model responses with `tool_use` blocks
-- `type: "tool_result"` -- tool execution results, including metadata block with `total_tokens`, `tool_uses`, `duration_ms`, `agentId`
 
 ### Four Core Features
 
@@ -195,7 +194,7 @@ Claude Code and Agent SDK sessions are stored at `~/.claude/projects/` as JSONL 
     └── ...
 ```
 
-**Subagent JSONL files** contain complete internal traces (tool_use/tool_result pairs, per-step token usage, `is_error` flags, reasoning steps). All messages have `isSidechain: true`. The `agentId` links subagent files to the parent session's `tool_result` metadata. MVP enumerates these files; deep parsing is deferred to v1.1 (see D008).
+**Subagent JSONL files** contain complete internal traces (tool_use/tool_result pairs, per-step token usage, `is_error` flags, reasoning steps). All messages have `isSidechain: true`. The `agentId` links subagent files to the parent session's `toolUseResult.agentId`. MVP enumerates these files; deep parsing is deferred to v1.1 (see D008).
 
 ### Message types AgentFluent extracts
 
@@ -225,19 +224,47 @@ Claude Code and Agent SDK sessions are stored at `~/.claude/projects/` as JSONL 
 }
 ```
 
-**`type: "tool_result"` -- Tool execution results (agent metadata here)**
+**Agent tool results -- embedded in `user` messages, metadata on `toolUseResult`**
+
+Claude Code does not emit top-level `type: "tool_result"` lines. Tool results
+appear as content blocks inside `user` messages, and agent invocation metadata
+lives on a sibling `toolUseResult` key (camelCase fields):
+
 ```json
 {
-  "type": "tool_result",
-  "content": "agent's final summary text",
-  "metadata": {
-    "total_tokens": 31621,
-    "tool_uses": 14,
-    "duration_ms": 122963,
-    "agentId": "uuid"
-  }
+  "type": "user",
+  "message": {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_...",
+        "content": "agent's final summary text"
+      }
+    ]
+  },
+  "toolUseResult": {
+    "status": "success",
+    "prompt": "...",
+    "agentId": "uuid",
+    "agentType": "general-purpose",
+    "totalDurationMs": 122963,
+    "totalTokens": 31621,
+    "totalToolUseCount": 14,
+    "usage": { "input_tokens": 10, "output_tokens": 20 },
+    "toolStats": { "Read": 1 }
+  },
+  "timestamp": "2026-04-14T08:02:13.000Z"
 }
 ```
+
+The parser attaches the deserialized `toolUseResult` to
+`SessionMessage.metadata` on the containing user message; the agent extractor
+indexes results by `tool_use_id` from the `tool_result` content block.
+
+**Format as of 2026-04; Claude Code may evolve this — verify against a current
+session before assuming field presence.** `ToolResultMetadata` uses
+`extra="ignore"` so additional fields on `toolUseResult` don't break parsing.
 
 **`type: "user"` -- Prompts**
 ```json
@@ -255,7 +282,7 @@ Claude Code and Agent SDK sessions are stored at `~/.claude/projects/` as JSONL 
 ### Key signals for agent analysis
 
 - **Agent tool_use blocks** -- `name: "Agent"` with `subagent_type`, `description`, `prompt` in input. Identifies which agent was invoked and the delegation prompt.
-- **tool_result metadata** -- `total_tokens`, `tool_uses`, `duration_ms`, `agentId`. Enables cost-per-invocation, efficiency metrics, and continuity tracking.
+- **`toolUseResult` metadata** (on the user message carrying an agent's `tool_result` block) -- `totalTokens`, `totalToolUseCount`, `totalDurationMs`, `agentId`. Enables cost-per-invocation, efficiency metrics, and continuity tracking. The parser exposes these as snake_case (`total_tokens`, `tool_uses`, `duration_ms`, `agent_id`) on `SessionMessage.metadata`.
 - **Error patterns in tool_result content** -- self-reported failures ("blocked", "unable to", "don't have access") extractable via pattern matching.
 - **Retry sequences** -- consecutive tool_use/tool_result pairs for the same tool indicate retry behavior.
 - **Tool diversity** -- count of unique tool names in assistant content blocks.
