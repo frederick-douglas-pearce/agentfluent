@@ -55,6 +55,20 @@ def _normalize_content(raw_content: str | list[dict[str, Any]] | None) -> list[C
                         input=item.get("input"),
                     )
                 )
+            elif block_type == "tool_result":
+                # `content` can be a string or a list of sub-blocks; richer
+                # sub-block shapes are captured as None pending a use case.
+                result_content = item.get("content")
+                result_text = (
+                    result_content if isinstance(result_content, str) else None
+                )
+                blocks.append(
+                    ContentBlock(
+                        type="tool_result",
+                        tool_use_id=item.get("tool_use_id"),
+                        text=result_text,
+                    )
+                )
             else:
                 # Preserve unknown block types as text with the type field
                 blocks.append(ContentBlock(type=block_type, text=item.get("text")))
@@ -74,12 +88,24 @@ def _parse_timestamp(raw: str | None) -> datetime | None:
 
 
 def _parse_user_message(data: dict[str, Any]) -> SessionMessage:
-    """Parse a 'user' type message."""
+    """Parse a 'user' type message.
+
+    Agent tool results arrive as a `toolUseResult` sibling to `message`;
+    when present it lands on `SessionMessage.metadata`. See CLAUDE.md's
+    JSONL format section for the shape.
+    """
     message = data.get("message", {})
+
+    metadata = None
+    raw_tool_use_result = data.get("toolUseResult")
+    if raw_tool_use_result and isinstance(raw_tool_use_result, dict):
+        metadata = ToolResultMetadata.model_validate(raw_tool_use_result)
+
     return SessionMessage(
         type="user",
         timestamp=_parse_timestamp(data.get("timestamp")),
         content_blocks=_normalize_content(message.get("content")),
+        metadata=metadata,
     )
 
 

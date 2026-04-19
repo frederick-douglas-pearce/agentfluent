@@ -40,28 +40,39 @@ class ToolUseBlock(BaseModel):
 
 
 class ContentBlock(BaseModel):
-    """A single content block (text or tool_use) from a message.
+    """A single content block (text, tool_use, or tool_result) from a message.
 
     The raw JSONL content can be either a plain string or an array of typed blocks.
     The parser normalizes both forms into a list of ContentBlock.
     """
 
-    type: str  # "text" or "tool_use"
+    type: str  # "text", "tool_use", or "tool_result"
     text: str | None = None
     # tool_use fields (only present when type == "tool_use")
     id: str | None = None
     name: str | None = None
     input: dict[str, Any] | None = None
+    # tool_result fields (only present when type == "tool_result")
+    tool_use_id: str | None = None
 
 
 class ToolResultMetadata(BaseModel):
-    """Metadata from a tool_result message (present on agent invocation results)."""
+    """Metadata from a tool_result / toolUseResult block (present on agent invocation results).
 
-    model_config = {"populate_by_name": True}
+    Claude Code emits these fields as camelCase on the outer user message's
+    `toolUseResult` key. Internal snake_case field names are preserved as the
+    stable downstream contract; the camelCase aliases handle JSONL ingestion.
 
-    total_tokens: int | None = None
-    tool_uses: int | None = None
-    duration_ms: int | None = None
+    `extra="ignore"` keeps parsing forward-compatible: additional fields on
+    `toolUseResult` (e.g. `status`, `prompt`, `usage`, `toolStats`) are
+    silently dropped rather than raising a ValidationError.
+    """
+
+    model_config = {"populate_by_name": True, "extra": "ignore"}
+
+    total_tokens: int | None = Field(None, alias="totalTokens")
+    tool_uses: int | None = Field(None, alias="totalToolUseCount")
+    duration_ms: int | None = Field(None, alias="totalDurationMs")
     agent_id: str | None = Field(None, alias="agentId")
 
 
@@ -102,7 +113,10 @@ class SessionMessage(BaseModel):
     """Whether the tool result is an error. Only on tool_result messages."""
 
     metadata: ToolResultMetadata | None = None
-    """Agent invocation metadata. Only on tool_result messages from Agent calls."""
+    """Agent invocation metadata. Populated on `user`-type messages that carry
+    a top-level `toolUseResult` key (the real Claude Code shape for Agent
+    tool results). Also historically supported on `tool_result`-type messages
+    if the parser encounters that shape."""
 
     @property
     def text(self) -> str:

@@ -212,3 +212,51 @@ class TestExtractFromConstructedMessages:
 
     def test_empty_messages(self) -> None:
         assert extract_agent_invocations([]) == []
+
+    def test_real_shape_user_message_with_tool_use_result(self) -> None:
+        """Real Claude Code shape: tool_result lives as a content block inside
+        a user message, with metadata attached to that user message from
+        `toolUseResult`. The extractor must follow this path to populate
+        invocation metrics."""
+        messages = [
+            SessionMessage(
+                type="assistant",
+                content_blocks=[
+                    ContentBlock(
+                        type="tool_use",
+                        id="toolu_real",
+                        name="Agent",
+                        input={
+                            "subagent_type": "general-purpose",
+                            "description": "Do real work",
+                            "prompt": "Please do the thing",
+                        },
+                    ),
+                ],
+            ),
+            SessionMessage(
+                type="user",
+                content_blocks=[
+                    ContentBlock(
+                        type="tool_result",
+                        tool_use_id="toolu_real",
+                        text="Agent finished successfully.",
+                    ),
+                ],
+                metadata=ToolResultMetadata(
+                    total_tokens=31621,
+                    tool_uses=14,
+                    duration_ms=122963,
+                    agent_id="uuid-real",
+                ),
+            ),
+        ]
+        invocations = extract_agent_invocations(messages)
+        assert len(invocations) == 1
+        inv = invocations[0]
+        assert inv.agent_type == "general-purpose"
+        assert inv.total_tokens == 31621
+        assert inv.tool_uses == 14
+        assert inv.duration_ms == 122963
+        assert inv.agent_id == "uuid-real"
+        assert inv.output_text == "Agent finished successfully."

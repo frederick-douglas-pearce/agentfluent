@@ -1,8 +1,4 @@
-"""Extract agent invocations from parsed session messages.
-
-Identifies Agent tool_use blocks in assistant messages and matches them
-to their corresponding tool_result blocks to build AgentInvocation objects.
-"""
+"""Extract agent invocations from parsed session messages."""
 
 from __future__ import annotations
 
@@ -11,22 +7,18 @@ from agentfluent.core.session import SessionMessage
 
 
 def extract_agent_invocations(messages: list[SessionMessage]) -> list[AgentInvocation]:
-    """Extract agent invocations from a list of parsed session messages.
-
-    Scans for assistant messages containing Agent tool_use blocks (name == "Agent"),
-    then matches each to its corresponding tool_result by tool_use_id.
-
-    Args:
-        messages: Parsed session messages from the JSONL parser.
-
-    Returns:
-        List of AgentInvocation objects in session order.
+    """Match Agent tool_use blocks to their tool_result content blocks by
+    tool_use_id and pull metadata from the result-carrying message.
     """
-    # Build a lookup of tool_result messages by tool_use_id
-    tool_results: dict[str, SessionMessage] = {}
+    results: dict[str, tuple[SessionMessage, str]] = {}
+
     for msg in messages:
-        if msg.type == "tool_result" and msg.tool_use_id:
-            tool_results[msg.tool_use_id] = msg
+        if msg.type == "user":
+            for block in msg.content_blocks:
+                if block.type == "tool_result" and block.tool_use_id:
+                    results[block.tool_use_id] = (msg, block.text or "")
+        elif msg.type == "tool_result" and msg.tool_use_id:
+            results[msg.tool_use_id] = (msg, msg.text)
 
     invocations: list[AgentInvocation] = []
 
@@ -42,23 +34,19 @@ def extract_agent_invocations(messages: list[SessionMessage]) -> list[AgentInvoc
             description = tool_use.input.get("description", "")
             prompt = tool_use.input.get("prompt", "")
 
-            # Match to tool_result
-            result = tool_results.get(tool_use.id)
+            entry = results.get(tool_use.id)
+            container, output_text = entry if entry else (None, "")
 
             total_tokens = None
             tool_uses_count = None
             duration_ms = None
             agent_id = None
-            output_text = ""
 
-            if result is not None:
-                output_text = result.text
-
-                if result.metadata is not None:
-                    total_tokens = result.metadata.total_tokens
-                    tool_uses_count = result.metadata.tool_uses
-                    duration_ms = result.metadata.duration_ms
-                    agent_id = result.metadata.agent_id
+            if container is not None and container.metadata is not None:
+                total_tokens = container.metadata.total_tokens
+                tool_uses_count = container.metadata.tool_uses
+                duration_ms = container.metadata.duration_ms
+                agent_id = container.metadata.agent_id
 
             invocations.append(
                 AgentInvocation(
