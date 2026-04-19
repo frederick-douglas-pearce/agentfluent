@@ -57,9 +57,9 @@ Both read `~/.claude/projects/` session JSONL. They answer different questions:
 
 | | [CodeFluent](https://github.com/frederick-douglas-pearce/codefluent) | AgentFluent |
 |---|---|---|
-| **Unit of analysis** | Human prompts in interactive sessions | Agent definitions + their observed behavior |
-| **Scoring target** | Developer's AI collaboration fluency | Agent's prompt, tools, model, hooks |
-| **Feedback loop** | Coaches the human to prompt better | Tells the developer what config to change |
+| **Unit of analysis** | Conversations in interactive sessions, plus the supporting `.claude/` config (CLAUDE.md, rules, hooks, commands) | Agent definitions + their observed behavior |
+| **Scoring target** | Developer's AI collaboration fluency and project-config maturity | Agent's prompt, tools, model, hooks |
+| **Feedback loop** | Coaches the human to interact with Claude Code better | Tells the developer what config to change |
 | **Delivery** | VS Code extension + web app | CLI-first (dashboard deferred) |
 | **API calls** | Anthropic API for LLM-as-judge scoring | None — fully local |
 
