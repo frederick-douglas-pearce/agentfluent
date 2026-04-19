@@ -345,6 +345,8 @@ Five GitHub Actions workflows run automatically:
 - Webapp dashboard for trend visualization
 - `agentfluent diff` — side-by-side comparison of behavior before/after a prompt change
 - MCP server configuration assessment
+- Closed-loop self-improvement — use AgentFluent's diagnostic output as a feedback signal the agent itself consumes to propose config edits against its own past sessions
+- Agent ROI reporting — roll up cost, usage, and task-completion signals over time so a business can evaluate whether an optimized agent is worth continuing to run
 
 Browse [open issues](https://github.com/frederick-douglas-pearce/agentfluent/issues) for the full backlog.
 
