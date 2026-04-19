@@ -2,6 +2,12 @@
 
 Identifies Agent tool_use blocks in assistant messages and matches them
 to their corresponding tool_result blocks to build AgentInvocation objects.
+
+Claude Code emits tool results as `tool_result` content blocks *inside*
+user messages, with agent metadata on the containing user message's
+`toolUseResult` key (surfaced by the parser on `SessionMessage.metadata`).
+This extractor walks user messages' content blocks to index tool results
+by `tool_use_id`, then resolves metadata from the outer user message.
 """
 
 from __future__ import annotations
@@ -14,7 +20,12 @@ def extract_agent_invocations(messages: list[SessionMessage]) -> list[AgentInvoc
     """Extract agent invocations from a list of parsed session messages.
 
     Scans for assistant messages containing Agent tool_use blocks (name == "Agent"),
-    then matches each to its corresponding tool_result by tool_use_id.
+    then matches each to its corresponding tool_result content block (which lives
+    inside a user message) by tool_use_id. Metadata is pulled from the containing
+    user message's `metadata` field (populated by the parser from `toolUseResult`).
+
+    Also falls back to top-level `tool_result`-type SessionMessages if present —
+    a legacy / alternate shape that the parser still tolerates.
 
     Args:
         messages: Parsed session messages from the JSONL parser.
@@ -22,11 +33,24 @@ def extract_agent_invocations(messages: list[SessionMessage]) -> list[AgentInvoc
     Returns:
         List of AgentInvocation objects in session order.
     """
-    # Build a lookup of tool_result messages by tool_use_id
-    tool_results: dict[str, SessionMessage] = {}
+    # Build lookups keyed by tool_use_id:
+    #   - result_containers: the SessionMessage that holds the result (user message
+    #     in the real shape; tool_result message in the legacy shape). Used to
+    #     access metadata.
+    #   - result_texts: the text content of the result block itself.
+    result_containers: dict[str, SessionMessage] = {}
+    result_texts: dict[str, str] = {}
+
     for msg in messages:
-        if msg.type == "tool_result" and msg.tool_use_id:
-            tool_results[msg.tool_use_id] = msg
+        if msg.type == "user":
+            for block in msg.content_blocks:
+                if block.type == "tool_result" and block.tool_use_id:
+                    result_containers[block.tool_use_id] = msg
+                    result_texts[block.tool_use_id] = block.text or ""
+        elif msg.type == "tool_result" and msg.tool_use_id:
+            # Legacy shape: tool_result as a top-level message.
+            result_containers[msg.tool_use_id] = msg
+            result_texts[msg.tool_use_id] = msg.text
 
     invocations: list[AgentInvocation] = []
 
@@ -42,23 +66,19 @@ def extract_agent_invocations(messages: list[SessionMessage]) -> list[AgentInvoc
             description = tool_use.input.get("description", "")
             prompt = tool_use.input.get("prompt", "")
 
-            # Match to tool_result
-            result = tool_results.get(tool_use.id)
+            container = result_containers.get(tool_use.id)
+            output_text = result_texts.get(tool_use.id, "")
 
             total_tokens = None
             tool_uses_count = None
             duration_ms = None
             agent_id = None
-            output_text = ""
 
-            if result is not None:
-                output_text = result.text
-
-                if result.metadata is not None:
-                    total_tokens = result.metadata.total_tokens
-                    tool_uses_count = result.metadata.tool_uses
-                    duration_ms = result.metadata.duration_ms
-                    agent_id = result.metadata.agent_id
+            if container is not None and container.metadata is not None:
+                total_tokens = container.metadata.total_tokens
+                tool_uses_count = container.metadata.tool_uses
+                duration_ms = container.metadata.duration_ms
+                agent_id = container.metadata.agent_id
 
             invocations.append(
                 AgentInvocation(
