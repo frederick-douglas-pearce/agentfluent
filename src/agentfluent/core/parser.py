@@ -55,6 +55,24 @@ def _normalize_content(raw_content: str | list[dict[str, Any]] | None) -> list[C
                         input=item.get("input"),
                     )
                 )
+            elif block_type == "tool_result":
+                # tool_result content blocks appear inside user messages and
+                # carry the tool_use_id that links them back to the originating
+                # Agent (or other tool) invocation. The block's `content` field
+                # may be a plain string or a list of sub-blocks — we capture
+                # the string form as text; richer sub-block handling can be
+                # added later if needed.
+                result_content = item.get("content")
+                result_text = (
+                    result_content if isinstance(result_content, str) else None
+                )
+                blocks.append(
+                    ContentBlock(
+                        type="tool_result",
+                        tool_use_id=item.get("tool_use_id"),
+                        text=result_text,
+                    )
+                )
             else:
                 # Preserve unknown block types as text with the type field
                 blocks.append(ContentBlock(type=block_type, text=item.get("text")))
@@ -74,12 +92,26 @@ def _parse_timestamp(raw: str | None) -> datetime | None:
 
 
 def _parse_user_message(data: dict[str, Any]) -> SessionMessage:
-    """Parse a 'user' type message."""
+    """Parse a 'user' type message.
+
+    Claude Code attaches agent invocation results to user messages via a
+    top-level `toolUseResult` key (sibling to `message`, not inside it).
+    When present, it's deserialized into `ToolResultMetadata` and attached
+    to `SessionMessage.metadata` so the agent extractor can correlate it
+    to the originating Agent tool_use.
+    """
     message = data.get("message", {})
+
+    metadata = None
+    raw_tool_use_result = data.get("toolUseResult")
+    if raw_tool_use_result and isinstance(raw_tool_use_result, dict):
+        metadata = ToolResultMetadata.model_validate(raw_tool_use_result)
+
     return SessionMessage(
         type="user",
         timestamp=_parse_timestamp(data.get("timestamp")),
         content_blocks=_normalize_content(message.get("content")),
+        metadata=metadata,
     )
 
 
