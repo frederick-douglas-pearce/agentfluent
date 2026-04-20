@@ -29,12 +29,15 @@ jobs:
         with:
           fetch-depth: 2
 
-      - uses: anthropics/claude-code-security-review@main
+      # Pinned to a SHA for reproducibility — upstream has no tagged releases.
+      - uses: anthropics/claude-code-security-review@0c6a49f1fa56a1d472575da86a94dbc1edb78eda # 2026-02-11
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         with:
           comment-pr: true
           claude-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Pin to Sonnet; routine security scans don't need Opus-level reasoning.
+          claude-model: claude-sonnet-4-6
           exclude-directories: .venv,dist,build,.mypy_cache,.pytest_cache,.ruff_cache,.claude
           custom-security-scan-instructions: |
             AgentFluent is a local-first Python CLI that reads user session data and
