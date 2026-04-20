@@ -63,8 +63,9 @@ If you write your own prompts each session, use CodeFluent. If your prompts live
 </table>
 
 <table>
-<tr><th>Config Assessment</th></tr>
+<tr><th>Behavior Diagnostics</th><th>Config Assessment</th></tr>
 <tr valign="top">
+  <td><img src="images/demo-diagnostics.png" alt="agentfluent analyze --diagnostics"></td>
   <td><img src="images/demo-config-check.png" alt="agentfluent config-check"></td>
 </tr>
 </table>
