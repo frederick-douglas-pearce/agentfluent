@@ -11,7 +11,7 @@ AI agents are in production at 57% of organizations, and quality is the single t
 
 AgentFluent reads your local [Claude Code](https://code.claude.com) and [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) session JSONL, extracts agent invocations and tool patterns, scores each agent's configuration against a best-practice rubric, and correlates observed behavior back to specific fixes — a prompt gap, a missing tool constraint, a stale model selection, a hook that never fires. No cloud services, no API keys, no data leaves your machine.
 
-Born from [CodeFluent](https://github.com/frederick-douglas-pearce/codefluent) research that identified the agent-quality gap in 2026. See [`docs/AGENT_ANALYTICS_RESEARCH.md`](docs/AGENT_ANALYTICS_RESEARCH.md) for the full market analysis.
+Born from [CodeFluent](https://github.com/frederick-douglas-pearce/codefluent) research that identified the agent-quality gap in 2026. See [`docs/AGENT_ANALYTICS_RESEARCH.md`](docs/AGENT_ANALYTICS_RESEARCH.md) for additional market analysis.
 
 ## How It Compares
 
