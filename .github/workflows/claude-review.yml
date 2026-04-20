@@ -30,6 +30,10 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Pin to Sonnet for routine reviews; Opus is ~15x cost with limited
+          # marginal benefit on small diffs. Mention `@claude-opus` in a PR
+          # comment to opt into deeper review.
+          model: claude-sonnet-4-6
           trigger_phrase: "@claude"
           prompt: |
             You are reviewing code for the AgentFluent project — a local-first Python CLI
