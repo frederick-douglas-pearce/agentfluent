@@ -25,20 +25,7 @@ The agent observability space is crowded — several tools capture what agents d
 | [claude-code-otel](https://github.com/ColeMurray/claude-code-otel) | OpenTelemetry export of Claude Code sessions | Analysis itself — it's a bridge to other tools |
 | Anthropic Console | Per-request cost, rate-limit tracking | Session-level diagnostics; agent config recommendations |
 
-**Where AgentFluent fits.** AgentFluent reads the session JSONL your agent already produced, scores each agent's configuration against a best-practice rubric, and correlates observed behavior back to the specific config line that most likely explains it. It complements the tools above rather than replacing them — use Langfuse/Phoenix for production traces, Braintrust for test-set evals, ccusage for usage dashboards, and AgentFluent for *what in the agent's config to change*.
-
-### Adjacent features, clarified
-
-Several of those tools ship features whose names sound close to AgentFluent's scope. They don't overlap in practice — each addresses a different part of the workflow:
-
-| Adjacent feature (what some tools offer) | How it differs from AgentFluent |
-|---|---|
-| **Prompt management** (Langfuse, LangSmith, Braintrust) — registry, versioning, deployment, A/B tests | Hosts and versions prompt *artifacts*. AgentFluent doesn't host anything — prompts stay wherever they live (Python, Markdown, `ClaudeAgentOptions`) and AgentFluent diagnoses them in place. |
-| **Eval frameworks** (Braintrust, DeepEval, Galileo) — score agent outputs against a rubric you supply | Requires a test set or golden data you author. AgentFluent reads the session history your agent has already produced — no test set needed. |
-| **Trace viewers** (every observability platform) — timeline of tool calls per session | Single-session inspection. AgentFluent aggregates *across* sessions to surface recurring behavior patterns. |
-| **Usage dashboards** (ccusage, claude-view, Console) — token/cost over time | Reports what happened. AgentFluent uses the same numbers as evidence for a config diagnosis ("this model choice is why cost spiked"). |
-
-AgentFluent's own job — behavior-to-config diagnosis from already-persisted local session data — isn't in the list above because no existing tool covers it. The question *"my Agent SDK agent ran 500 sessions last week — were any of them actually good, and what in the agent's configuration should I change?"* has no answer from the tools in either table. AgentFluent is built to answer it.
+**Where AgentFluent fits.** AgentFluent reads the session JSONL your agent already produced, scores each agent's configuration against a best-practice rubric, and correlates observed behavior back to the specific config line that most likely explains it. It complements the tools above rather than replacing them — use Langfuse/Phoenix for production traces, Braintrust for test-set evals, ccusage for usage dashboards, and AgentFluent for *what in the agent's config to change*. The question *"my Agent SDK agent ran 500 sessions last week — were any of them actually good, and what in the agent's configuration should I change?"* has no answer from the tools above. AgentFluent is built to answer it.
 
 ## Why This Is Different
 
