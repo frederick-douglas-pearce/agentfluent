@@ -57,7 +57,7 @@ class ContentBlock(BaseModel):
 
 
 class ToolResultMetadata(BaseModel):
-    """Metadata from a tool_result / toolUseResult block (present on agent invocation results).
+    """Metadata from a user message's `toolUseResult` sibling (agent invocation results).
 
     Claude Code emits these fields as camelCase on the outer user message's
     `toolUseResult` key. Internal snake_case field names are preserved as the
