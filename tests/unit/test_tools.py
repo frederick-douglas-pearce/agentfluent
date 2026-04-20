@@ -45,7 +45,7 @@ class TestComputeToolMetrics:
         messages = [
             SessionMessage(type="user", content_blocks=[ContentBlock(type="text", text="Hi")]),
             _assistant_with_tools("Read"),
-            SessionMessage(type="tool_result", tool_use_id="t1"),
+            SessionMessage(type="user"),
         ]
         metrics = compute_tool_metrics(messages)
         assert metrics.total_tool_calls == 1

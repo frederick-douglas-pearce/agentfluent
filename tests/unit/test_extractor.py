@@ -94,9 +94,14 @@ class TestExtractFromConstructedMessages:
                 ],
             ),
             SessionMessage(
-                type="tool_result",
-                tool_use_id="toolu_no_meta",
-                content_blocks=[ContentBlock(type="text", text="Found 3 files.")],
+                type="user",
+                content_blocks=[
+                    ContentBlock(
+                        type="tool_result",
+                        tool_use_id="toolu_no_meta",
+                        text="Found 3 files.",
+                    ),
+                ],
                 metadata=None,
             ),
         ]
@@ -128,15 +133,17 @@ class TestExtractFromConstructedMessages:
                 ],
             ),
             SessionMessage(
-                type="tool_result",
-                tool_use_id="toolu_a",
-                content_blocks=[ContentBlock(type="text", text="Result A")],
+                type="user",
+                content_blocks=[
+                    ContentBlock(type="tool_result", tool_use_id="toolu_a", text="Result A"),
+                ],
                 metadata=ToolResultMetadata(total_tokens=1000, tool_uses=5),
             ),
             SessionMessage(
-                type="tool_result",
-                tool_use_id="toolu_b",
-                content_blocks=[ContentBlock(type="text", text="Result B")],
+                type="user",
+                content_blocks=[
+                    ContentBlock(type="tool_result", tool_use_id="toolu_b", text="Result B"),
+                ],
                 metadata=ToolResultMetadata(total_tokens=2000, tool_uses=10),
             ),
         ]
@@ -168,14 +175,16 @@ class TestExtractFromConstructedMessages:
                 ],
             ),
             SessionMessage(
-                type="tool_result",
-                tool_use_id="toolu_read",
-                content_blocks=[ContentBlock(type="text", text="file content")],
+                type="user",
+                content_blocks=[
+                    ContentBlock(type="tool_result", tool_use_id="toolu_read", text="file content"),
+                ],
             ),
             SessionMessage(
-                type="tool_result",
-                tool_use_id="toolu_agent",
-                content_blocks=[ContentBlock(type="text", text="Plan result")],
+                type="user",
+                content_blocks=[
+                    ContentBlock(type="tool_result", tool_use_id="toolu_agent", text="Plan result"),
+                ],
                 metadata=ToolResultMetadata(total_tokens=500, tool_uses=3),
             ),
         ]
@@ -198,9 +207,10 @@ class TestExtractFromConstructedMessages:
                 ],
             ),
             SessionMessage(
-                type="tool_result",
-                tool_use_id="toolu_1",
-                content_blocks=[ContentBlock(type="text", text="Done")],
+                type="user",
+                content_blocks=[
+                    ContentBlock(type="tool_result", tool_use_id="toolu_1", text="Done"),
+                ],
                 metadata=ToolResultMetadata(
                     total_tokens=10000, tool_uses=5, duration_ms=50000
                 ),

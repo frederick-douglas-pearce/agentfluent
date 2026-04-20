@@ -133,26 +133,6 @@ def _parse_assistant_message(data: dict[str, Any]) -> SessionMessage:
     )
 
 
-def _parse_tool_result(data: dict[str, Any]) -> SessionMessage:
-    """Parse a 'tool_result' type message."""
-    raw_content = data.get("content")
-    content_blocks = _normalize_content(raw_content)
-
-    metadata = None
-    raw_metadata = data.get("metadata")
-    if raw_metadata and isinstance(raw_metadata, dict):
-        metadata = ToolResultMetadata.model_validate(raw_metadata)
-
-    return SessionMessage(
-        type="tool_result",
-        timestamp=_parse_timestamp(data.get("timestamp")),
-        tool_use_id=data.get("tool_use_id"),
-        is_error=bool(data.get("is_error", False)),
-        content_blocks=content_blocks,
-        metadata=metadata,
-    )
-
-
 def deduplicate_messages(messages: list[SessionMessage]) -> list[SessionMessage]:
     """Deduplicate streaming snapshot assistant messages by message_id.
 
@@ -259,8 +239,6 @@ def parse_session(path: Path, *, deduplicate: bool = True) -> list[SessionMessag
                     messages.append(_parse_user_message(data))
                 elif msg_type == "assistant":
                     messages.append(_parse_assistant_message(data))
-                elif msg_type == "tool_result":
-                    messages.append(_parse_tool_result(data))
                 else:
                     logger.debug(
                         "Unknown message type '%s' at %s:%d", msg_type, path.name, line_num

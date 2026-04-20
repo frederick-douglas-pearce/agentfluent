@@ -70,7 +70,7 @@ class TestComputeTokenMetrics:
         messages = [
             SessionMessage(type="user"),
             _assistant(input_tokens=100, output_tokens=50),
-            SessionMessage(type="tool_result", tool_use_id="t1"),
+            SessionMessage(type="user"),
         ]
         metrics = compute_token_metrics(messages)
         assert metrics.input_tokens == 100

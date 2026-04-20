@@ -88,7 +88,7 @@ class TestParseSessionReal:
 
     def test_all_messages_have_valid_type(self, real_session_path: Path) -> None:
         messages = parse_session(real_session_path)
-        valid_types = {"user", "assistant", "tool_result"}
+        valid_types = {"user", "assistant"}
         for m in messages:
             assert m.type in valid_types, f"Unexpected type: {m.type}"
 

@@ -57,7 +57,7 @@ class ContentBlock(BaseModel):
 
 
 class ToolResultMetadata(BaseModel):
-    """Metadata from a tool_result / toolUseResult block (present on agent invocation results).
+    """Metadata from a user message's `toolUseResult` sibling (agent invocation results).
 
     Claude Code emits these fields as camelCase on the outer user message's
     `toolUseResult` key. Internal snake_case field names are preserved as the
@@ -84,17 +84,14 @@ class SessionMessage(BaseModel):
     """
 
     type: str
-    """Message type: 'user', 'assistant', or 'tool_result'."""
+    """Message type: 'user' or 'assistant'."""
 
     timestamp: datetime | None = None
-    """When the message was recorded. May be absent on tool_result messages."""
+    """When the message was recorded."""
 
-    # Content fields
     content_blocks: list[ContentBlock] = Field(default_factory=list)
-    """Normalized content. For user/assistant messages, text and tool_use blocks.
-    For tool_result, a single text block with the result content."""
+    """Normalized content: text, tool_use, and tool_result blocks."""
 
-    # Assistant-specific fields
     message_id: str | None = None
     """Anthropic message ID (e.g., 'msg_...'). Used to deduplicate streaming snapshots.
     All snapshots for the same API call share the same message_id."""
@@ -105,18 +102,10 @@ class SessionMessage(BaseModel):
     usage: Usage | None = None
     """Token usage. Only on assistant messages."""
 
-    # tool_result-specific fields
-    tool_use_id: str | None = None
-    """The tool_use ID this result corresponds to. Only on tool_result messages."""
-
-    is_error: bool = False
-    """Whether the tool result is an error. Only on tool_result messages."""
-
     metadata: ToolResultMetadata | None = None
     """Agent invocation metadata. Populated on `user`-type messages that carry
     a top-level `toolUseResult` key (the real Claude Code shape for Agent
-    tool results). Also historically supported on `tool_result`-type messages
-    if the parser encounters that shape."""
+    tool results)."""
 
     @property
     def text(self) -> str:
