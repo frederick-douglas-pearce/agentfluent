@@ -9,7 +9,7 @@
 
 AI agents are in production at 57% of organizations, and quality is the single top barrier to deployment. When an agent misbehaves — wrong tool choice, retry loops, hallucinated outputs — developers iterate on prompts blind. Existing observability platforms show *what* happened: traces, latency, token counts. They don't tell you *why* the agent misbehaved or *what in its configuration to change*.
 
-AgentFluent reads your local [Claude Code](https://code.claude.com) and [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) session JSONL, extracts agent invocations and tool patterns, scores each agent's configuration against a best-practice rubric, and correlates observed behavior back to specific fixes — a prompt gap, a missing tool constraint, a stale model selection, a hook that never fires. No cloud services, no API keys, no data leaves your machine.
+AgentFluent reads your local [Claude Code](https://code.claude.com) and [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) session JSONL, extracts agent invocations and tool patterns, scores each agent's configuration against a best-practice rubric, and correlates observed behavior back to specific fixes — a prompt gap, a missing tool constraint, or a stale model selection. No cloud services, no API keys, no data leaves your machine.
 
 Born from [CodeFluent](https://github.com/frederick-douglas-pearce/codefluent) research that identified the agent-quality gap in 2026. See [`docs/AGENT_ANALYTICS_RESEARCH.md`](docs/AGENT_ANALYTICS_RESEARCH.md) for additional market analysis.
 
@@ -29,9 +29,9 @@ The agent observability space is crowded — several tools capture what agents d
 
 ## Why This Is Different
 
-- **Research-grounded.** Every diagnostic maps to a specific gap in the agent's prompt, tool list, model selection, or hook coverage — not vibes. See the [research doc](docs/AGENT_ANALYTICS_RESEARCH.md) for the feasibility and positioning analysis.
+- **Research-grounded.** Every diagnostic maps to a specific gap in the agent's prompt, tool list, or model selection — not vibes. See the [research doc](docs/AGENT_ANALYTICS_RESEARCH.md) for the feasibility and positioning analysis.
 - **Behavior-to-improvement, not just traces.** When the agent retries Bash 40% of the time, AgentFluent tells you *which prompt clause is missing* — not just that the retry happened.
-- **The config is the agent.** In interactive sessions, the human course-corrects. In programmatic agents, the prompt and tool setup *are* the agent — a flaw compounds at scale. AgentFluent scores the full surface: prompt, `allowed_tools`, `disallowedTools`, model, description, hook coverage.
+- **The config is the agent.** In interactive sessions, the human course-corrects. In programmatic agents, the prompt and tool setup *are* the agent — a flaw compounds at scale. AgentFluent scores four dimensions of that config today — description, tools (`allowed_tools` / `disallowedTools`), model, and prompt — with hook, MCP, and cross-agent coverage on the roadmap.
 - **Local-first and private.** All analysis runs on your machine. Zero outbound network calls. No API key required.
 - **CLI-native.** `agentfluent analyze --format json | jq ...` — fits agent developer workflows (terminal, CI/CD, PR checks) without a web dashboard dependency.
 - **JSON output envelope is a contract.** A stable `{version, command, data}` schema lets you build PR gates, trend dashboards, and regression detectors on top without tracking AgentFluent's internal refactors.
@@ -126,7 +126,7 @@ agentfluent analyze --project codefluent --diagnostics      # Show behavior diag
 agentfluent analyze --project codefluent --format json | jq '.data.token_metrics.total_cost'
 ```
 
-Produces a token-usage table, per-model cost breakdown (labeled as API rate — subscription plans differ), tool usage concentration, and an Agent Invocations table summarizing each subagent's token, duration, and tool-use count. `--diagnostics` surfaces behavior signals (retry patterns, tool errors, low-coverage agents) with a pointer to the configuration gap most likely responsible.
+Produces a token-usage table, per-model cost breakdown (labeled as API rate — subscription plans differ), tool usage concentration, and an Agent Invocations table summarizing each subagent's token, duration, and tool-use count. `--diagnostics` surfaces behavior signals (tool errors, token-per-tool-use outliers, duration outliers) with a pointer to the configuration gap most likely responsible.
 
 Cost numbers reflect current per-token pricing; historical sessions are priced at today's rates until [#80](https://github.com/frederick-douglas-pearce/agentfluent/issues/80) (time-series pricing) lands.
 
@@ -221,7 +221,7 @@ Everything runs locally. No outbound network calls, ever. No API key needed.
 - **Project and Session Discovery** — Enumerates `~/.claude/projects/`, groups sessions by project, shows per-project session count, total size, and last-modified timestamp. Handles Claude Code subagent sidechain files and Agent SDK sessions uniformly.
 - **Execution Analytics** — Token usage, API-rate cost, cache efficiency, per-model breakdown, tool-call concentration, and per-agent invocation metrics (tokens, duration, tool-use count). Cache creation and cache read tokens are tracked separately so you can see where your prompt caching is working.
 - **Agent Config Assessment** — 4-dimension rubric (description, tools, model, prompt) applied to every `.md` file in `~/.claude/agents/` and `./.claude/agents/`. Produces a 0–100 score plus ranked, specific recommendations ("Prompt body doesn't mention error handling"). Catches agents that are technically valid but miss well-known best practices.
-- **Diagnostics Preview** — `--diagnostics` correlates observed behavior to configuration gaps: retry patterns pointing at missing error-handling instructions, tool errors pointing at over-broad `allowed_tools`, zero-invocation agents pointing at bad `description` triggers. Evidence-ranked so the biggest levers surface first.
+- **Diagnostics Preview** — `--diagnostics` correlates three behavior signals to configuration gaps: tool errors (caught by keywords like `blocked`, `failed`, `error`) suggesting missing error-handling instructions or over-broad tools; per-tool-use token outliers suggesting an agent that's exploring too broadly or needs a tighter prompt; duration outliers flagging unusually slow invocations. Each signal carries a severity level and a specific recommendation.
 - **JSON Output Envelope** — Stable `{version, command, data}` schema. No ANSI escapes. Intended as a programmatic contract for CI integration, PR gates, and regression tracking.
 - **Quiet and Verbose Modes** — `--quiet` for CI-friendly one-line summaries; `--verbose` for per-session breakdown and per-invocation detail tables. Defaults target interactive humans.
 
@@ -325,9 +325,13 @@ Five GitHub Actions workflows run automatically:
 - Time-series pricing data structure ([#80](https://github.com/frederick-douglas-pearce/agentfluent/issues/80))
 - Session-timestamp-aware cost calculation ([#81](https://github.com/frederick-douglas-pearce/agentfluent/issues/81))
 - Automated pricing-update service ([#82](https://github.com/frederick-douglas-pearce/agentfluent/issues/82))
+- `--claude-config-dir` flag for non-default session paths ([#90](https://github.com/frederick-douglas-pearce/agentfluent/issues/90))
+- Delegation pattern recognition — cluster `general-purpose` invocations and recommend custom subagents ([#92](https://github.com/frederick-douglas-pearce/agentfluent/issues/92))
 - Deeper diagnostics with per-tool-call evidence
 - Subagent trace parsing (`~/.claude/projects/<session>/subagents/`)
 - Prompt regression detection across agent config versions
+- Retry-pattern and zero-invocation-agent signals (complete the diagnostics surface currently covering tool errors and outliers)
+- Hook and MCP-server coverage in the config rubric
 
 **Future:**
 - Webapp dashboard for trend visualization
