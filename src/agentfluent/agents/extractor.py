@@ -17,8 +17,6 @@ def extract_agent_invocations(messages: list[SessionMessage]) -> list[AgentInvoc
             for block in msg.content_blocks:
                 if block.type == "tool_result" and block.tool_use_id:
                     results[block.tool_use_id] = (msg, block.text or "")
-        elif msg.type == "tool_result" and msg.tool_use_id:
-            results[msg.tool_use_id] = (msg, msg.text)
 
     invocations: list[AgentInvocation] = []
 

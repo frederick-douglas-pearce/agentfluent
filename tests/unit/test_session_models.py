@@ -121,11 +121,18 @@ class TestSessionMessage:
         assert msg.usage is not None
         assert msg.usage.input_tokens == 3000
 
-    def test_tool_result_with_metadata(self) -> None:
+    def test_user_message_carries_tool_use_result_metadata(self) -> None:
+        """Real Claude Code shape: tool_result is a content block inside a
+        user message, and `toolUseResult` metadata rides on the user message."""
         msg = SessionMessage(
-            type="tool_result",
-            tool_use_id="toolu_01ABC",
-            content_blocks=[ContentBlock(type="text", text="Created 5 issues.")],
+            type="user",
+            content_blocks=[
+                ContentBlock(
+                    type="tool_result",
+                    tool_use_id="toolu_01ABC",
+                    text="Created 5 issues.",
+                ),
+            ],
             metadata=ToolResultMetadata(
                 total_tokens=31621,
                 tool_uses=14,
@@ -133,28 +140,12 @@ class TestSessionMessage:
                 agent_id="agent-abc123",
             ),
         )
-        assert msg.type == "tool_result"
-        assert msg.tool_use_id == "toolu_01ABC"
-        assert msg.text == "Created 5 issues."
+        assert msg.type == "user"
+        assert msg.text == ""  # tool_result blocks don't contribute to .text
+        assert msg.content_blocks[0].tool_use_id == "toolu_01ABC"
+        assert msg.content_blocks[0].text == "Created 5 issues."
         assert msg.metadata is not None
         assert msg.metadata.agent_id == "agent-abc123"
-
-    def test_tool_result_without_metadata(self) -> None:
-        msg = SessionMessage(
-            type="tool_result",
-            tool_use_id="toolu_01EDIT",
-            content_blocks=[ContentBlock(type="text", text="File edited successfully.")],
-        )
-        assert msg.metadata is None
-
-    def test_tool_result_with_error(self) -> None:
-        msg = SessionMessage(
-            type="tool_result",
-            tool_use_id="toolu_01FAIL",
-            is_error=True,
-            content_blocks=[ContentBlock(type="text", text="Permission denied")],
-        )
-        assert msg.is_error is True
 
     def test_empty_content(self) -> None:
         msg = SessionMessage(type="user")
@@ -166,9 +157,7 @@ class TestSessionMessage:
         assert msg.timestamp is None
         assert msg.model is None
         assert msg.usage is None
-        assert msg.tool_use_id is None
         assert msg.metadata is None
-        assert msg.is_error is False
 
 
 class TestSkipTypes:
@@ -186,4 +175,3 @@ class TestSkipTypes:
     def test_analytical_types_not_skipped(self) -> None:
         assert "user" not in SKIP_TYPES
         assert "assistant" not in SKIP_TYPES
-        assert "tool_result" not in SKIP_TYPES

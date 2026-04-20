@@ -116,15 +116,6 @@ class TestParseToolCalls:
         assert len(tool_uses) == 1
         assert tool_uses[0].name == "Edit"
 
-    def test_tool_result_without_metadata(self, tool_calls_session_path: Path) -> None:
-        messages = parse_session(tool_calls_session_path)
-        tool_results = [m for m in messages if m.type == "tool_result"]
-
-        # Regular tool results have no agent metadata
-        for tr in tool_results:
-            assert tr.metadata is None
-
-
 class TestSkipTypes:
     def test_filters_non_analytical_types(self, skip_types_session_path: Path) -> None:
         messages = parse_session(skip_types_session_path)

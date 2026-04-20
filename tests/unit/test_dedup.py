@@ -39,7 +39,7 @@ class TestDeduplicateFromFixture:
     def test_preserves_message_order(self, streaming_dupes_session_path: Path) -> None:
         messages = parse_session(streaming_dupes_session_path)
         types = [m.type for m in messages]
-        assert types == ["user", "assistant", "user", "assistant", "tool_result"]
+        assert types == ["user", "assistant", "user", "assistant", "user"]
 
     def test_message_id_captured(self, streaming_dupes_session_path: Path) -> None:
         messages = parse_session(streaming_dupes_session_path)
@@ -66,7 +66,7 @@ class TestDeduplicateConstructed:
     def test_no_assistant_messages(self) -> None:
         messages = [
             SessionMessage(type="user", content_blocks=[ContentBlock(type="text", text="Hi")]),
-            SessionMessage(type="tool_result", tool_use_id="t1"),
+            SessionMessage(type="user"),
         ]
         result = deduplicate_messages(messages)
         assert len(result) == 2
@@ -106,10 +106,10 @@ class TestDeduplicateConstructed:
                 message_id=None,
                 usage=Usage(output_tokens=30),
             ),
-            SessionMessage(type="tool_result", tool_use_id="t1"),
+            SessionMessage(type="user"),
         ]
         result = deduplicate_messages(messages)
-        # user + 1 deduped assistant (msg_1) + 1 no-id assistant + tool_result
+        # user + 1 deduped assistant (msg_1) + 1 no-id assistant + user
         assert len(result) == 4
         assistant_msgs = [m for m in result if m.type == "assistant"]
         assert len(assistant_msgs) == 2
