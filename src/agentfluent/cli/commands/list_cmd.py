@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 import typer
@@ -19,6 +20,7 @@ from agentfluent.core.discovery import (
     find_project,
 )
 from agentfluent.core.parser import parse_session
+from agentfluent.core.paths import projects_dir_for
 
 LIST_EPILOG = """\
 Examples:
@@ -41,18 +43,20 @@ console = Console()
 err_console = Console(stderr=True)
 
 
-def _discover_or_exit() -> list[ProjectInfo]:
+def _discover_or_exit(config_dir: Path | None) -> list[ProjectInfo]:
     """Discover projects; print error and exit on failure."""
     try:
-        return discover_projects()
+        return discover_projects(base_path=projects_dir_for(config_dir))
     except FileNotFoundError as e:
         err_console.print(f"[red]{e}[/red]")
         raise typer.Exit(code=EXIT_NO_DATA) from None
 
 
-def _list_projects_table(*, verbose: bool, quiet: bool) -> None:
+def _list_projects_table(
+    *, config_dir: Path | None, verbose: bool, quiet: bool,
+) -> None:
     """Display all projects as a Rich table."""
-    projects = _discover_or_exit()
+    projects = _discover_or_exit(config_dir)
     if quiet:
         total_sessions = sum(p.session_count for p in projects)
         console.print(f"{len(projects)} projects, {total_sessions} total sessions")
@@ -60,9 +64,9 @@ def _list_projects_table(*, verbose: bool, quiet: bool) -> None:
     format_projects_table(console, projects, verbose=verbose)
 
 
-def _list_projects_json(*, quiet: bool) -> None:
+def _list_projects_json(*, config_dir: Path | None, quiet: bool) -> None:
     """Output all projects as JSON."""
-    projects = _discover_or_exit()
+    projects = _discover_or_exit(config_dir)
     if quiet:
         payload: dict[str, object] = {
             "project_count": len(projects),
@@ -89,18 +93,20 @@ def _list_projects_json(*, quiet: bool) -> None:
     print(format_json_output("list-projects", payload))
 
 
-def _find_or_exit(project_slug: str) -> ProjectInfo:
+def _find_or_exit(project_slug: str, config_dir: Path | None) -> ProjectInfo:
     """Look up a project by slug; print error and exit if not found."""
-    project = find_project(project_slug)
+    project = find_project(project_slug, base_path=projects_dir_for(config_dir))
     if project is None:
         err_console.print(f"[red]Project not found: {project_slug}[/red]")
         raise typer.Exit(code=EXIT_USER_ERROR)
     return project
 
 
-def _list_sessions_table(project_slug: str, *, verbose: bool, quiet: bool) -> None:
+def _list_sessions_table(
+    project_slug: str, *, config_dir: Path | None, verbose: bool, quiet: bool,
+) -> None:
     """Display sessions for a project as a Rich table."""
-    project = _find_or_exit(project_slug)
+    project = _find_or_exit(project_slug, config_dir)
     if quiet:
         console.print(f"Project {project.display_name}: {len(project.sessions)} sessions")
         return
@@ -108,9 +114,11 @@ def _list_sessions_table(project_slug: str, *, verbose: bool, quiet: bool) -> No
     format_sessions_table(console, project.display_name, sessions, verbose=verbose)
 
 
-def _list_sessions_json(project_slug: str, *, quiet: bool) -> None:
+def _list_sessions_json(
+    project_slug: str, *, config_dir: Path | None, quiet: bool,
+) -> None:
     """Output sessions for a project as JSON."""
-    project = _find_or_exit(project_slug)
+    project = _find_or_exit(project_slug, config_dir)
     if quiet:
         payload: dict[str, object] = {
             "project": project.display_name,
@@ -135,6 +143,7 @@ def _list_sessions_json(project_slug: str, *, quiet: bool) -> None:
 
 @app.callback(invoke_without_command=True, epilog=LIST_EPILOG)
 def list_cmd(
+    ctx: typer.Context,
     project: Optional[str] = typer.Option(  # noqa: UP007, UP045
         None,
         "--project",
@@ -153,13 +162,18 @@ def list_cmd(
     """List available projects, or sessions within a project."""
     if verbose and quiet:
         raise typer.BadParameter("--verbose and --quiet are mutually exclusive")
+    config_dir = ctx.obj.claude_config_dir if ctx.obj else None
     if project:
         if format == "json":
-            _list_sessions_json(project, quiet=quiet)
+            _list_sessions_json(project, config_dir=config_dir, quiet=quiet)
         else:
-            _list_sessions_table(project, verbose=verbose, quiet=quiet)
+            _list_sessions_table(
+                project, config_dir=config_dir, verbose=verbose, quiet=quiet,
+            )
     else:
         if format == "json":
-            _list_projects_json(quiet=quiet)
+            _list_projects_json(config_dir=config_dir, quiet=quiet)
         else:
-            _list_projects_table(verbose=verbose, quiet=quiet)
+            _list_projects_table(
+                config_dir=config_dir, verbose=verbose, quiet=quiet,
+            )

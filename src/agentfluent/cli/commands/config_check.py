@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 import typer
@@ -13,6 +14,7 @@ from agentfluent.cli.formatters.json_output import format_json_output
 from agentfluent.cli.formatters.table import format_config_check_table
 from agentfluent.config import assess_agents
 from agentfluent.config.models import ConfigScore
+from agentfluent.core.paths import agents_dir_for
 
 CONFIG_CHECK_EPILOG = """\
 Examples:
@@ -60,6 +62,7 @@ def _print_json(scores: list[ConfigScore], *, quiet: bool) -> None:
 
 @app.callback(invoke_without_command=True, epilog=CONFIG_CHECK_EPILOG)
 def config_check(
+    ctx: typer.Context,
     scope: str = typer.Option(
         "all",
         "--scope",
@@ -89,7 +92,11 @@ def config_check(
         err_console.print("Valid scopes: user, project, all")
         raise typer.Exit(code=EXIT_USER_ERROR)
 
-    scores = assess_agents(scope, agent_filter=agent)
+    config_dir: Path | None = ctx.obj.claude_config_dir if ctx.obj else None
+
+    scores = assess_agents(
+        scope, agent_filter=agent, user_path=agents_dir_for(config_dir),
+    )
 
     if not scores:
         if agent:

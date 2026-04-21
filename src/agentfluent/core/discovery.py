@@ -6,7 +6,9 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
+from agentfluent.core.paths import DEFAULT_CLAUDE_CONFIG_DIR, PROJECTS_SUBDIR
+
+DEFAULT_PROJECTS_DIR = DEFAULT_CLAUDE_CONFIG_DIR / PROJECTS_SUBDIR
 
 
 @dataclass
