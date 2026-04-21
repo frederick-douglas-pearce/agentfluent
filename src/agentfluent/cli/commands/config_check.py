@@ -14,6 +14,7 @@ from agentfluent.cli.formatters.json_output import format_json_output
 from agentfluent.cli.formatters.table import format_config_check_table
 from agentfluent.config import assess_agents
 from agentfluent.config.models import ConfigScore
+from agentfluent.core.paths import agents_dir_for
 
 CONFIG_CHECK_EPILOG = """\
 Examples:
@@ -92,9 +93,10 @@ def config_check(
         raise typer.Exit(code=EXIT_USER_ERROR)
 
     config_dir: Path | None = ctx.obj.claude_config_dir if ctx.obj else None
-    user_path = (config_dir / "agents") if config_dir else None
 
-    scores = assess_agents(scope, agent_filter=agent, user_path=user_path)
+    scores = assess_agents(
+        scope, agent_filter=agent, user_path=agents_dir_for(config_dir),
+    )
 
     if not scores:
         if agent:

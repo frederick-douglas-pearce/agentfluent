@@ -20,11 +20,7 @@ from agentfluent.core.discovery import (
     find_project,
 )
 from agentfluent.core.parser import parse_session
-
-
-def _projects_dir(config_dir: Path | None) -> Path | None:
-    """Derive the projects subdirectory from the config root override."""
-    return (config_dir / "projects") if config_dir else None
+from agentfluent.core.paths import projects_dir_for
 
 LIST_EPILOG = """\
 Examples:
@@ -50,7 +46,7 @@ err_console = Console(stderr=True)
 def _discover_or_exit(config_dir: Path | None) -> list[ProjectInfo]:
     """Discover projects; print error and exit on failure."""
     try:
-        return discover_projects(base_path=_projects_dir(config_dir))
+        return discover_projects(base_path=projects_dir_for(config_dir))
     except FileNotFoundError as e:
         err_console.print(f"[red]{e}[/red]")
         raise typer.Exit(code=EXIT_NO_DATA) from None
@@ -99,7 +95,7 @@ def _list_projects_json(*, config_dir: Path | None, quiet: bool) -> None:
 
 def _find_or_exit(project_slug: str, config_dir: Path | None) -> ProjectInfo:
     """Look up a project by slug; print error and exit if not found."""
-    project = find_project(project_slug, base_path=_projects_dir(config_dir))
+    project = find_project(project_slug, base_path=projects_dir_for(config_dir))
     if project is None:
         err_console.print(f"[red]Project not found: {project_slug}[/red]")
         raise typer.Exit(code=EXIT_USER_ERROR)

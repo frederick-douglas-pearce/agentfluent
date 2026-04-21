@@ -14,6 +14,7 @@ from agentfluent.cli.formatters.helpers import format_cost, format_tokens
 from agentfluent.cli.formatters.json_output import format_json_output
 from agentfluent.cli.formatters.table import format_analysis_table
 from agentfluent.core.discovery import find_project
+from agentfluent.core.paths import projects_dir_for
 from agentfluent.diagnostics import run_diagnostics
 
 ANALYZE_EPILOG = """\
@@ -117,9 +118,8 @@ def analyze(
         raise typer.BadParameter("--verbose and --quiet are mutually exclusive")
 
     config_dir: Path | None = ctx.obj.claude_config_dir if ctx.obj else None
-    projects_dir = (config_dir / "projects") if config_dir else None
 
-    project_info = find_project(project, base_path=projects_dir)
+    project_info = find_project(project, base_path=projects_dir_for(config_dir))
     if project_info is None:
         err_console.print(f"[red]Project not found:[/red] {project}")
         err_console.print("Use [bold]agentfluent list[/bold] to see available projects.")
