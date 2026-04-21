@@ -1,0 +1,7 @@
+{"type": "user", "message": {"role": "user", "content": "List all test files"}, "timestamp": "2026-04-21T12:00:00.000Z"}
+not valid json at all
+{"type": "assistant", "message": {"id": "msg_001", "role": "assistant", "model": "claude-opus-4-6", "content": [{"type": "tool_use", "id": "toolu_01", "name": "Glob", "input": {"pattern": "tests/**/*.py"}}], "usage": {"input_tokens": 100, "output_tokens": 20, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}, "timestamp": "2026-04-21T12:00:01.000Z"}
+{this is not valid json either
+{"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "tests/unit/test_a.py\ntests/unit/test_b.py"}]}, "timestamp": "2026-04-21T12:00:02.000Z"}
+["this", "is", "a", "valid", "JSON", "array", "but", "not", "a", "dict"]
+{"type": "assistant", "message": {"id": "msg_002", "role": "assistant", "model": "claude-opus-4-6", "content": [{"type": "text", "text": "Found 2 test files."}], "usage": {"input_tokens": 130, "output_tokens": 10, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 100}}, "timestamp": "2026-04-21T12:00:03.000Z"}
