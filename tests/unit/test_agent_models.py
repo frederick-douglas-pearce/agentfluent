@@ -24,20 +24,24 @@ class TestIsBuiltinAgent:
         assert isinstance(BUILTIN_AGENT_TYPES, frozenset)
 
 
+def _full_invocation() -> AgentInvocation:
+    return AgentInvocation(
+        agent_type="pm",
+        is_builtin=False,
+        description="Review backlog",
+        prompt="Create issues",
+        tool_use_id="toolu_01ABC",
+        total_tokens=31621,
+        tool_uses=14,
+        duration_ms=122963,
+        agent_id="agent-abc123",
+        output_text="Created 5 issues.",
+    )
+
+
 class TestAgentInvocation:
     def test_with_full_metadata(self) -> None:
-        inv = AgentInvocation(
-            agent_type="pm",
-            is_builtin=False,
-            description="Review backlog",
-            prompt="Create issues",
-            tool_use_id="toolu_01ABC",
-            total_tokens=31621,
-            tool_uses=14,
-            duration_ms=122963,
-            agent_id="agent-abc123",
-            output_text="Created 5 issues.",
-        )
+        inv = _full_invocation()
         assert inv.tokens_per_tool_use == 31621 / 14
         assert inv.duration_per_tool_use == 122963 / 14
 
@@ -77,3 +81,8 @@ class TestAgentInvocation:
             tool_use_id="toolu_01",
         )
         assert inv.is_builtin is True
+
+    def test_json_round_trip(self) -> None:
+        inv = _full_invocation()
+        restored = AgentInvocation.model_validate_json(inv.model_dump_json())
+        assert restored == inv

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from pydantic import BaseModel, ConfigDict
 
 # Built-in agent types (case-insensitive matching).
 # Update this set as Anthropic adds new built-in agents.
@@ -23,13 +23,14 @@ def is_builtin_agent(agent_type: str) -> bool:
     return agent_type.lower() in BUILTIN_AGENT_TYPES
 
 
-@dataclass
-class AgentInvocation:
+class AgentInvocation(BaseModel):
     """A single agent invocation extracted from a session.
 
     Combines data from the Agent tool_use block (in the assistant message)
     with the corresponding tool_result (including metadata).
     """
+
+    model_config = ConfigDict(extra="ignore")
 
     agent_type: str
     """Agent type (e.g., 'pm', 'Explore', 'Plan')."""
