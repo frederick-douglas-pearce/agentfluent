@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict
 
+from agentfluent.traces.models import SubagentTrace
+
 # Built-in agent types (case-insensitive matching).
 # Update this set as Anthropic adds new built-in agents.
 BUILTIN_AGENT_TYPES: frozenset[str] = frozenset(
@@ -56,6 +58,13 @@ class AgentInvocation(BaseModel):
     # From tool_result content
     output_text: str = ""
     """The agent's final summary/output text."""
+
+    # Populated by the linker (traces.linker.link_traces) when a subagent trace
+    # file exists for this invocation's agent_id. `None` for invocations with
+    # no matching trace file (e.g., older sessions before trace capture, or
+    # when discovery failed). Downstream diagnostics read this as the evidence
+    # layer for trace-level signals.
+    trace: SubagentTrace | None = None
 
     @property
     def tokens_per_tool_use(self) -> float | None:
