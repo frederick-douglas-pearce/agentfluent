@@ -6,6 +6,7 @@ analysis pipeline. Reusable by the CLI, future webapp, and tests.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -30,6 +31,12 @@ from agentfluent.analytics.tools import (
 from agentfluent.core.parser import parse_session
 from agentfluent.core.session import SessionMessage
 from agentfluent.diagnostics.models import DiagnosticsResult
+from agentfluent.traces.discovery import discover_session_subagents
+from agentfluent.traces.linker import link_traces
+from agentfluent.traces.models import SubagentTrace
+from agentfluent.traces.parser import parse_subagent_trace
+
+logger = logging.getLogger(__name__)
 
 
 class SessionAnalysis(BaseModel):
@@ -80,6 +87,8 @@ def analyze_session(
         invocations = [
             inv for inv in invocations if inv.agent_type.lower() == agent_filter.lower()
         ]
+
+    invocations = _link_subagent_traces(invocations, path)
 
     agent_metrics = compute_agent_metrics(
         invocations, session_total_tokens=token_metrics.total_tokens
@@ -271,6 +280,48 @@ def _merge_agent_metrics(
         custom_invocations=custom_count,
         agent_token_percentage=agent_token_pct,
     )
+
+
+def _link_subagent_traces(
+    invocations: list[AgentInvocation], session_path: Path,
+) -> list[AgentInvocation]:
+    """Discover subagent trace files for ``session_path`` and attach them
+    to matching invocations.
+
+    Scoped per session: subagent files for a session ``<uuid>.jsonl`` live
+    under ``<uuid>/subagents/``. Lazy-loads only traces whose ``agent_id``
+    appears in ``invocations``; skipped files cost one dict lookup each.
+    Orphan traces (file exists, no matching invocation) are debug-logged.
+    """
+    # Discover subagent files for this session and build the lookup map.
+    session_dir = session_path.parent / session_path.stem
+    subagent_files = discover_session_subagents(session_dir)
+    path_map = {info.agent_id: info.path for info in subagent_files}
+
+    # Lazy loader: only parses traces for invocations that actually exist.
+    def loader(agent_id: str) -> SubagentTrace | None:
+        file_path = path_map.get(agent_id)
+        if file_path is None:
+            return None
+        try:
+            return parse_subagent_trace(file_path)
+        except (FileNotFoundError, ValueError):
+            logger.debug(
+                "Skipping malformed or missing subagent trace: %s", file_path,
+            )
+            return None
+
+    invocations = link_traces(invocations, loader)
+
+    # Orphans: trace files with no matching invocation.
+    linked_ids = {inv.agent_id for inv in invocations if inv.trace is not None}
+    for orphan_id in path_map.keys() - linked_ids:
+        logger.debug(
+            "Orphan subagent trace (no matching invocation): agent_id=%s",
+            orphan_id,
+        )
+
+    return invocations
 
 
 def _count_type(messages: list[SessionMessage], msg_type: str) -> int:
