@@ -10,6 +10,7 @@ from agentfluent.config.scanner import scan_agents
 from agentfluent.diagnostics.correlator import correlate
 from agentfluent.diagnostics.models import DiagnosticsResult
 from agentfluent.diagnostics.signals import extract_signals
+from agentfluent.diagnostics.trace_signals import extract_trace_signals
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,14 @@ def run_diagnostics(
         DiagnosticsResult with signals and recommendations.
     """
     signals = extract_signals(invocations)
+
+    # Fold in trace-level signals for any invocation with an attached
+    # subagent trace. Passing agent_type explicitly avoids depending on
+    # the linker having populated trace.agent_type.
+    for inv in invocations:
+        if inv.trace is None:
+            continue
+        signals.extend(extract_trace_signals(inv.trace, agent_type=inv.agent_type))
 
     # Build config lookup for correlation
     configs: dict[str, AgentConfig] | None = None
