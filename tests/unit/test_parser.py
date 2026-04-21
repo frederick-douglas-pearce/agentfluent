@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from agentfluent.core.parser import parse_session
+from agentfluent.core.parser import iter_raw_messages, parse_session
 from agentfluent.core.session import SessionMessage
 
 
@@ -302,3 +302,85 @@ class TestTimestamps:
         messages = parse_session(agent_session_path)
         for msg in messages:
             assert msg.timestamp is not None, f"{msg.type} message missing timestamp"
+
+
+class TestIterRawMessages:
+    """Direct tests for the shared iter_raw_messages iterator.
+
+    The subagent trace parser (#103) consumes this iterator, so its
+    contract is part of the public surface.
+    """
+
+    def test_missing_file_yields_nothing(self, tmp_path: Path) -> None:
+        assert list(iter_raw_messages(tmp_path / "nope.jsonl")) == []
+
+    def test_empty_file_yields_nothing(self, tmp_path: Path) -> None:
+        path = tmp_path / "empty.jsonl"
+        path.write_text("")
+        assert list(iter_raw_messages(path)) == []
+
+    def test_skips_empty_lines(self, tmp_path: Path) -> None:
+        path = tmp_path / "s.jsonl"
+        path.write_text('\n{"type": "user"}\n\n{"type": "assistant"}\n\n')
+        types = [d["type"] for _, d in iter_raw_messages(path)]
+        assert types == ["user", "assistant"]
+
+    def test_skips_malformed_json(self, tmp_path: Path) -> None:
+        path = tmp_path / "bad.jsonl"
+        path.write_text('{"type": "user"}\nnot json\n{"type": "assistant"}\n')
+        types = [d["type"] for _, d in iter_raw_messages(path)]
+        assert types == ["user", "assistant"]
+
+    def test_skips_non_object_json(self, tmp_path: Path) -> None:
+        path = tmp_path / "arr.jsonl"
+        path.write_text('{"type": "user"}\n["array"]\n42\n{"type": "assistant"}\n')
+        types = [d["type"] for _, d in iter_raw_messages(path)]
+        assert types == ["user", "assistant"]
+
+    def test_filters_skip_types(self, tmp_path: Path) -> None:
+        path = tmp_path / "skip.jsonl"
+        lines = [
+            {"type": "user"},
+            {"type": "file-history-snapshot"},
+            {"type": "progress"},
+            {"type": "hook_progress"},
+            {"type": "bash_progress"},
+            {"type": "system"},
+            {"type": "create"},
+            {"type": "assistant"},
+        ]
+        path.write_text("\n".join(json.dumps(ln) for ln in lines) + "\n")
+        types = [d["type"] for _, d in iter_raw_messages(path)]
+        assert types == ["user", "assistant"]
+
+    def test_skips_missing_type(self, tmp_path: Path) -> None:
+        path = tmp_path / "notype.jsonl"
+        path.write_text('{"foo": "bar"}\n{"type": ""}\n{"type": "user"}\n')
+        types = [d["type"] for _, d in iter_raw_messages(path)]
+        assert types == ["user"]
+
+    def test_yields_raw_dicts_with_all_fields(self, tmp_path: Path) -> None:
+        path = tmp_path / "raw.jsonl"
+        entry = {
+            "type": "user",
+            "timestamp": "2026-04-20T10:00:00Z",
+            "message": {"role": "user", "content": "hello"},
+            "toolUseResult": {"status": "success", "custom_field": 42},
+        }
+        path.write_text(json.dumps(entry) + "\n")
+        [(line_num, result)] = list(iter_raw_messages(path))
+        assert result == entry
+        assert line_num == 1
+
+    def test_line_num_reflects_raw_line_position(self, tmp_path: Path) -> None:
+        """line_num is the raw file position; skipped lines still advance it."""
+        path = tmp_path / "mixed.jsonl"
+        path.write_text(
+            "\n"                            # line 1: empty, skipped
+            "not json\n"                    # line 2: malformed, skipped
+            '{"type": "progress"}\n'        # line 3: SKIP_TYPES, skipped
+            '{"type": "user"}\n'            # line 4: yielded
+            '{"type": "assistant"}\n',      # line 5: yielded
+        )
+        pairs = list(iter_raw_messages(path))
+        assert [line_num for line_num, _ in pairs] == [4, 5]
