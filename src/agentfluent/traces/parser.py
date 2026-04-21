@@ -13,10 +13,10 @@ on a missing path — the trace-discovery step guarantees path existence at
 call time, so a missing file is a programmer error rather than a user
 condition.
 
-Two fields on ``SubagentTrace`` are intentionally left unpopulated here and
-filled in by later work: retry-sequence detection populates
-``retry_sequences`` / ``total_retries``, and the trace-to-parent linker
-overwrites ``agent_type`` with the parent ``AgentInvocation`` value.
+The ``agent_type`` field is intentionally left at ``UNKNOWN_AGENT_TYPE`` here
+and filled in by the trace-to-parent linker from the parent
+``AgentInvocation`` value. Retry-sequence detection runs during parse and
+populates ``retry_sequences`` / ``total_retries`` before returning.
 """
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ from agentfluent.traces.models import (
     SubagentToolCall,
     SubagentTrace,
 )
+from agentfluent.traces.retry import detect_retry_sequences
 
 
 def _truncate_input(input_dict: dict[str, Any] | None) -> str:
@@ -174,15 +175,16 @@ def parse_subagent_trace(path: Path) -> SubagentTrace:
 
     messages = parse_session(path)
     tool_calls = _pair_tool_calls(messages)
+    retry_sequences = detect_retry_sequences(tool_calls)
 
     return SubagentTrace(
         agent_id=agent_id,
         agent_type=UNKNOWN_AGENT_TYPE,
         delegation_prompt=_extract_delegation_prompt(messages),
         tool_calls=tool_calls,
-        retry_sequences=[],
+        retry_sequences=retry_sequences,
         total_errors=sum(1 for tc in tool_calls if tc.is_error),
-        total_retries=0,
+        total_retries=sum(seq.attempts - 1 for seq in retry_sequences),
         usage=_sum_usage(messages),
         duration_ms=_compute_duration_ms(messages),
         source_file=path.resolve(),
