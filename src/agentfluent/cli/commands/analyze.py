@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 import typer
@@ -71,6 +72,7 @@ def _print_json(result: AnalysisResult, *, quiet: bool, project_name: str) -> No
 
 @app.callback(invoke_without_command=True, epilog=ANALYZE_EPILOG)
 def analyze(
+    ctx: typer.Context,
     project: str = typer.Option(
         ...,
         "--project",
@@ -114,7 +116,10 @@ def analyze(
     if verbose and quiet:
         raise typer.BadParameter("--verbose and --quiet are mutually exclusive")
 
-    project_info = find_project(project)
+    config_dir: Path | None = ctx.obj.claude_config_dir if ctx.obj else None
+    projects_dir = (config_dir / "projects") if config_dir else None
+
+    project_info = find_project(project, base_path=projects_dir)
     if project_info is None:
         err_console.print(f"[red]Project not found:[/red] {project}")
         err_console.print("Use [bold]agentfluent list[/bold] to see available projects.")

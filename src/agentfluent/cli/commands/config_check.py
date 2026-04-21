@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 import typer
@@ -60,6 +61,7 @@ def _print_json(scores: list[ConfigScore], *, quiet: bool) -> None:
 
 @app.callback(invoke_without_command=True, epilog=CONFIG_CHECK_EPILOG)
 def config_check(
+    ctx: typer.Context,
     scope: str = typer.Option(
         "all",
         "--scope",
@@ -89,7 +91,10 @@ def config_check(
         err_console.print("Valid scopes: user, project, all")
         raise typer.Exit(code=EXIT_USER_ERROR)
 
-    scores = assess_agents(scope, agent_filter=agent)
+    config_dir: Path | None = ctx.obj.claude_config_dir if ctx.obj else None
+    user_path = (config_dir / "agents") if config_dir else None
+
+    scores = assess_agents(scope, agent_filter=agent, user_path=user_path)
 
     if not scores:
         if agent:

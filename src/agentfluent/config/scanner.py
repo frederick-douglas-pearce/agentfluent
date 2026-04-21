@@ -13,10 +13,11 @@ from typing import Any
 import yaml
 
 from agentfluent.config.models import AgentConfig, Scope
+from agentfluent.core.paths import DEFAULT_CLAUDE_CONFIG_DIR
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_USER_AGENTS_DIR = Path.home() / ".claude" / "agents"
+DEFAULT_USER_AGENTS_DIR = DEFAULT_CLAUDE_CONFIG_DIR / "agents"
 
 
 def _parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
