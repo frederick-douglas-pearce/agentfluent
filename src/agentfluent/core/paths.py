@@ -16,6 +16,9 @@ CLAUDE_CONFIG_DIR_ENV_VAR = "CLAUDE_CONFIG_DIR"
 
 PROJECTS_SUBDIR = "projects"
 AGENTS_SUBDIR = "agents"
+SUBAGENTS_SUBDIR = "subagents"
+"""The per-session directory that holds subagent trace JSONL files:
+``<project>/<session-uuid>/subagents/agent-<agentId>.jsonl``."""
 
 
 def projects_dir_for(config_root: Path | None) -> Path | None:
