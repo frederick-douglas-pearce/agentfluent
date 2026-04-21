@@ -54,6 +54,7 @@ class ContentBlock(BaseModel):
     input: dict[str, Any] | None = None
     # tool_result fields (only present when type == "tool_result")
     tool_use_id: str | None = None
+    is_error: bool | None = None
 
 
 class ToolResultMetadata(BaseModel):
