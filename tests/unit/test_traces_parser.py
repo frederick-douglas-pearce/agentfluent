@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -17,13 +17,7 @@ from agentfluent.traces.models import (
 )
 from agentfluent.traces.parser import parse_subagent_trace
 
-
-def _write(tmp_path: Path, filename: str, lines: list[dict[str, Any]]) -> Path:
-    path = tmp_path / filename
-    with path.open("w") as f:
-        for line in lines:
-            f.write(json.dumps(line) + "\n")
-    return path
+WriteJSONL = Callable[[str, list[dict[str, Any]]], Path]
 
 
 def _user(
@@ -85,9 +79,8 @@ def _tool_result(
 
 
 class TestParseSubagentTrace:
-    def test_happy_path(self, tmp_path: Path) -> None:
-        path = _write(
-            tmp_path,
+    def test_happy_path(self, write_jsonl: WriteJSONL) -> None:
+        path = write_jsonl(
             "agent-uuid-1.jsonl",
             [
                 _user("Review the backlog"),
@@ -112,45 +105,43 @@ class TestParseSubagentTrace:
         assert trace.retry_sequences == []
         assert trace.usage.input_tokens == 10
 
-    def test_agent_id_from_filename(self, tmp_path: Path) -> None:
-        path = _write(tmp_path, "agent-abc-123-def.jsonl", [_user("hi")])
+    def test_agent_id_from_filename(self, write_jsonl: WriteJSONL) -> None:
+        path = write_jsonl("agent-abc-123-def.jsonl", [_user("hi")])
         assert parse_subagent_trace(path).agent_id == "abc-123-def"
 
-    def test_agent_type_is_unknown(self, tmp_path: Path) -> None:
-        path = _write(tmp_path, "agent-x.jsonl", [_user("hi")])
+    def test_agent_type_is_unknown(self, write_jsonl: WriteJSONL) -> None:
+        path = write_jsonl("agent-x.jsonl", [_user("hi")])
         assert parse_subagent_trace(path).agent_type == UNKNOWN_AGENT_TYPE
 
-    def test_source_file_resolved(self, tmp_path: Path) -> None:
-        path = _write(tmp_path, "agent-x.jsonl", [_user("hi")])
+    def test_source_file_resolved(self, write_jsonl: WriteJSONL) -> None:
+        path = write_jsonl("agent-x.jsonl", [_user("hi")])
         trace = parse_subagent_trace(path)
         assert trace.source_file == path.resolve()
         assert trace.source_file.is_absolute()
 
 
 class TestDelegationPrompt:
-    def test_string_content(self, tmp_path: Path) -> None:
-        path = _write(tmp_path, "agent-x.jsonl", [_user("the prompt")])
+    def test_string_content(self, write_jsonl: WriteJSONL) -> None:
+        path = write_jsonl("agent-x.jsonl", [_user("the prompt")])
         assert parse_subagent_trace(path).delegation_prompt == "the prompt"
 
-    def test_list_of_blocks_content(self, tmp_path: Path) -> None:
-        path = _write(
-            tmp_path,
+    def test_list_of_blocks_content(self, write_jsonl: WriteJSONL) -> None:
+        path = write_jsonl(
             "agent-x.jsonl",
             [_user([{"type": "text", "text": "line1"}, {"type": "text", "text": "line2"}])],
         )
         assert parse_subagent_trace(path).delegation_prompt == "line1\nline2"
 
-    def test_no_user_messages(self, tmp_path: Path) -> None:
-        path = _write(
-            tmp_path, "agent-x.jsonl", [_assistant([{"type": "text", "text": "hi"}])],
+    def test_no_user_messages(self, write_jsonl: WriteJSONL) -> None:
+        path = write_jsonl(
+            "agent-x.jsonl", [_assistant([{"type": "text", "text": "hi"}])],
         )
         assert parse_subagent_trace(path).delegation_prompt == ""
 
 
 class TestToolCallPairing:
-    def test_single_tool_use(self, tmp_path: Path) -> None:
-        path = _write(
-            tmp_path,
+    def test_single_tool_use(self, write_jsonl: WriteJSONL) -> None:
+        path = write_jsonl(
             "agent-x.jsonl",
             [
                 _user("go"),
@@ -162,9 +153,8 @@ class TestToolCallPairing:
         assert len(trace.tool_calls) == 1
         assert trace.tool_calls[0].tool_name == "Bash"
 
-    def test_multiple_tool_use_in_one_message(self, tmp_path: Path) -> None:
-        path = _write(
-            tmp_path,
+    def test_multiple_tool_use_in_one_message(self, write_jsonl: WriteJSONL) -> None:
+        path = write_jsonl(
             "agent-x.jsonl",
             [
                 _user("go"),
@@ -183,9 +173,8 @@ class TestToolCallPairing:
         trace = parse_subagent_trace(path)
         assert [tc.tool_name for tc in trace.tool_calls] == ["Read", "Grep", "Bash"]
 
-    def test_orphan_tool_use(self, tmp_path: Path) -> None:
-        path = _write(
-            tmp_path,
+    def test_orphan_tool_use(self, write_jsonl: WriteJSONL) -> None:
+        path = write_jsonl(
             "agent-x.jsonl",
             [_user("go"), _assistant([_tool_use("t1", "Read")])],
         )
@@ -195,9 +184,8 @@ class TestToolCallPairing:
         assert trace.tool_calls[0].result_summary == ""
         assert trace.tool_calls[0].is_error is False
 
-    def test_orphan_tool_result_skipped(self, tmp_path: Path) -> None:
-        path = _write(
-            tmp_path,
+    def test_orphan_tool_result_skipped(self, write_jsonl: WriteJSONL) -> None:
+        path = write_jsonl(
             "agent-x.jsonl",
             [
                 _user("go"),
@@ -206,10 +194,9 @@ class TestToolCallPairing:
         )
         assert parse_subagent_trace(path).tool_calls == []
 
-    def test_pairs_by_id_not_position(self, tmp_path: Path) -> None:
+    def test_pairs_by_id_not_position(self, write_jsonl: WriteJSONL) -> None:
         # tool_results come in reverse order of tool_uses
-        path = _write(
-            tmp_path,
+        path = write_jsonl(
             "agent-x.jsonl",
             [
                 _user("go"),
@@ -224,10 +211,9 @@ class TestToolCallPairing:
 
 
 class TestInputResultSummaries:
-    def test_input_truncated(self, tmp_path: Path) -> None:
+    def test_input_truncated(self, write_jsonl: WriteJSONL) -> None:
         long_value = "x" * (INPUT_SUMMARY_MAX_CHARS * 2)
-        path = _write(
-            tmp_path,
+        path = write_jsonl(
             "agent-x.jsonl",
             [
                 _user("go"),
@@ -238,10 +224,9 @@ class TestInputResultSummaries:
         trace = parse_subagent_trace(path)
         assert len(trace.tool_calls[0].input_summary) == INPUT_SUMMARY_MAX_CHARS
 
-    def test_result_truncated(self, tmp_path: Path) -> None:
+    def test_result_truncated(self, write_jsonl: WriteJSONL) -> None:
         long_result = "y" * (RESULT_SUMMARY_MAX_CHARS * 2)
-        path = _write(
-            tmp_path,
+        path = write_jsonl(
             "agent-x.jsonl",
             [
                 _user("go"),
@@ -252,13 +237,12 @@ class TestInputResultSummaries:
         trace = parse_subagent_trace(path)
         assert len(trace.tool_calls[0].result_summary) == RESULT_SUMMARY_MAX_CHARS
 
-    def test_non_serializable_input_does_not_crash(self, tmp_path: Path) -> None:
+    def test_non_serializable_input_does_not_crash(self, write_jsonl: WriteJSONL) -> None:
         # Input dict from JSONL only contains JSON-native types, so a
         # non-serializable value can't actually round-trip through the
         # file; simulate by injecting on-disk-valid JSON that _truncate_input
         # will pass through json.dumps cleanly.
-        path = _write(
-            tmp_path,
+        path = write_jsonl(
             "agent-x.jsonl",
             [
                 _user("go"),
@@ -271,9 +255,8 @@ class TestInputResultSummaries:
         trace = parse_subagent_trace(path)
         assert '"nested"' in trace.tool_calls[0].input_summary
 
-    def test_unicode_preserved(self, tmp_path: Path) -> None:
-        path = _write(
-            tmp_path,
+    def test_unicode_preserved(self, write_jsonl: WriteJSONL) -> None:
+        path = write_jsonl(
             "agent-x.jsonl",
             [
                 _user("go"),
@@ -287,9 +270,8 @@ class TestInputResultSummaries:
 
 
 class TestIsErrorDetection:
-    def test_explicit_true(self, tmp_path: Path) -> None:
-        path = _write(
-            tmp_path,
+    def test_explicit_true(self, write_jsonl: WriteJSONL) -> None:
+        path = write_jsonl(
             "agent-x.jsonl",
             [
                 _user("go"),
@@ -299,10 +281,9 @@ class TestIsErrorDetection:
         )
         assert parse_subagent_trace(path).tool_calls[0].is_error is True
 
-    def test_explicit_false_wins_over_keywords(self, tmp_path: Path) -> None:
+    def test_explicit_false_wins_over_keywords(self, write_jsonl: WriteJSONL) -> None:
         # Result text contains "failed" but is_error=False is authoritative.
-        path = _write(
-            tmp_path,
+        path = write_jsonl(
             "agent-x.jsonl",
             [
                 _user("go"),
@@ -312,9 +293,8 @@ class TestIsErrorDetection:
         )
         assert parse_subagent_trace(path).tool_calls[0].is_error is False
 
-    def test_keyword_fallback_fires(self, tmp_path: Path) -> None:
-        path = _write(
-            tmp_path,
+    def test_keyword_fallback_fires(self, write_jsonl: WriteJSONL) -> None:
+        path = write_jsonl(
             "agent-x.jsonl",
             [
                 _user("go"),
@@ -324,9 +304,8 @@ class TestIsErrorDetection:
         )
         assert parse_subagent_trace(path).tool_calls[0].is_error is True
 
-    def test_keyword_fallback_stays_false(self, tmp_path: Path) -> None:
-        path = _write(
-            tmp_path,
+    def test_keyword_fallback_stays_false(self, write_jsonl: WriteJSONL) -> None:
+        path = write_jsonl(
             "agent-x.jsonl",
             [
                 _user("go"),
@@ -338,9 +317,8 @@ class TestIsErrorDetection:
 
 
 class TestUsageAggregation:
-    def test_sums_across_assistants(self, tmp_path: Path) -> None:
-        path = _write(
-            tmp_path,
+    def test_sums_across_assistants(self, write_jsonl: WriteJSONL) -> None:
+        path = write_jsonl(
             "agent-x.jsonl",
             [
                 _user("go"),
@@ -362,19 +340,15 @@ class TestUsageAggregation:
         assert trace.usage.output_tokens == 8
         assert trace.usage.cache_read_input_tokens == 100
 
-    def test_user_messages_skipped(self, tmp_path: Path) -> None:
-        # Only user messages → zero usage (users have no usage field).
-        path = _write(
-            tmp_path, "agent-x.jsonl", [_user("one"), _user("two")],
-        )
+    def test_user_messages_skipped(self, write_jsonl: WriteJSONL) -> None:
+        path = write_jsonl("agent-x.jsonl", [_user("one"), _user("two")])
         trace = parse_subagent_trace(path)
         assert trace.usage.total_tokens == 0
 
 
 class TestDurationMs:
-    def test_span_calculated(self, tmp_path: Path) -> None:
-        path = _write(
-            tmp_path,
+    def test_span_calculated(self, write_jsonl: WriteJSONL) -> None:
+        path = write_jsonl(
             "agent-x.jsonl",
             [
                 _user("go", timestamp="2026-04-21T10:00:00.000Z"),
@@ -387,13 +361,12 @@ class TestDurationMs:
         # 5.5 seconds = 5500 ms
         assert parse_subagent_trace(path).duration_ms == 5500
 
-    def test_single_message_returns_none(self, tmp_path: Path) -> None:
-        path = _write(tmp_path, "agent-x.jsonl", [_user("only one")])
+    def test_single_message_returns_none(self, write_jsonl: WriteJSONL) -> None:
+        path = write_jsonl("agent-x.jsonl", [_user("only one")])
         assert parse_subagent_trace(path).duration_ms is None
 
-    def test_no_timestamps_returns_none(self, tmp_path: Path) -> None:
-        path = _write(
-            tmp_path,
+    def test_no_timestamps_returns_none(self, write_jsonl: WriteJSONL) -> None:
+        path = write_jsonl(
             "agent-x.jsonl",
             [
                 _user("go", timestamp=None),
@@ -423,13 +396,12 @@ class TestEdgeCases:
         with pytest.raises(ValueError, match="Malformed subagent filename"):
             parse_subagent_trace(path)
 
-    def test_streaming_snapshots_deduplicated(self, tmp_path: Path) -> None:
+    def test_streaming_snapshots_deduplicated(self, write_jsonl: WriteJSONL) -> None:
         # Two assistant snapshots sharing message_id; dedup keeps the
         # one with higher output_tokens. Both carry the same tool_use_id,
         # so the pairing emits exactly one tool_call.
         now = datetime.now(UTC)
-        path = _write(
-            tmp_path,
+        path = write_jsonl(
             "agent-x.jsonl",
             [
                 _user("go"),
@@ -454,10 +426,9 @@ class TestEdgeCases:
         assert trace.usage.output_tokens == 8
 
 
-class TestTotalErrors:
-    def test_counts_is_error(self, tmp_path: Path) -> None:
-        path = _write(
-            tmp_path,
+class TestAggregateCounts:
+    def test_total_errors_counts_is_error(self, write_jsonl: WriteJSONL) -> None:
+        path = write_jsonl(
             "agent-x.jsonl",
             [
                 _user("go"),
@@ -476,10 +447,9 @@ class TestTotalErrors:
         trace = parse_subagent_trace(path)
         assert trace.total_errors == 2
 
-    def test_total_retries_is_zero_for_now(self, tmp_path: Path) -> None:
-        """Retry detection is deferred to #104; parser emits zero."""
-        path = _write(
-            tmp_path,
+    def test_total_retries_is_zero_for_now(self, write_jsonl: WriteJSONL) -> None:
+        """Retry detection is deferred to a later story; parser emits zero."""
+        path = write_jsonl(
             "agent-x.jsonl",
             [
                 _user("go"),

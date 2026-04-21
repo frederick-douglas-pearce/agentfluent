@@ -27,8 +27,10 @@ ERROR_PATTERNS: list[tuple[str, Severity]] = [
     ("timed out", Severity.WARNING),
 ]
 
-# Compiled pattern for efficient matching
-_ERROR_RE = re.compile(
+# Compiled pattern for efficient matching. Public so other modules
+# (e.g., traces.parser) reuse the same regex instead of recompiling from
+# ERROR_PATTERNS.
+ERROR_REGEX = re.compile(
     "|".join(re.escape(kw) for kw, _ in ERROR_PATTERNS),
     re.IGNORECASE,
 )
@@ -47,7 +49,7 @@ def _extract_error_signals(invocations: list[AgentInvocation]) -> list[Diagnosti
         if not inv.output_text:
             continue
 
-        for match in _ERROR_RE.finditer(inv.output_text):
+        for match in ERROR_REGEX.finditer(inv.output_text):
             keyword = match.group(0).lower()
             severity = _KEYWORD_SEVERITY.get(keyword, Severity.WARNING)
 

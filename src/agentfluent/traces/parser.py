@@ -7,22 +7,27 @@ module's job is the subagent-specific shape on top of that: pairing
 ``tool_use``/``tool_result`` blocks, truncating summaries, detecting errors,
 aggregating ``Usage``, and deriving the trace's scalar fields.
 
-Downstream deferrals: retry sequence detection populates
-``SubagentTrace.retry_sequences`` in #104 (parser leaves it empty here);
-the linker in #105 overwrites ``agent_type`` from the parent
-``AgentInvocation.agent_type`` (parser leaves it as ``UNKNOWN_AGENT_TYPE``).
+Unlike the sibling ``parse_session`` (which warn-logs and returns an empty
+list for missing paths), ``parse_subagent_trace`` raises ``FileNotFoundError``
+on a missing path — the trace-discovery step guarantees path existence at
+call time, so a missing file is a programmer error rather than a user
+condition.
+
+Two fields on ``SubagentTrace`` are intentionally left unpopulated here and
+filled in by later work: retry-sequence detection populates
+``retry_sequences`` / ``total_retries``, and the trace-to-parent linker
+overwrites ``agent_type`` with the parent ``AgentInvocation`` value.
 """
 
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any
 
 from agentfluent.core.parser import parse_session
 from agentfluent.core.session import ContentBlock, SessionMessage, Usage
-from agentfluent.diagnostics.signals import ERROR_PATTERNS
+from agentfluent.diagnostics.signals import ERROR_REGEX
 from agentfluent.traces.discovery import AGENT_FILENAME_PATTERN
 from agentfluent.traces.models import (
     INPUT_SUMMARY_MAX_CHARS,
@@ -30,11 +35,6 @@ from agentfluent.traces.models import (
     UNKNOWN_AGENT_TYPE,
     SubagentToolCall,
     SubagentTrace,
-)
-
-_SUBAGENT_ERROR_RE = re.compile(
-    "|".join(re.escape(kw) for kw, _ in ERROR_PATTERNS),
-    re.IGNORECASE,
 )
 
 
@@ -70,7 +70,7 @@ def _detect_is_error(block: ContentBlock) -> bool:
         return block.is_error
     if not block.text:
         return False
-    return bool(_SUBAGENT_ERROR_RE.search(block.text))
+    return bool(ERROR_REGEX.search(block.text))
 
 
 def _sum_usage(messages: list[SessionMessage]) -> Usage:
@@ -157,7 +157,7 @@ def parse_subagent_trace(path: Path) -> SubagentTrace:
     subagent-specific fields on top.
 
     Raises:
-        FileNotFoundError: ``path`` does not exist. Discovery (#129)
+        FileNotFoundError: ``path`` does not exist. The discovery step
             guarantees existence at call time; this guard catches direct-
             caller programmer errors rather than a user-facing case.
         ValueError: ``path.name`` does not match ``agent-<agentId>.jsonl``.
