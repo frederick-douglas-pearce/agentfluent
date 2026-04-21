@@ -115,6 +115,7 @@ def _normalize_content(raw_content: str | list[dict[str, Any]] | None) -> list[C
                         type="tool_result",
                         tool_use_id=item.get("tool_use_id"),
                         text=result_text,
+                        is_error=item.get("is_error"),
                     )
                 )
             else:

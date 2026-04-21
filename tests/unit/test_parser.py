@@ -287,6 +287,46 @@ class TestToolUseResultOnUserMessage:
         messages = parse_session(path)
         assert messages[0].metadata is None
 
+    def test_is_error_flows_from_normalize_content(self, tmp_path: Path) -> None:
+        """The `is_error` field on a tool_result JSONL block propagates to ContentBlock."""
+        path = self._write(
+            tmp_path,
+            [
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu_err",
+                                "content": "permission denied",
+                                "is_error": True,
+                            },
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu_ok",
+                                "content": "42",
+                                "is_error": False,
+                            },
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu_missing",
+                                "content": "no flag",
+                            },
+                        ],
+                    },
+                    "timestamp": "2026-04-14T08:00:00.000Z",
+                },
+            ],
+        )
+        messages = parse_session(path)
+        blocks = messages[0].content_blocks
+        by_id = {b.tool_use_id: b for b in blocks}
+        assert by_id["toolu_err"].is_error is True
+        assert by_id["toolu_ok"].is_error is False
+        assert by_id["toolu_missing"].is_error is None
+
 
 class TestTimestamps:
     def test_timestamps_parsed(self, basic_session_path: Path) -> None:

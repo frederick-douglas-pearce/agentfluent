@@ -1,10 +1,31 @@
 """Shared test fixtures for AgentFluent."""
 
+import json
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture()
+def write_jsonl(tmp_path: Path) -> Callable[[str, list[dict[str, Any]]], Path]:
+    """Return a helper that writes a list of dicts as a JSONL file under tmp_path.
+
+    Used by parser tests that want to construct session/subagent trace
+    content inline rather than maintain on-disk fixtures.
+    """
+
+    def _write(filename: str, lines: list[dict[str, Any]]) -> Path:
+        path = tmp_path / filename
+        with path.open("w") as f:
+            for line in lines:
+                f.write(json.dumps(line) + "\n")
+        return path
+
+    return _write
 
 
 @pytest.fixture()

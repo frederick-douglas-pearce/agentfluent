@@ -55,6 +55,20 @@ class TestContentBlock:
         assert block.type == "tool_use"
         assert block.name == "Agent"
 
+    def test_tool_result_is_error_field(self) -> None:
+        default = ContentBlock(type="tool_result", tool_use_id="toolu_01")
+        assert default.is_error is None
+
+        flagged = ContentBlock(
+            type="tool_result", tool_use_id="toolu_01", is_error=True,
+        )
+        assert flagged.is_error is True
+
+        ok = ContentBlock(
+            type="tool_result", tool_use_id="toolu_01", is_error=False,
+        )
+        assert ok.is_error is False
+
 
 class TestToolResultMetadata:
     def test_from_json_with_alias(self) -> None:
