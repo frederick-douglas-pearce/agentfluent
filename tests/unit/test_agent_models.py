@@ -77,3 +77,19 @@ class TestAgentInvocation:
             tool_use_id="toolu_01",
         )
         assert inv.is_builtin is True
+
+    def test_json_round_trip(self) -> None:
+        inv = AgentInvocation(
+            agent_type="pm",
+            is_builtin=False,
+            description="Review backlog",
+            prompt="Create issues",
+            tool_use_id="toolu_01ABC",
+            total_tokens=31621,
+            tool_uses=14,
+            duration_ms=122963,
+            agent_id="agent-abc123",
+            output_text="Created 5 issues.",
+        )
+        restored = AgentInvocation.model_validate_json(inv.model_dump_json())
+        assert restored == inv
