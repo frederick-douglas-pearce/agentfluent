@@ -25,13 +25,18 @@ from agentfluent.core.session import (
 logger = logging.getLogger(__name__)
 
 
-def iter_raw_messages(path: Path) -> Iterator[dict[str, Any]]:
-    """Iterate a JSONL file, yielding decoded dicts for analytical messages.
+def iter_raw_messages(path: Path) -> Iterator[tuple[int, dict[str, Any]]]:
+    """Iterate a JSONL file, yielding (line_num, data) for analytical messages.
 
     Encapsulates the line-reading, JSON-decoding, and SKIP_TYPES filtering
-    that every session-file parser needs. Callers dispatch on ``type`` and
-    build their own typed objects. Used by both the main-session parser
+    that every session-file parser needs. Callers dispatch on ``data["type"]``
+    and build their own typed objects. Used by both the main-session parser
     (``parse_session``) and the subagent trace parser.
+
+    ``line_num`` is 1-indexed and refers to the raw line in the file (not
+    the post-filter position), so downstream error logs can pinpoint the
+    originating line even though some lines were skipped. Callers that
+    don't need it can unpack as ``for _, data in ...``.
 
     Silently skips: missing files, empty files, empty lines, malformed
     JSON (warn-logged), non-object JSON (warn-logged), and any message
@@ -64,7 +69,7 @@ def iter_raw_messages(path: Path) -> Iterator[dict[str, Any]]:
             if not msg_type or msg_type in SKIP_TYPES:
                 continue
 
-            yield data
+            yield line_num, data
 
 
 def _normalize_content(raw_content: str | list[dict[str, Any]] | None) -> list[ContentBlock]:
@@ -250,7 +255,7 @@ def parse_session(path: Path, *, deduplicate: bool = True) -> list[SessionMessag
     """
     messages: list[SessionMessage] = []
 
-    for data in iter_raw_messages(path):
+    for line_num, data in iter_raw_messages(path):
         msg_type = data["type"]
         try:
             if msg_type == "user":
@@ -258,10 +263,14 @@ def parse_session(path: Path, *, deduplicate: bool = True) -> list[SessionMessag
             elif msg_type == "assistant":
                 messages.append(_parse_assistant_message(data))
             else:
-                logger.debug("Unknown message type '%s' at %s", msg_type, path.name)
+                logger.debug(
+                    "Unknown message type '%s' at %s:%d",
+                    msg_type, path.name, line_num,
+                )
         except Exception:
             logger.warning(
-                "Failed to parse message at %s", path.name, exc_info=True
+                "Failed to parse message at %s:%d",
+                path.name, line_num, exc_info=True,
             )
             continue
 

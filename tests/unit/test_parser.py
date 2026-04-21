@@ -322,19 +322,19 @@ class TestIterRawMessages:
     def test_skips_empty_lines(self, tmp_path: Path) -> None:
         path = tmp_path / "s.jsonl"
         path.write_text('\n{"type": "user"}\n\n{"type": "assistant"}\n\n')
-        types = [d["type"] for d in iter_raw_messages(path)]
+        types = [d["type"] for _, d in iter_raw_messages(path)]
         assert types == ["user", "assistant"]
 
     def test_skips_malformed_json(self, tmp_path: Path) -> None:
         path = tmp_path / "bad.jsonl"
         path.write_text('{"type": "user"}\nnot json\n{"type": "assistant"}\n')
-        types = [d["type"] for d in iter_raw_messages(path)]
+        types = [d["type"] for _, d in iter_raw_messages(path)]
         assert types == ["user", "assistant"]
 
     def test_skips_non_object_json(self, tmp_path: Path) -> None:
         path = tmp_path / "arr.jsonl"
         path.write_text('{"type": "user"}\n["array"]\n42\n{"type": "assistant"}\n')
-        types = [d["type"] for d in iter_raw_messages(path)]
+        types = [d["type"] for _, d in iter_raw_messages(path)]
         assert types == ["user", "assistant"]
 
     def test_filters_skip_types(self, tmp_path: Path) -> None:
@@ -350,13 +350,13 @@ class TestIterRawMessages:
             {"type": "assistant"},
         ]
         path.write_text("\n".join(json.dumps(ln) for ln in lines) + "\n")
-        types = [d["type"] for d in iter_raw_messages(path)]
+        types = [d["type"] for _, d in iter_raw_messages(path)]
         assert types == ["user", "assistant"]
 
     def test_skips_missing_type(self, tmp_path: Path) -> None:
         path = tmp_path / "notype.jsonl"
         path.write_text('{"foo": "bar"}\n{"type": ""}\n{"type": "user"}\n')
-        types = [d["type"] for d in iter_raw_messages(path)]
+        types = [d["type"] for _, d in iter_raw_messages(path)]
         assert types == ["user"]
 
     def test_yields_raw_dicts_with_all_fields(self, tmp_path: Path) -> None:
@@ -368,5 +368,19 @@ class TestIterRawMessages:
             "toolUseResult": {"status": "success", "custom_field": 42},
         }
         path.write_text(json.dumps(entry) + "\n")
-        [result] = list(iter_raw_messages(path))
+        [(line_num, result)] = list(iter_raw_messages(path))
         assert result == entry
+        assert line_num == 1
+
+    def test_line_num_reflects_raw_line_position(self, tmp_path: Path) -> None:
+        """line_num is the raw file position; skipped lines still advance it."""
+        path = tmp_path / "mixed.jsonl"
+        path.write_text(
+            "\n"                            # line 1: empty, skipped
+            "not json\n"                    # line 2: malformed, skipped
+            '{"type": "progress"}\n'        # line 3: SKIP_TYPES, skipped
+            '{"type": "user"}\n'            # line 4: yielded
+            '{"type": "assistant"}\n',      # line 5: yielded
+        )
+        pairs = list(iter_raw_messages(path))
+        assert [line_num for line_num, _ in pairs] == [4, 5]
