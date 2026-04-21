@@ -76,7 +76,7 @@ def _evidence_from_call(call: SubagentToolCall, index: int) -> dict[str, object]
     """Build one evidence entry for `DiagnosticSignal.detail.tool_calls`.
 
     `index` is the position in the owning `SubagentTrace.tool_calls`
-    list so #108's CLI can cross-reference with `RetrySequence.tool_call_indices`.
+    list so the CLI can cross-reference with `RetrySequence.tool_call_indices`.
     """
     return {
         "index": index,
@@ -87,9 +87,18 @@ def _evidence_from_call(call: SubagentToolCall, index: int) -> dict[str, object]
     }
 
 
-def _extract_permission_failures(trace: SubagentTrace) -> list[DiagnosticSignal]:
-    """Emit one PERMISSION_FAILURE signal per tool call whose result
-    contains a permission-denied keyword."""
+def _cap_evidence(
+    calls: list[SubagentToolCall], indices: list[int],
+) -> list[dict[str, object]]:
+    """Build an evidence list from parallel call/index lists, capped at _EVIDENCE_CAP."""
+    pairs = zip(calls[:_EVIDENCE_CAP], indices[:_EVIDENCE_CAP], strict=False)
+    return [_evidence_from_call(c, idx) for c, idx in pairs]
+
+
+def _extract_permission_failures(
+    trace: SubagentTrace, agent_type: str,
+) -> list[DiagnosticSignal]:
+    """Emit one PERMISSION_FAILURE signal per unique tool with a denied result."""
     signals: list[DiagnosticSignal] = []
     matches: list[tuple[int, SubagentToolCall, str]] = []
 
@@ -102,26 +111,26 @@ def _extract_permission_failures(trace: SubagentTrace) -> list[DiagnosticSignal]
     if not matches:
         return signals
 
-    # Emit one signal per keyword-matching call. Evidence is capped at
-    # _EVIDENCE_CAP across all matches in the signal so a single denied
-    # call produces a single-entry evidence list; many denials produce
-    # up to 5. We emit one signal per unique tool (keeps recommendations
-    # actionable — a user-facing "this tool was denied" is scoped to the
-    # tool, not the specific call).
+    # One signal per unique tool. Scoping to the tool (not the specific
+    # call) keeps recommendations actionable: "this tool was denied
+    # everywhere" maps to a single config change.
     by_tool: dict[str, list[tuple[int, SubagentToolCall, str]]] = {}
     for entry in matches:
         by_tool.setdefault(entry[1].tool_name, []).append(entry)
 
     for tool_name, entries in by_tool.items():
         keyword = entries[0][2]
-        evidence = [_evidence_from_call(c, i) for i, c, _ in entries[:_EVIDENCE_CAP]]
+        capped = entries[:_EVIDENCE_CAP]
+        evidence = _cap_evidence(
+            [c for _, c, _ in capped], [i for i, _, _ in capped],
+        )
         signals.append(
             DiagnosticSignal(
                 signal_type=SignalType.PERMISSION_FAILURE,
                 severity=Severity.CRITICAL,
-                agent_type=trace.agent_type,
+                agent_type=agent_type,
                 message=(
-                    f"Subagent '{trace.agent_type}' was denied access to "
+                    f"Subagent '{agent_type}' was denied access to "
                     f"tool '{tool_name}' ({keyword!r})."
                 ),
                 detail={
@@ -136,7 +145,7 @@ def _extract_permission_failures(trace: SubagentTrace) -> list[DiagnosticSignal]
 
 
 def _extract_retry_and_stuck(
-    trace: SubagentTrace,
+    trace: SubagentTrace, agent_type: str,
 ) -> tuple[list[DiagnosticSignal], set[int]]:
     """Emit STUCK_PATTERN or RETRY_LOOP — never both — per `RetrySequence`.
 
@@ -161,35 +170,32 @@ def _extract_retry_and_stuck(
         if not calls:
             continue
 
-        first_input = calls[0].input_summary
-        all_identical = all(c.input_summary == first_input for c in calls)
-
-        if seq.attempts >= _STUCK_MIN_ATTEMPTS and all_identical:
-            signals.append(_build_stuck_signal(trace, seq, calls))
+        # STUCK requires attempts >= 4 AND exact input identity; only
+        # compute identity when the attempt threshold qualifies.
+        is_stuck = seq.attempts >= _STUCK_MIN_ATTEMPTS and all(
+            c.input_summary == calls[0].input_summary for c in calls[1:]
+        )
+        if is_stuck:
+            signals.append(_build_stuck_signal(agent_type, seq, calls))
         else:
-            signals.append(_build_retry_signal(trace, seq, calls))
+            signals.append(_build_retry_signal(agent_type, seq, calls))
         covered.update(seq.tool_call_indices)
 
     return signals, covered
 
 
 def _build_stuck_signal(
-    trace: SubagentTrace,
+    agent_type: str,
     seq: RetrySequence,
     calls: list[SubagentToolCall],
 ) -> DiagnosticSignal:
-    pairs = zip(
-        calls[:_EVIDENCE_CAP],
-        seq.tool_call_indices[:_EVIDENCE_CAP],
-        strict=False,
-    )
-    evidence = [_evidence_from_call(c, idx) for c, idx in pairs]
+    evidence = _cap_evidence(calls, seq.tool_call_indices)
     return DiagnosticSignal(
         signal_type=SignalType.STUCK_PATTERN,
         severity=Severity.CRITICAL,
-        agent_type=trace.agent_type,
+        agent_type=agent_type,
         message=(
-            f"Subagent '{trace.agent_type}' repeated tool "
+            f"Subagent '{agent_type}' repeated tool "
             f"'{seq.tool_name}' with identical input {seq.attempts} "
             "times without progress."
         ),
@@ -203,22 +209,17 @@ def _build_stuck_signal(
 
 
 def _build_retry_signal(
-    trace: SubagentTrace,
+    agent_type: str,
     seq: RetrySequence,
     calls: list[SubagentToolCall],
 ) -> DiagnosticSignal:
-    pairs = zip(
-        calls[:_EVIDENCE_CAP],
-        seq.tool_call_indices[:_EVIDENCE_CAP],
-        strict=False,
-    )
-    evidence = [_evidence_from_call(c, idx) for c, idx in pairs]
+    evidence = _cap_evidence(calls, seq.tool_call_indices)
     return DiagnosticSignal(
         signal_type=SignalType.RETRY_LOOP,
         severity=Severity.WARNING,
-        agent_type=trace.agent_type,
+        agent_type=agent_type,
         message=(
-            f"Subagent '{trace.agent_type}' retried tool "
+            f"Subagent '{agent_type}' retried tool "
             f"'{seq.tool_name}' {seq.attempts} times."
         ),
         detail={
@@ -232,7 +233,7 @@ def _build_retry_signal(
 
 
 def _extract_error_sequences(
-    trace: SubagentTrace, covered: set[int],
+    trace: SubagentTrace, covered: set[int], agent_type: str,
 ) -> list[DiagnosticSignal]:
     """Emit TOOL_ERROR_SEQUENCE for runs of consecutive `is_error=True`
     tool calls that are not already covered by STUCK/RETRY signals.
@@ -265,19 +266,14 @@ def _extract_error_sequences(
                 if len(run_indices) >= _ERROR_SEQUENCE_CRITICAL_MIN
                 else Severity.WARNING
             )
-            pairs = zip(
-                run_calls[:_EVIDENCE_CAP],
-                run_indices[:_EVIDENCE_CAP],
-                strict=False,
-            )
-            evidence = [_evidence_from_call(c, idx) for c, idx in pairs]
+            evidence = _cap_evidence(run_calls, run_indices)
             signals.append(
                 DiagnosticSignal(
                     signal_type=SignalType.TOOL_ERROR_SEQUENCE,
                     severity=severity,
-                    agent_type=trace.agent_type,
+                    agent_type=agent_type,
                     message=(
-                        f"Subagent '{trace.agent_type}' had "
+                        f"Subagent '{agent_type}' had "
                         f"{len(run_indices)} consecutive tool errors."
                     ),
                     detail={
@@ -293,20 +289,32 @@ def _extract_error_sequences(
     return signals
 
 
-def extract_trace_signals(trace: SubagentTrace | None) -> list[DiagnosticSignal]:
+def extract_trace_signals(
+    trace: SubagentTrace | None,
+    *,
+    agent_type: str | None = None,
+) -> list[DiagnosticSignal]:
     """Extract all trace-level behavior signals from a parsed subagent trace.
 
     Handles `None` (unlinked invocation) and empty traces by returning
     an empty list. Order of signals: PERMISSION_FAILURE first
     (remediation-specific), then STUCK/RETRY (indexed), then
     TOOL_ERROR_SEQUENCE (filtered by STUCK/RETRY coverage).
+
+    `agent_type` overrides `trace.agent_type` on emitted signals when
+    provided. The pipeline passes the parent `AgentInvocation.agent_type`
+    to avoid depending on the linker having populated the trace
+    (programmatically-constructed or unlinked traces may still hold
+    `UNKNOWN_AGENT_TYPE`).
     """
     if trace is None or not trace.tool_calls:
         return []
 
+    effective_agent_type = agent_type if agent_type else trace.agent_type
+
     signals: list[DiagnosticSignal] = []
-    signals.extend(_extract_permission_failures(trace))
-    retry_stuck, covered = _extract_retry_and_stuck(trace)
+    signals.extend(_extract_permission_failures(trace, effective_agent_type))
+    retry_stuck, covered = _extract_retry_and_stuck(trace, effective_agent_type)
     signals.extend(retry_stuck)
-    signals.extend(_extract_error_sequences(trace, covered))
+    signals.extend(_extract_error_sequences(trace, covered, effective_agent_type))
     return signals
