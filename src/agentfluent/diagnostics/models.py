@@ -15,11 +15,23 @@ from agentfluent.config.models import Severity
 
 
 class SignalType(StrEnum):
-    """Types of behavior signals detected in agent invocations."""
+    """Types of behavior signals detected in agent invocations.
+
+    Metadata-level signals (extracted from `AgentInvocation` fields):
+    - `ERROR_PATTERN`, `TOKEN_OUTLIER`, `DURATION_OUTLIER`
+
+    Trace-level signals (extracted from `SubagentTrace` evidence):
+    - `TOOL_ERROR_SEQUENCE`, `RETRY_LOOP`, `PERMISSION_FAILURE`,
+      `STUCK_PATTERN`
+    """
 
     ERROR_PATTERN = "error_pattern"
     TOKEN_OUTLIER = "token_outlier"
     DURATION_OUTLIER = "duration_outlier"
+    TOOL_ERROR_SEQUENCE = "tool_error_sequence"
+    RETRY_LOOP = "retry_loop"
+    PERMISSION_FAILURE = "permission_failure"
+    STUCK_PATTERN = "stuck_pattern"
 
 
 class DiagnosticSignal(BaseModel):
