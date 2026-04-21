@@ -34,6 +34,16 @@ class TestAgentFilenamePattern:
         assert AGENT_FILENAME_PATTERN.match("agent.jsonl") is None
         assert AGENT_FILENAME_PATTERN.match("agent-abc.txt") is None
 
+    def test_rejects_empty_agent_id(self) -> None:
+        # `.+` in the pattern requires at least one character between
+        # "agent-" and ".jsonl", so an empty UUID is rejected.
+        assert AGENT_FILENAME_PATTERN.match("agent-.jsonl") is None
+
+    def test_rejects_leading_dot(self) -> None:
+        # The `^agent-` anchor keeps dotfiles out even if the rest
+        # of the filename would otherwise match.
+        assert AGENT_FILENAME_PATTERN.match(".agent-abc.jsonl") is None
+
 
 class TestDiscoverSessionSubagents:
     def test_missing_subagents_dir_returns_empty(self, tmp_path: Path) -> None:
@@ -70,6 +80,16 @@ class TestDiscoverSessionSubagents:
     def test_skips_nested_directories(self, tmp_path: Path) -> None:
         session_dir = tmp_path / "s1"
         (session_dir / "subagents" / "agent-sub.jsonl").mkdir(parents=True)
+        (session_dir / "subagents" / "agent-real.jsonl").write_text("{}\n")
+
+        files = discover_session_subagents(session_dir)
+        assert [f.agent_id for f in files] == ["real"]
+
+    def test_skips_dotfiles_in_subagents_dir(self, tmp_path: Path) -> None:
+        session_dir = tmp_path / "s1"
+        (session_dir / "subagents").mkdir(parents=True)
+        (session_dir / "subagents" / ".agent-hidden.jsonl").write_text("{}\n")
+        (session_dir / "subagents" / ".DS_Store").write_text("")
         (session_dir / "subagents" / "agent-real.jsonl").write_text("{}\n")
 
         files = discover_session_subagents(session_dir)

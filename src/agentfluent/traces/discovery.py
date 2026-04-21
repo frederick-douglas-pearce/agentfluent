@@ -3,7 +3,8 @@
 Subagent traces live at
 ``<project_path>/<session-uuid>/subagents/agent-<agentId>.jsonl``. This
 module enumerates those files and extracts ``agentId`` from the
-filename; parsing is #103's job.
+filename. Parsing of trace contents is deferred to the trace parser
+module; this layer only walks directories and names files.
 
 The ``session_id`` keys returned by ``discover_subagent_files`` match the
 directory name, which equals the session JSONL filename's stem — the same
