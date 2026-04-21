@@ -20,6 +20,12 @@ from agentfluent.traces.models import (
 )
 
 
+def _tool_call(name: str = "Read") -> SubagentToolCall:
+    return SubagentToolCall(
+        tool_name=name, input_summary="", result_summary="",
+    )
+
+
 class TestConstants:
     def test_truncation_constants_exposed(self) -> None:
         assert INPUT_SUMMARY_MAX_CHARS == 200
@@ -202,11 +208,7 @@ class TestSubagentTrace:
         trace = SubagentTrace(
             agent_id="u",
             delegation_prompt="p",
-            tool_calls=[
-                SubagentToolCall(tool_name="Bash", input_summary="", result_summary=""),
-                SubagentToolCall(tool_name="Read", input_summary="", result_summary=""),
-                SubagentToolCall(tool_name="Bash", input_summary="", result_summary=""),
-            ],
+            tool_calls=[_tool_call("Bash"), _tool_call("Read"), _tool_call("Bash")],
         )
         assert trace.unique_tool_names == {"Bash", "Read"}
 
@@ -217,9 +219,7 @@ class TestSubagentTrace:
         trace = SubagentTrace(
             agent_id="u",
             delegation_prompt="p",
-            tool_calls=[
-                SubagentToolCall(tool_name="Read", input_summary="", result_summary=""),
-            ],
+            tool_calls=[_tool_call()],
         )
         # Identity check: the cached_property returns the same object on re-access.
         assert trace.unique_tool_names is trace.unique_tool_names
@@ -228,9 +228,7 @@ class TestSubagentTrace:
         trace = SubagentTrace(
             agent_id="u",
             delegation_prompt="p",
-            tool_calls=[
-                SubagentToolCall(tool_name="Read", input_summary="", result_summary=""),
-            ],
+            tool_calls=[_tool_call()],
         )
         # Access once to populate the cache.
         _ = trace.unique_tool_names
