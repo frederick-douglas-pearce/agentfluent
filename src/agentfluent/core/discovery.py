@@ -6,7 +6,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from agentfluent.core.paths import DEFAULT_CLAUDE_CONFIG_DIR, PROJECTS_SUBDIR
+from agentfluent.core.paths import (
+    DEFAULT_CLAUDE_CONFIG_DIR,
+    PROJECTS_SUBDIR,
+    SUBAGENTS_SUBDIR,
+)
 
 DEFAULT_PROJECTS_DIR = DEFAULT_CLAUDE_CONFIG_DIR / PROJECTS_SUBDIR
 
@@ -61,7 +65,7 @@ def _count_subagent_files(session_path: Path) -> int:
     where <session-uuid> is a directory named the same as the session file (minus .jsonl).
     """
     session_dir = session_path.parent / session_path.stem
-    subagents_dir = session_dir / "subagents"
+    subagents_dir = session_dir / SUBAGENTS_SUBDIR
     if not subagents_dir.is_dir():
         return 0
     return sum(1 for f in subagents_dir.iterdir() if f.suffix == ".jsonl")
