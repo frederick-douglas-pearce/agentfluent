@@ -48,9 +48,10 @@ def _build_retry_sequence(
     whose ``is_error`` is true; both are ``None`` when no call in the run
     errored (rare but legal).
     """
+    indices = list(range(start, end))
     first_error_message: str | None = None
     last_error_message: str | None = None
-    for idx in range(start, end):
+    for idx in indices:
         if tool_calls[idx].is_error:
             if first_error_message is None:
                 first_error_message = tool_calls[idx].result_summary
@@ -62,7 +63,7 @@ def _build_retry_sequence(
         first_error_message=first_error_message,
         last_error_message=last_error_message,
         eventual_success=not tool_calls[end - 1].is_error,
-        tool_call_indices=list(range(start, end)),
+        tool_call_indices=indices,
     )
 
 

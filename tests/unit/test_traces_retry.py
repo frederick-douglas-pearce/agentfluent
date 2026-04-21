@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
@@ -111,7 +112,6 @@ class TestDetectRetrySequences:
         # yield 2*16/(20+20) = 0.80. `>=` makes this qualify.
         a = "aaaaaaaaaaaaaaaaaaaa"              # 20 a's
         b = "aaaaaaaaaaaaaaaabbbb"              # 16 a's then 4 b's
-        from difflib import SequenceMatcher
         ratio = SequenceMatcher(None, a, b).ratio()
         assert ratio == SIMILARITY_THRESHOLD, f"expected {SIMILARITY_THRESHOLD}, got {ratio}"
 
