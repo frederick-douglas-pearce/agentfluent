@@ -59,11 +59,9 @@ class AgentInvocation(BaseModel):
     output_text: str = ""
     """The agent's final summary/output text."""
 
-    # Populated by the linker (traces.linker.link_traces) when a subagent trace
-    # file exists for this invocation's agent_id. `None` for invocations with
-    # no matching trace file (e.g., older sessions before trace capture, or
-    # when discovery failed). Downstream diagnostics read this as the evidence
-    # layer for trace-level signals.
+    # Attached by trace linking when a matching subagent file exists; `None`
+    # otherwise (e.g., older sessions predating trace capture). Serves as the
+    # evidence layer for trace-level diagnostics.
     trace: SubagentTrace | None = None
 
     @property

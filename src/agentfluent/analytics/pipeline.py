@@ -293,10 +293,12 @@ def _link_subagent_traces(
     appears in ``invocations``; skipped files cost one dict lookup each.
     Orphan traces (file exists, no matching invocation) are debug-logged.
     """
+    # Discover subagent files for this session and build the lookup map.
     session_dir = session_path.parent / session_path.stem
     subagent_files = discover_session_subagents(session_dir)
     path_map = {info.agent_id: info.path for info in subagent_files}
 
+    # Lazy loader: only parses traces for invocations that actually exist.
     def loader(agent_id: str) -> SubagentTrace | None:
         file_path = path_map.get(agent_id)
         if file_path is None:
@@ -311,6 +313,7 @@ def _link_subagent_traces(
 
     invocations = link_traces(invocations, loader)
 
+    # Orphans: trace files with no matching invocation.
     linked_ids = {inv.agent_id for inv in invocations if inv.trace is not None}
     for orphan_id in path_map.keys() - linked_ids:
         logger.debug(

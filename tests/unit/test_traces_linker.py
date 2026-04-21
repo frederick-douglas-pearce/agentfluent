@@ -172,100 +172,100 @@ class TestLinkTraces:
         assert trace.agent_type == "custom-agent"
 
 
-class TestPipelineIntegration:
-    """End-to-end wiring: analyze_session discovers and links subagent traces."""
+def _build_project(
+    tmp_path: Path,
+    session_uuid: str,
+    agent_id: str,
+    *,
+    include_trace_file: bool,
+) -> Path:
+    """Create a minimal project layout with optional subagent trace."""
+    session_path = tmp_path / f"{session_uuid}.jsonl"
+    session_path.write_text(
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "id": "msg_1",
+                    "role": "assistant",
+                    "model": "claude-opus-4-6",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "Agent",
+                            "input": {
+                                "subagent_type": "plan",
+                                "description": "Plan work",
+                                "prompt": "Plan the work",
+                            },
+                        },
+                    ],
+                },
+                "timestamp": "2026-04-21T10:00:00.000Z",
+            },
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": "plan complete",
+                        },
+                    ],
+                },
+                "toolUseResult": {
+                    "agentId": agent_id,
+                    "agentType": "plan",
+                    "totalTokens": 100,
+                },
+                "timestamp": "2026-04-21T10:00:01.000Z",
+            },
+        )
+        + "\n",
+    )
 
-    def _build_project(
-        self,
-        tmp_path: Path,
-        session_uuid: str,
-        agent_id: str,
-        *,
-        include_trace_file: bool,
-    ) -> Path:
-        """Create a minimal project layout with optional subagent trace."""
-        session_path = tmp_path / f"{session_uuid}.jsonl"
-        session_path.write_text(
+    if include_trace_file:
+        subagents_dir = tmp_path / session_uuid / "subagents"
+        subagents_dir.mkdir(parents=True)
+        (subagents_dir / f"agent-{agent_id}.jsonl").write_text(
             json.dumps(
                 {
-                    "type": "assistant",
-                    "message": {
-                        "id": "msg_1",
-                        "role": "assistant",
-                        "model": "claude-opus-4-6",
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "id": "toolu_1",
-                                "name": "Agent",
-                                "input": {
-                                    "subagent_type": "plan",
-                                    "description": "Plan work",
-                                    "prompt": "Plan the work",
-                                },
-                            },
-                        ],
-                    },
-                    "timestamp": "2026-04-21T10:00:00.000Z",
+                    "type": "user",
+                    "message": {"role": "user", "content": "Plan the work"},
+                    "timestamp": "2026-04-21T10:00:00.100Z",
                 },
             )
             + "\n"
             + json.dumps(
                 {
-                    "type": "user",
+                    "type": "assistant",
                     "message": {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": "toolu_1",
-                                "content": "plan complete",
-                            },
-                        ],
+                        "id": "msg_inner",
+                        "role": "assistant",
+                        "model": "claude-opus-4-6",
+                        "content": [{"type": "text", "text": "done"}],
+                        "usage": {"input_tokens": 5, "output_tokens": 2},
                     },
-                    "toolUseResult": {
-                        "agentId": agent_id,
-                        "agentType": "plan",
-                        "totalTokens": 100,
-                    },
-                    "timestamp": "2026-04-21T10:00:01.000Z",
+                    "timestamp": "2026-04-21T10:00:00.500Z",
                 },
             )
             + "\n",
         )
 
-        if include_trace_file:
-            subagents_dir = tmp_path / session_uuid / "subagents"
-            subagents_dir.mkdir(parents=True)
-            (subagents_dir / f"agent-{agent_id}.jsonl").write_text(
-                json.dumps(
-                    {
-                        "type": "user",
-                        "message": {"role": "user", "content": "Plan the work"},
-                        "timestamp": "2026-04-21T10:00:00.100Z",
-                    },
-                )
-                + "\n"
-                + json.dumps(
-                    {
-                        "type": "assistant",
-                        "message": {
-                            "id": "msg_inner",
-                            "role": "assistant",
-                            "model": "claude-opus-4-6",
-                            "content": [{"type": "text", "text": "done"}],
-                            "usage": {"input_tokens": 5, "output_tokens": 2},
-                        },
-                        "timestamp": "2026-04-21T10:00:00.500Z",
-                    },
-                )
-                + "\n",
-            )
+    return session_path
 
-        return session_path
+
+class TestPipelineIntegration:
+    """End-to-end wiring: analyze_session discovers and links subagent traces."""
 
     def test_matching_trace_gets_linked(self, tmp_path: Path) -> None:
-        session_path = self._build_project(
+        session_path = _build_project(
             tmp_path, "uuid-1", "aid-1", include_trace_file=True,
         )
 
@@ -280,7 +280,7 @@ class TestPipelineIntegration:
         assert inv.trace.agent_id == "aid-1"
 
     def test_no_matching_trace_leaves_trace_none(self, tmp_path: Path) -> None:
-        session_path = self._build_project(
+        session_path = _build_project(
             tmp_path, "uuid-1", "aid-1", include_trace_file=False,
         )
 
@@ -291,7 +291,7 @@ class TestPipelineIntegration:
 
     def test_orphan_trace_file_is_ignored(self, tmp_path: Path) -> None:
         # Subagent file exists, but its agent_id doesn't match any invocation.
-        session_path = self._build_project(
+        session_path = _build_project(
             tmp_path, "uuid-1", "aid-1", include_trace_file=True,
         )
         # Drop the real trace file, add an orphan instead.
@@ -307,7 +307,7 @@ class TestPipelineIntegration:
     ) -> None:
         """Read the trace back via parse_subagent_trace and confirm the
         overwrite sticks on the object analyze_session returns."""
-        session_path = self._build_project(
+        session_path = _build_project(
             tmp_path, "uuid-1", "aid-1", include_trace_file=True,
         )
         trace_path = tmp_path / "uuid-1" / "subagents" / "agent-aid-1.jsonl"

@@ -5,9 +5,8 @@ because the JSONL content alone isn't a reliable source. The parent session's
 ``Agent`` tool_use block carries the authoritative ``agent_type`` (as
 ``subagent_type`` in the tool input, extracted into ``AgentInvocation.agent_type``).
 The linker matches traces to invocations by ``agent_id`` and overwrites the
-trace's ``agent_type`` with the parent's value. Downstream diagnostics
-(``#107``, ``#110``, ``#111``) read ``invocation.trace.agent_type`` as
-authoritative post-linking.
+trace's ``agent_type`` with the parent's value. Trace-level diagnostics read
+``invocation.trace.agent_type`` as authoritative post-linking.
 
 The loader is a ``Callable`` rather than a pre-parsed dict so that trace
 files are only parsed on demand. With 350+ subagent files per project —
