@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.1.0...v0.2.0) (2026-04-20)
+
+
+### Features
+
+* label cost output as API rate with subscription-plan footnote ([#77](https://github.com/frederick-douglas-pearce/agentfluent/issues/77)) ([8d91e3a](https://github.com/frederick-douglas-pearce/agentfluent/commit/8d91e3ae620731a3c0b4b9de6fa086146fe5fd9f)), closes [#76](https://github.com/frederick-douglas-pearce/agentfluent/issues/76)
+* **security:** add secrets-protection hooks for Claude Code sessions ([#72](https://github.com/frederick-douglas-pearce/agentfluent/issues/72)) ([#73](https://github.com/frederick-douglas-pearce/agentfluent/issues/73)) ([c870ad4](https://github.com/frederick-douglas-pearce/agentfluent/commit/c870ad4bba336a3275feafaf44964a09ab79179e))
+
+
+### Bug Fixes
+
+* add opus-4-7 pricing, filter &lt;synthetic&gt;, quiet unknown-model warning ([#78](https://github.com/frederick-douglas-pearce/agentfluent/issues/78)) ([7ff9f79](https://github.com/frederick-douglas-pearce/agentfluent/commit/7ff9f7936c1b2f0e4df9b74dc295382fa530271f))
+* parse agent metadata from user.toolUseResult shape ([#84](https://github.com/frederick-douglas-pearce/agentfluent/issues/84)) ([#85](https://github.com/frederick-douglas-pearce/agentfluent/issues/85)) ([67f2780](https://github.com/frederick-douglas-pearce/agentfluent/commit/67f2780721b115867595a67dc631afe880c39a52))
+
 ## 0.1.0 (2026-04-17)
 
 
