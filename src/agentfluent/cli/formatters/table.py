@@ -21,6 +21,7 @@ from agentfluent.cli.formatters.helpers import (
     format_size,
     format_tokens,
     score_color,
+    truncate,
 )
 
 API_RATE_FOOTNOTE = (
@@ -352,15 +353,11 @@ def _render_trace_signal_evidence(console: Console, sig: DiagnosticSignal) -> No
         ev_table.add_row(
             str(entry.get("index", "")),
             str(entry.get("tool_name", "")),
-            _truncate(str(entry.get("input_summary", "")), 60),
+            truncate(str(entry.get("input_summary", "")), 60),
             "✗" if entry.get("is_error") else "",
-            _truncate(str(entry.get("result_summary", "")), 60),
+            truncate(str(entry.get("result_summary", "")), 60),
         )
     console.print(ev_table)
-
-
-def _truncate(text: str, max_len: int) -> str:
-    return text if len(text) <= max_len else text[: max_len - 1] + "…"
 
 
 def _format_diagnostics_summary(console: Console, diag: DiagnosticsResult) -> None:
