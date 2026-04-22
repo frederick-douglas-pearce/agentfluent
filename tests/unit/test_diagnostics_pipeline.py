@@ -8,9 +8,17 @@ and v0.2 output-shape regression for trace-less sessions.
 import pytest
 
 from agentfluent.agents.models import AgentInvocation
+from agentfluent.config.models import Severity
 from agentfluent.diagnostics import TRACE_SIGNAL_TYPES
-from agentfluent.diagnostics.models import SignalType
-from agentfluent.diagnostics.pipeline import run_diagnostics
+from agentfluent.diagnostics.models import (
+    DelegationSuggestion,
+    DiagnosticSignal,
+    SignalType,
+)
+from agentfluent.diagnostics.pipeline import (
+    _enrich_dedup_with_mismatches,
+    run_diagnostics,
+)
 from agentfluent.traces.models import (
     RetrySequence,
     SubagentToolCall,
@@ -322,3 +330,117 @@ class TestModelRoutingWiring:
         result = run_diagnostics(invs)
         assert any(s.signal_type == SignalType.MODEL_MISMATCH for s in result.signals)
         assert any(r.target == "model" for r in result.recommendations)
+
+
+class TestCrossReferenceEnrichment:
+    """When a DelegationSuggestion's matched_agent has a live
+    MODEL_MISMATCH signal, its dedup_note is enriched with the
+    mismatch summary so the user sees one consolidated breadcrumb.
+    The standalone MODEL_MISMATCH signal + recommendation are
+    unaffected — they still surface independently in their own
+    section (different user-facing context)."""
+
+    def _mismatch_signal(
+        self,
+        agent_type: str = "pm",
+        mismatch_type: str = "overspec",
+        savings: float | None = 12.50,
+    ) -> DiagnosticSignal:
+        return DiagnosticSignal(
+            signal_type=SignalType.MODEL_MISMATCH,
+            severity=Severity.WARNING,
+            agent_type=agent_type,
+            message=f"{mismatch_type}'d model on {agent_type}",
+            detail={
+                "mismatch_type": mismatch_type,
+                "current_model": "claude-opus-4-7",
+                "recommended_model": "claude-haiku-4-5",
+                "complexity_tier": "simple",
+                "invocation_count": 8,
+                "estimated_savings_usd": savings,
+            },
+        )
+
+    def _suggestion(
+        self,
+        matched_agent: str = "pm",
+        dedup_note: str = "suppressed — already covered by 'pm' (similarity 0.85)",
+    ) -> DelegationSuggestion:
+        return DelegationSuggestion(
+            name="py-tests",
+            description="Handles delegations related to: pytest, tests, run.",
+            model="claude-sonnet-4-6",
+            tools=["Read", "Grep"],
+            prompt_template="You run pytest tests.",
+            confidence="medium",
+            cluster_size=5,
+            cohesion_score=0.7,
+            top_terms=["pytest"],
+            dedup_note=dedup_note,
+            matched_agent=matched_agent,
+        )
+
+    def test_dedup_match_plus_mismatch_enriches_dedup_note(self) -> None:
+        suggestions = [self._suggestion(matched_agent="pm")]
+        signals = [self._mismatch_signal(agent_type="pm")]
+        _enrich_dedup_with_mismatches(suggestions, signals)
+        note = suggestions[0].dedup_note
+        # Original dedup prefix preserved.
+        assert "suppressed" in note
+        assert "pm" in note
+        # Mismatch phrase appended.
+        assert "overspec" in note
+        assert "claude-haiku-4-5" in note
+        assert "12.50" in note  # savings phrase present
+
+    def test_mismatch_without_savings_omits_savings_clause(self) -> None:
+        suggestions = [self._suggestion(matched_agent="pm")]
+        signals = [self._mismatch_signal(agent_type="pm", savings=None)]
+        _enrich_dedup_with_mismatches(suggestions, signals)
+        note = suggestions[0].dedup_note
+        assert "claude-haiku-4-5" in note
+        assert "savings" not in note.lower()
+
+    def test_dedup_match_without_mismatch_leaves_note_unchanged(self) -> None:
+        suggestions = [self._suggestion(matched_agent="pm")]
+        original = suggestions[0].dedup_note
+        # Signal targets a different agent — no cross-reference.
+        signals = [self._mismatch_signal(agent_type="architect")]
+        _enrich_dedup_with_mismatches(suggestions, signals)
+        assert suggestions[0].dedup_note == original
+
+    def test_mismatch_without_matching_dedup_leaves_suggestion_untouched(
+        self,
+    ) -> None:
+        # Suggestion wasn't deduped — matched_agent is "".
+        sug = self._suggestion(matched_agent="", dedup_note="")
+        signals = [self._mismatch_signal(agent_type="pm")]
+        _enrich_dedup_with_mismatches([sug], signals)
+        assert sug.dedup_note == ""
+
+    def test_empty_inputs_are_safe(self) -> None:
+        _enrich_dedup_with_mismatches([], [])
+        _enrich_dedup_with_mismatches([self._suggestion()], [])
+        _enrich_dedup_with_mismatches([], [self._mismatch_signal()])
+
+    def test_case_insensitive_agent_matching(self) -> None:
+        suggestions = [self._suggestion(matched_agent="PM")]
+        signals = [self._mismatch_signal(agent_type="pm")]
+        _enrich_dedup_with_mismatches(suggestions, signals)
+        assert "claude-haiku-4-5" in suggestions[0].dedup_note
+
+    def test_enrichment_strips_trailing_punctuation_from_dedup_note(self) -> None:
+        # Regression guard: if the dedup_note format ever gains a
+        # trailing period, the appended mismatch phrase should still
+        # produce a well-formed single-sentence output, not "..). Note: ..".
+        suggestions = [
+            self._suggestion(
+                matched_agent="pm",
+                dedup_note="suppressed — already covered by 'pm'.",
+            ),
+        ]
+        signals = [self._mismatch_signal(agent_type="pm")]
+        _enrich_dedup_with_mismatches(suggestions, signals)
+        note = suggestions[0].dedup_note
+        assert ".." not in note  # no double-period from naive concat
+        assert "pm" in note and "claude-haiku-4-5" in note
