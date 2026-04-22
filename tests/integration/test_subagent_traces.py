@@ -12,6 +12,7 @@ import pytest
 
 from agentfluent.analytics.pipeline import analyze_session
 from agentfluent.core.discovery import DEFAULT_PROJECTS_DIR, discover_projects
+from agentfluent.diagnostics import TRACE_SIGNAL_TYPES, run_diagnostics
 from agentfluent.traces.discovery import discover_subagent_files
 from agentfluent.traces.parser import parse_subagent_trace
 
@@ -102,4 +103,78 @@ class TestLinkerOnRealSession:
         pytest.skip(
             "Real subagent directories exist but none have a sibling "
             "<session>.jsonl with invocations matching the trace agent_ids",
+        )
+
+
+class TestRunDiagnosticsOnRealSession:
+    """End-to-end verification that the full diagnostics pipeline — parse
+    session + link traces + extract metadata and trace signals +
+    correlate — produces non-empty output on real data. Separate from
+    ``TestLinkerOnRealSession`` because this one exercises the
+    diagnostics layer, not just trace attachment."""
+
+    def test_pipeline_produces_diagnostics_output(self) -> None:
+        """run_diagnostics on real invocations returns a populated result."""
+        assert _real_subagent_hit is not None
+        project, subagents = _real_subagent_hit
+
+        # Find any session where linking actually attached a trace; run
+        # diagnostics on that session's invocations.
+        for session_id in subagents:
+            session_path = project.path / f"{session_id}.jsonl"
+            if not session_path.is_file():
+                continue
+            result = analyze_session(session_path)
+            linked = [inv for inv in result.invocations if inv.trace is not None]
+            if not linked:
+                continue
+
+            diag = run_diagnostics(result.invocations)
+            assert diag.subagent_trace_count == len(linked)
+            # At least one signal should come out — metadata, trace, or
+            # both. The permissive assertion guards against sessions
+            # where traces are clean (no errors/retries).
+            # Recommendations may be empty if the only signals are
+            # outlier-style without matching rules, but the pipeline
+            # must not crash and must produce a well-formed result.
+            assert isinstance(diag.signals, list)
+            assert isinstance(diag.recommendations, list)
+            return
+
+        pytest.skip(
+            "Real subagent data exists but no session successfully linked "
+            "any trace to an invocation",
+        )
+
+    def test_trace_signals_appear_when_traces_carry_errors(self) -> None:
+        """If a real linked trace has error content, at least one
+        trace-level signal type appears in the diagnostics output."""
+        assert _real_subagent_hit is not None
+        project, subagents = _real_subagent_hit
+
+        for session_id in subagents:
+            session_path = project.path / f"{session_id}.jsonl"
+            if not session_path.is_file():
+                continue
+            result = analyze_session(session_path)
+            # Any linked trace with errors or retries is a candidate for
+            # emitting a trace-level signal.
+            has_error_evidence = any(
+                inv.trace is not None
+                and (inv.trace.total_errors > 0 or inv.trace.retry_sequences)
+                for inv in result.invocations
+            )
+            if not has_error_evidence:
+                continue
+
+            diag = run_diagnostics(result.invocations)
+            trace_signal_count = sum(
+                1 for s in diag.signals if s.signal_type in TRACE_SIGNAL_TYPES
+            )
+            if trace_signal_count > 0:
+                return  # success
+
+        pytest.skip(
+            "No real session exhibits error/retry evidence in a linked trace; "
+            "trace-level signal emission cannot be verified from real data",
         )

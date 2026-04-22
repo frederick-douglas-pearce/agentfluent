@@ -207,6 +207,24 @@ class TestRetryLoop:
         loops = [s for s in signals if s.signal_type == SignalType.RETRY_LOOP]
         assert loops[0].detail["first_error_message"] == "connection timeout"
 
+    def test_sequence_with_empty_indices_skipped(self) -> None:
+        # Degenerate RetrySequence — indices list is empty. Extractor
+        # must skip silently rather than crash. Bypass the _rs factory's
+        # index default since `or` treats an empty list as falsy.
+        trace = _trace(
+            calls=[_tc(err=True)],
+            sequences=[
+                RetrySequence(
+                    tool_name="Bash",
+                    attempts=3,
+                    tool_call_indices=[],
+                ),
+            ],
+        )
+        signals = extract_trace_signals(trace)
+        assert not any(s.signal_type == SignalType.RETRY_LOOP for s in signals)
+        assert not any(s.signal_type == SignalType.STUCK_PATTERN for s in signals)
+
 
 class TestStuckPattern:
     def test_three_identical_is_retry_not_stuck(self) -> None:
