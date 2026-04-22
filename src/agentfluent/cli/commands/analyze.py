@@ -145,12 +145,9 @@ def analyze(
     result = analyze_sessions(paths, agent_filter=agent)
 
     all_invocations = [inv for s in result.sessions for inv in s.invocations]
-    total_subagent_traces = sum(si.subagent_count for si in session_infos)
 
     if all_invocations:
-        result.diagnostics = run_diagnostics(
-            all_invocations, subagent_trace_count=total_subagent_traces,
-        )
+        result.diagnostics = run_diagnostics(all_invocations)
     elif result.agent_metrics.total_invocations == 0 and diagnostics:
         console.print(
             "[dim]No agent invocations found -- "

@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from agentfluent.analytics.pipeline import AnalysisResult
     from agentfluent.config.models import ConfigScore
     from agentfluent.core.discovery import ProjectInfo, SessionInfo
-    from agentfluent.diagnostics.models import DiagnosticsResult
+    from agentfluent.diagnostics.models import DiagnosticSignal, DiagnosticsResult
 
 
 def format_projects_table(
@@ -292,11 +292,75 @@ def _format_diagnostics_table(
                 )
         console.print(rec_table)
 
-    if diag.subagent_trace_count > 0:
+    _format_deep_diagnostics(console, diag, verbose=verbose)
+
+
+def _format_deep_diagnostics(
+    console: Console,
+    diag: DiagnosticsResult,
+    *,
+    verbose: bool,
+) -> None:
+    """Render the Deep Diagnostics section with trace-signal evidence.
+
+    Compact summary by default; per-signal evidence sub-tables under
+    --verbose. Emits nothing when no trace-level signals are present.
+    """
+    from agentfluent.diagnostics import TRACE_SIGNAL_TYPES
+
+    trace_signals = [s for s in diag.signals if s.signal_type in TRACE_SIGNAL_TYPES]
+    if not trace_signals:
+        return
+
+    unique_agents = {s.agent_type for s in trace_signals}
+    if not verbose:
         console.print(
-            f"\n[dim]{diag.subagent_trace_count} subagent trace files available. "
-            "Deep diagnostics (per-tool-call analysis) coming in v1.1.[/dim]"
+            f"\n[bold]Deep Diagnostics:[/bold] {len(trace_signals)} trace signal(s) "
+            f"across {len(unique_agents)} subagent(s). "
+            "Use [bold]--verbose[/bold] for per-call evidence."
         )
+        return
+
+    console.print("\n[bold]Deep Diagnostics[/bold]")
+    for sig in trace_signals:
+        _render_trace_signal_evidence(console, sig)
+
+
+def _render_trace_signal_evidence(console: Console, sig: DiagnosticSignal) -> None:
+    """Render one trace signal with its evidence sub-table."""
+    color = SEVERITY_COLORS.get(sig.severity, "white")
+    header = (
+        f"\n[{color}]{sig.signal_type.value}[/{color}] "
+        f"[cyan]{sig.agent_type}[/cyan] — {sig.message}"
+    )
+    console.print(header)
+
+    evidence = sig.detail.get("tool_calls", [])
+    if not isinstance(evidence, list) or not evidence:
+        return
+
+    ev_table = Table(show_header=True, box=None, padding=(0, 1))
+    ev_table.add_column("#", style="dim", justify="right")
+    ev_table.add_column("Tool")
+    ev_table.add_column("Input", overflow="fold")
+    ev_table.add_column("Err", justify="center")
+    ev_table.add_column("Result", overflow="fold")
+
+    for entry in evidence:
+        if not isinstance(entry, dict):
+            continue
+        ev_table.add_row(
+            str(entry.get("index", "")),
+            str(entry.get("tool_name", "")),
+            _truncate(str(entry.get("input_summary", "")), 60),
+            "✗" if entry.get("is_error") else "",
+            _truncate(str(entry.get("result_summary", "")), 60),
+        )
+    console.print(ev_table)
+
+
+def _truncate(text: str, max_len: int) -> str:
+    return text if len(text) <= max_len else text[: max_len - 1] + "…"
 
 
 def _format_diagnostics_summary(console: Console, diag: DiagnosticsResult) -> None:
