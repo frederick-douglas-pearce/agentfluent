@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -12,6 +11,13 @@ from agentfluent.analytics.pipeline import analyze_session
 from agentfluent.traces.linker import link_traces
 from agentfluent.traces.models import UNKNOWN_AGENT_TYPE, SubagentTrace
 from agentfluent.traces.parser import parse_subagent_trace
+from tests._builders import (
+    assistant_message,
+    assistant_with_tool_use,
+    user_message,
+    user_with_tool_result,
+    write_project_layout,
+)
 
 WriteJSONL = Callable[[str, list[dict[str, Any]]], Path]
 
@@ -178,86 +184,56 @@ def _build_project(
     *,
     include_trace_file: bool,
 ) -> Path:
-    """Create a minimal project layout with optional subagent trace."""
-    session_path = tmp_path / f"{session_uuid}.jsonl"
-    session_path.write_text(
-        json.dumps(
-            {
-                "type": "assistant",
-                "message": {
-                    "id": "msg_1",
-                    "role": "assistant",
-                    "model": "claude-opus-4-6",
-                    "content": [
-                        {
-                            "type": "tool_use",
-                            "id": "toolu_1",
-                            "name": "Agent",
-                            "input": {
-                                "subagent_type": "plan",
-                                "description": "Plan work",
-                                "prompt": "Plan the work",
-                            },
-                        },
-                    ],
-                },
-                "timestamp": "2026-04-21T10:00:00.000Z",
-            },
-        )
-        + "\n"
-        + json.dumps(
-            {
-                "type": "user",
-                "message": {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": "toolu_1",
-                            "content": "plan complete",
-                        },
-                    ],
-                },
-                "toolUseResult": {
-                    "agentId": agent_id,
-                    "agentType": "plan",
-                    "totalTokens": 100,
-                },
-                "timestamp": "2026-04-21T10:00:01.000Z",
-            },
-        )
-        + "\n",
-    )
+    """Create a minimal project layout with optional subagent trace.
 
+    Returns the session JSONL path so callers can hand it directly to
+    ``analyze_session``.
+    """
+    session_messages = [
+        assistant_with_tool_use(
+            "toolu_1",
+            name="Agent",
+            inp={
+                "subagent_type": "plan",
+                "description": "Plan work",
+                "prompt": "Plan the work",
+            },
+            message_id="msg_1",
+            timestamp="2026-04-21T10:00:00.000Z",
+        ),
+        user_with_tool_result(
+            "toolu_1",
+            content="plan complete",
+            timestamp="2026-04-21T10:00:01.000Z",
+            tool_use_result={
+                "agentId": agent_id,
+                "agentType": "plan",
+                "totalTokens": 100,
+            },
+        ),
+    ]
+
+    subagent_traces: dict[str, list[dict[str, Any]]] | None = None
     if include_trace_file:
-        subagents_dir = tmp_path / session_uuid / "subagents"
-        subagents_dir.mkdir(parents=True)
-        (subagents_dir / f"agent-{agent_id}.jsonl").write_text(
-            json.dumps(
-                {
-                    "type": "user",
-                    "message": {"role": "user", "content": "Plan the work"},
-                    "timestamp": "2026-04-21T10:00:00.100Z",
-                },
-            )
-            + "\n"
-            + json.dumps(
-                {
-                    "type": "assistant",
-                    "message": {
-                        "id": "msg_inner",
-                        "role": "assistant",
-                        "model": "claude-opus-4-6",
-                        "content": [{"type": "text", "text": "done"}],
-                        "usage": {"input_tokens": 5, "output_tokens": 2},
-                    },
-                    "timestamp": "2026-04-21T10:00:00.500Z",
-                },
-            )
-            + "\n",
-        )
+        subagent_traces = {
+            agent_id: [
+                user_message(
+                    "Plan the work", timestamp="2026-04-21T10:00:00.100Z",
+                ),
+                assistant_message(
+                    [{"type": "text", "text": "done"}],
+                    message_id="msg_inner",
+                    timestamp="2026-04-21T10:00:00.500Z",
+                    usage={"input_tokens": 5, "output_tokens": 2},
+                ),
+            ],
+        }
 
-    return session_path
+    write_project_layout(
+        tmp_path, session_uuid, session_messages,
+        subagent_traces=subagent_traces,
+    )
+    return tmp_path / f"{session_uuid}.jsonl"
 
 
 class TestPipelineIntegration:
