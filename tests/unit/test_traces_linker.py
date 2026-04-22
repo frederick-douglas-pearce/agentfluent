@@ -24,7 +24,6 @@ def _invocation(
 ) -> AgentInvocation:
     return AgentInvocation(
         agent_type=agent_type,
-        is_builtin=True,
         description="",
         prompt="",
         tool_use_id=tool_use_id,

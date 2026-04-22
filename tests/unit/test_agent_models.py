@@ -27,7 +27,6 @@ class TestIsBuiltinAgent:
 def _full_invocation() -> AgentInvocation:
     return AgentInvocation(
         agent_type="pm",
-        is_builtin=False,
         description="Review backlog",
         prompt="Create issues",
         tool_use_id="toolu_01ABC",
@@ -48,7 +47,6 @@ class TestAgentInvocation:
     def test_without_metadata(self) -> None:
         inv = AgentInvocation(
             agent_type="pm",
-            is_builtin=False,
             description="Review backlog",
             prompt="Create issues",
             tool_use_id="toolu_01ABC",
@@ -61,7 +59,6 @@ class TestAgentInvocation:
     def test_zero_tool_uses(self) -> None:
         inv = AgentInvocation(
             agent_type="pm",
-            is_builtin=False,
             description="test",
             prompt="test",
             tool_use_id="toolu_01",
@@ -72,15 +69,18 @@ class TestAgentInvocation:
         assert inv.tokens_per_tool_use is None
         assert inv.duration_per_tool_use is None
 
-    def test_builtin_classification(self) -> None:
-        inv = AgentInvocation(
-            agent_type="Explore",
-            is_builtin=True,
-            description="Search code",
-            prompt="Find files",
-            tool_use_id="toolu_01",
+    def test_builtin_classification_derived_from_agent_type(self) -> None:
+        # Property is computed from agent_type via is_builtin_agent,
+        # so callers can't pass a stale value — the set is the source
+        # of truth.
+        explore = AgentInvocation(
+            agent_type="Explore", description="d", prompt="p", tool_use_id="t1",
         )
-        assert inv.is_builtin is True
+        custom = AgentInvocation(
+            agent_type="pm", description="d", prompt="p", tool_use_id="t2",
+        )
+        assert explore.is_builtin is True
+        assert custom.is_builtin is False
 
     def test_json_round_trip(self) -> None:
         inv = _full_invocation()
