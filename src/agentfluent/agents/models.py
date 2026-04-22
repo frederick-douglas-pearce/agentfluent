@@ -51,19 +51,16 @@ class AgentInvocation(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     agent_type: str
-    """Agent type (e.g., 'pm', 'Explore', 'Plan')."""
-
-    is_builtin: bool
-    """Whether this is a built-in Claude Code agent."""
+    """Agent type (e.g., 'pm', 'explore', 'plan'). Case varies in real
+    data; ``is_builtin_agent`` normalizes for comparison."""
 
     description: str
-    """The description passed to the Agent tool."""
-
     prompt: str
-    """The delegation prompt sent to the agent."""
 
     tool_use_id: str
-    """The tool_use ID linking this invocation to its tool_result."""
+    """Links this invocation back to the assistant message's ``tool_use``
+    block so downstream code can join the delegation call with its
+    result. Required; always populated by the extractor."""
 
     # From tool_result metadata (may be None if no metadata or agent was interrupted)
     total_tokens: int | None = None
@@ -73,12 +70,18 @@ class AgentInvocation(BaseModel):
 
     # From tool_result content
     output_text: str = ""
-    """The agent's final summary/output text."""
 
     # Attached by trace linking when a matching subagent file exists; `None`
     # otherwise (e.g., older sessions predating trace capture). Serves as the
     # evidence layer for trace-level diagnostics.
     trace: SubagentTrace | None = None
+
+    @property
+    def is_builtin(self) -> bool:
+        """Whether this invocation's agent type is a built-in Claude Code
+        agent. Derived on access from ``agent_type`` + ``BUILTIN_AGENT_TYPES``
+        so the answer stays in sync if the set is updated."""
+        return is_builtin_agent(self.agent_type)
 
     @property
     def tokens_per_tool_use(self) -> float | None:

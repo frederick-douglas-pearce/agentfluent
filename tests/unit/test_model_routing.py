@@ -36,7 +36,6 @@ def _inv(
 ) -> AgentInvocation:
     return AgentInvocation(
         agent_type=agent_type,
-        is_builtin=False,
         description="test",
         prompt="do something",
         tool_use_id=f"tool_{agent_type}",

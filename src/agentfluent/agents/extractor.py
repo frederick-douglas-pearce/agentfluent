@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agentfluent.agents.models import AgentInvocation, is_builtin_agent
+from agentfluent.agents.models import AgentInvocation
 from agentfluent.core.session import SessionMessage
 
 
@@ -49,7 +49,6 @@ def extract_agent_invocations(messages: list[SessionMessage]) -> list[AgentInvoc
             invocations.append(
                 AgentInvocation(
                     agent_type=agent_type,
-                    is_builtin=is_builtin_agent(agent_type),
                     description=description,
                     prompt=prompt,
                     tool_use_id=tool_use.id,

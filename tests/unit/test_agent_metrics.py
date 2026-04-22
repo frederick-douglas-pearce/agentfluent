@@ -6,14 +6,12 @@ from agentfluent.analytics.agent_metrics import compute_agent_metrics
 
 def _invocation(
     agent_type: str = "pm",
-    is_builtin: bool = False,
     total_tokens: int | None = 10000,
     tool_uses: int | None = 5,
     duration_ms: int | None = 30000,
 ) -> AgentInvocation:
     return AgentInvocation(
         agent_type=agent_type,
-        is_builtin=is_builtin,
         description="test",
         prompt="do something",
         tool_use_id="toolu_01",
@@ -50,8 +48,8 @@ class TestComputeAgentMetrics:
 
     def test_multiple_types(self) -> None:
         invocations = [
-            _invocation(agent_type="pm", is_builtin=False),
-            _invocation(agent_type="Explore", is_builtin=True),
+            _invocation(agent_type="pm"),
+            _invocation(agent_type="Explore"),
         ]
         metrics = compute_agent_metrics(invocations)
         assert len(metrics.by_agent_type) == 2
@@ -145,8 +143,8 @@ class TestAgentTokenPercentage:
 class TestBuiltinVsCustom:
     def test_all_builtin(self) -> None:
         invocations = [
-            _invocation(agent_type="Explore", is_builtin=True),
-            _invocation(agent_type="Plan", is_builtin=True),
+            _invocation(agent_type="Explore"),
+            _invocation(agent_type="Plan"),
         ]
         metrics = compute_agent_metrics(invocations)
         assert metrics.builtin_invocations == 2
@@ -154,8 +152,8 @@ class TestBuiltinVsCustom:
 
     def test_all_custom(self) -> None:
         invocations = [
-            _invocation(agent_type="pm", is_builtin=False),
-            _invocation(agent_type="reviewer", is_builtin=False),
+            _invocation(agent_type="pm"),
+            _invocation(agent_type="reviewer"),
         ]
         metrics = compute_agent_metrics(invocations)
         assert metrics.builtin_invocations == 0
@@ -163,8 +161,8 @@ class TestBuiltinVsCustom:
 
     def test_case_insensitive_grouping(self) -> None:
         invocations = [
-            _invocation(agent_type="Explore", is_builtin=True),
-            _invocation(agent_type="explore", is_builtin=True),
+            _invocation(agent_type="Explore"),
+            _invocation(agent_type="explore"),
         ]
         metrics = compute_agent_metrics(invocations)
         assert len(metrics.by_agent_type) == 1

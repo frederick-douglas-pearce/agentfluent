@@ -33,7 +33,6 @@ def _inv(
 ) -> AgentInvocation:
     return AgentInvocation(
         agent_type=agent_type,
-        is_builtin=False,
         description="test",
         prompt="do something",
         tool_use_id="toolu_01",
@@ -110,17 +109,17 @@ class TestDedup:
         # threshold; one of them also carries a trace. TOKEN_OUTLIER must
         # survive the dedup pass.
         inv_a = AgentInvocation(
-            agent_type="pm", is_builtin=False, description="a", prompt="a",
+            agent_type="pm", description="a", prompt="a",
             tool_use_id="t1", output_text="",
             total_tokens=100, tool_uses=1, trace=_stuck_trace(agent_type="pm"),
         )
         inv_b = AgentInvocation(
-            agent_type="pm", is_builtin=False, description="b", prompt="b",
+            agent_type="pm", description="b", prompt="b",
             tool_use_id="t2", output_text="",
             total_tokens=100, tool_uses=1,
         )
         inv_c = AgentInvocation(
-            agent_type="pm", is_builtin=False, description="c", prompt="c",
+            agent_type="pm", description="c", prompt="c",
             tool_use_id="t3", output_text="",
             total_tokens=10_000, tool_uses=1,
         )
@@ -247,7 +246,6 @@ class TestDelegationSuggestions:
     _GP_INVS = [
         AgentInvocation(
             agent_type="general-purpose",
-            is_builtin=True,
             description=f"read file {target} and summarize",
             prompt=(
                 f"Read the file {target} from the repository and produce "
@@ -318,7 +316,6 @@ class TestModelRoutingWiring:
         invs = [
             AgentInvocation(
                 agent_type="pm",
-                is_builtin=False,
                 description="task",
                 prompt="do it",
                 tool_use_id=f"t{i}",

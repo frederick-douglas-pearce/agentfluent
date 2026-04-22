@@ -44,7 +44,6 @@ def _inv(
 ) -> AgentInvocation:
     return AgentInvocation(
         agent_type=agent_type,
-        is_builtin=agent_type.lower() == "general-purpose",
         description=description,
         prompt=prompt,
         tool_use_id="toolu_" + description[:10],
