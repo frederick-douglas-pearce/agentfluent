@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from agentfluent.cli.formatters.helpers import (
@@ -219,12 +220,14 @@ def format_analysis_table(
                 tokens = format_tokens(inv.total_tokens) if inv.total_tokens else "-"
                 tools = str(inv.tool_uses) if inv.tool_uses else "-"
                 duration = f"{inv.duration_ms / 1000:.1f}s" if inv.duration_ms else "-"
-                desc = (
-                    inv.description
-                    if len(inv.description) <= 60
-                    else inv.description[:57] + "..."
+                desc = truncate(inv.description, 60)
+                inv_table.add_row(
+                    escape(inv.agent_type),
+                    escape(desc),
+                    tokens,
+                    tools,
+                    duration,
                 )
-                inv_table.add_row(inv.agent_type, desc, tokens, tools, duration)
         console.print(inv_table)
 
     console.print(API_RATE_FOOTNOTE, style="dim")
@@ -256,10 +259,10 @@ def _format_diagnostics_table(
         for sig in diag.signals:
             color = SEVERITY_COLORS.get(sig.severity, "white")
             sig_table.add_row(
-                sig.agent_type,
-                sig.signal_type.value,
+                escape(sig.agent_type),
+                escape(sig.signal_type.value),
                 f"[{color}]{sig.severity.value}[/{color}]",
-                sig.message,
+                escape(sig.message),
             )
         console.print(sig_table)
 
@@ -278,18 +281,18 @@ def _format_diagnostics_table(
             color = SEVERITY_COLORS.get(rec.severity, "white")
             if verbose:
                 rec_table.add_row(
-                    rec.agent_type,
-                    rec.target,
+                    escape(rec.agent_type),
+                    escape(rec.target),
                     f"[{color}]{rec.severity.value}[/{color}]",
-                    rec.observation,
-                    rec.action,
+                    escape(rec.observation),
+                    escape(rec.action),
                 )
             else:
                 rec_table.add_row(
-                    rec.agent_type,
-                    rec.target,
+                    escape(rec.agent_type),
+                    escape(rec.target),
                     f"[{color}]{rec.severity.value}[/{color}]",
-                    rec.message,
+                    escape(rec.message),
                 )
         console.print(rec_table)
 
@@ -328,11 +331,16 @@ def _format_deep_diagnostics(
 
 
 def _render_trace_signal_evidence(console: Console, sig: DiagnosticSignal) -> None:
-    """Render one trace signal with its evidence sub-table."""
+    """Render one trace signal with its evidence sub-table.
+
+    All JSONL-sourced strings (agent_type, message, and every evidence
+    dict field) are escaped before being passed to Rich — trace content
+    is untrusted and could otherwise smuggle markup like `[link=…]`.
+    """
     color = SEVERITY_COLORS.get(sig.severity, "white")
     header = (
-        f"\n[{color}]{sig.signal_type.value}[/{color}] "
-        f"[cyan]{sig.agent_type}[/cyan] — {sig.message}"
+        f"\n[{color}]{escape(sig.signal_type.value)}[/{color}] "
+        f"[cyan]{escape(sig.agent_type)}[/cyan] — {escape(sig.message)}"
     )
     console.print(header)
 
@@ -351,11 +359,11 @@ def _render_trace_signal_evidence(console: Console, sig: DiagnosticSignal) -> No
         if not isinstance(entry, dict):
             continue
         ev_table.add_row(
-            str(entry.get("index", "")),
-            str(entry.get("tool_name", "")),
-            truncate(str(entry.get("input_summary", "")), 60),
+            escape(str(entry.get("index", ""))),
+            escape(str(entry.get("tool_name", ""))),
+            escape(truncate(str(entry.get("input_summary", "")), 60)),
             "✗" if entry.get("is_error") else "",
-            truncate(str(entry.get("result_summary", "")), 60),
+            escape(truncate(str(entry.get("result_summary", "")), 60)),
         )
     console.print(ev_table)
 

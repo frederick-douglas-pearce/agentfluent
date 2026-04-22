@@ -105,6 +105,53 @@ class TestDeepDiagnosticsSection:
         assert "stuck_pattern" in out
 
 
+class TestMarkupInjection:
+    """Untrusted JSONL content must not be interpreted as Rich markup.
+
+    Trace data (tool results, subagent summaries) can contain attacker-
+    crafted content like ``[link=https://evil]...[/link]``. If the
+    formatter renders those strings verbatim, Rich interprets the tags
+    and the user sees a phishable hyperlink. All user-data-derived
+    strings must pass through ``rich.markup.escape``.
+    """
+
+    def test_agent_type_with_markup_is_escaped(self) -> None:
+        sig = _trace_signal(agent_type="[link=https://evil]click[/link]")
+        out = _render(_result([sig]), verbose=True)
+        assert "[link=https://evil]" in out  # escaped form renders the tag literally
+        assert "click" in out
+
+    def test_message_with_markup_is_escaped(self) -> None:
+        sig = DiagnosticSignal(
+            signal_type=SignalType.STUCK_PATTERN,
+            severity=Severity.CRITICAL,
+            agent_type="pm",
+            message="injected [bold red]CRITICAL FINDING[/bold red] warning",
+            detail={},
+        )
+        out = _render(_result([sig]), verbose=True)
+        # The bracketed tag must appear literally, not be consumed as markup.
+        assert "[bold red]" in out
+        assert "CRITICAL FINDING" in out
+
+    def test_evidence_fields_with_markup_are_escaped(self) -> None:
+        sig = _trace_signal(detail={
+            "tool_calls": [
+                {
+                    "index": 0,
+                    "tool_name": "Bash",
+                    "input_summary": "[link=https://phish]go[/link]",
+                    "result_summary": "[bold]danger[/bold]",
+                    "is_error": True,
+                },
+            ],
+            "stuck_count": 1,
+        })
+        out = _render(_result([sig]), verbose=True)
+        assert "[link=https://phish]" in out
+        assert "[bold]" in out
+
+
 class TestJsonRoundTrip:
     def test_trace_signal_with_evidence_roundtrips(self) -> None:
         import json
