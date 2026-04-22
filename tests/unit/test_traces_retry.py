@@ -14,6 +14,11 @@ from agentfluent.traces.retry import (
     _is_similar_retry,
     detect_retry_sequences,
 )
+from tests._builders import (
+    assistant_with_tool_use,
+    user_message,
+    user_with_tool_result,
+)
 
 WriteJSONL = Callable[[str, list[dict[str, Any]]], Path]
 
@@ -231,43 +236,21 @@ class TestParserIntegration:
         Each `tool_calls` tuple is (tool_use_id, tool_name, input, is_error, result).
         """
         lines: list[dict[str, Any]] = [
-            {
-                "type": "user",
-                "message": {"role": "user", "content": "go"},
-                "timestamp": "2026-04-21T10:00:00.000Z",
-            },
+            user_message("go", timestamp="2026-04-21T10:00:00.000Z"),
         ]
         for i, (tool_use_id, name, inp, is_err, result) in enumerate(tool_calls):
             lines.append(
-                {
-                    "type": "assistant",
-                    "message": {
-                        "id": f"msg_{i}",
-                        "role": "assistant",
-                        "model": "claude-opus-4-6",
-                        "content": [
-                            {"type": "tool_use", "id": tool_use_id, "name": name, "input": inp},
-                        ],
-                    },
-                    "timestamp": f"2026-04-21T10:00:{i + 1:02d}.000Z",
-                },
+                assistant_with_tool_use(
+                    tool_use_id, name, inp,
+                    message_id=f"msg_{i}",
+                    timestamp=f"2026-04-21T10:00:{i + 1:02d}.000Z",
+                ),
             )
             lines.append(
-                {
-                    "type": "user",
-                    "message": {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tool_use_id,
-                                "content": result,
-                                "is_error": is_err,
-                            },
-                        ],
-                    },
-                    "timestamp": f"2026-04-21T10:00:{i + 1:02d}.500Z",
-                },
+                user_with_tool_result(
+                    tool_use_id, result, is_error=is_err,
+                    timestamp=f"2026-04-21T10:00:{i + 1:02d}.500Z",
+                ),
             )
         return write_jsonl("agent-integration.jsonl", lines)
 

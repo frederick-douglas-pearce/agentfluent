@@ -16,66 +16,20 @@ from agentfluent.traces.models import (
     SubagentTrace,
 )
 from agentfluent.traces.parser import parse_subagent_trace
+from tests._builders import (
+    assistant_message as _assistant,
+)
+from tests._builders import (
+    tool_result_block as _tool_result,
+)
+from tests._builders import (
+    tool_use_block as _tool_use,
+)
+from tests._builders import (
+    user_message as _user,
+)
 
 WriteJSONL = Callable[[str, list[dict[str, Any]]], Path]
-
-
-def _user(
-    content: Any,  # noqa: ANN401
-    timestamp: str | None = "2026-04-21T10:00:00.000Z",
-) -> dict[str, Any]:
-    msg: dict[str, Any] = {
-        "type": "user",
-        "message": {"role": "user", "content": content},
-    }
-    if timestamp is not None:
-        msg["timestamp"] = timestamp
-    return msg
-
-
-def _assistant(
-    content: list[dict[str, Any]],
-    *,
-    message_id: str = "msg_01",
-    timestamp: str | None = "2026-04-21T10:00:01.000Z",
-    usage: dict[str, int] | None = None,
-) -> dict[str, Any]:
-    msg: dict[str, Any] = {
-        "type": "assistant",
-        "message": {
-            "id": message_id,
-            "role": "assistant",
-            "model": "claude-opus-4-6",
-            "content": content,
-        },
-    }
-    if timestamp is not None:
-        msg["timestamp"] = timestamp
-    if usage is not None:
-        msg["message"]["usage"] = usage
-    return msg
-
-
-def _tool_use(
-    tool_use_id: str, name: str = "Bash", inp: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    return {"type": "tool_use", "id": tool_use_id, "name": name, "input": inp or {}}
-
-
-def _tool_result(
-    tool_use_id: str,
-    content: str = "ok",
-    *,
-    is_error: bool | None = None,
-) -> dict[str, Any]:
-    block: dict[str, Any] = {
-        "type": "tool_result",
-        "tool_use_id": tool_use_id,
-        "content": content,
-    }
-    if is_error is not None:
-        block["is_error"] = is_error
-    return block
 
 
 class TestParseSubagentTrace:
