@@ -475,6 +475,7 @@ def _apply_dedup(
         max_sim = float(sim[i][max_j])
         if max_sim > min_similarity:
             matched_name = existing_configs[max_j].name
+            draft.matched_agent = matched_name
             draft.dedup_note = (
                 f"suppressed — already covered by '{matched_name}' "
                 f"(similarity {max_sim:.2f})"

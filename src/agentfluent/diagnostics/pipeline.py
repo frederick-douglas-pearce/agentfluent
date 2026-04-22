@@ -52,6 +52,66 @@ TRACE_SIGNAL_TYPES: frozenset[SignalType] = frozenset(
 )
 
 
+def _append_mismatch_phrase(
+    dedup_note: str, signal: DiagnosticSignal,
+) -> str:
+    """Extend a `dedup_note` with the human-readable model-mismatch summary.
+
+    Format mirrors `ModelRoutingRule.recommend`'s action text so the
+    user sees the same phrasing across the "Suggested Subagents" and
+    "Recommendations" surfaces. Omits the savings clause when pricing
+    is unavailable.
+    """
+    detail = signal.detail
+    matched_name = str(detail.get("current_model", ""))
+    recommended = str(detail.get("recommended_model", ""))
+    mismatch_type = str(detail.get("mismatch_type", ""))
+    savings = detail.get("estimated_savings_usd")
+    invocation_count = detail.get("invocation_count", 0)
+
+    clauses = [
+        f"Note: '{signal.agent_type}' is {mismatch_type}'d on {matched_name}",
+        f"consider switching to {recommended}",
+    ]
+    if mismatch_type == "overspec" and isinstance(savings, int | float):
+        clauses.append(
+            f"est. savings ${savings:.2f} across {invocation_count} invocations",
+        )
+    # Mutate the note in place by appending the new sentence. Keep the
+    # original "suppressed — already covered by ... (similarity ...)"
+    # prefix intact so existing CLI parsing / assertions still hold.
+    return f"{dedup_note}. {'; '.join(clauses)}."
+
+
+def _enrich_dedup_with_mismatches(
+    suggestions: list[DelegationSuggestion],
+    signals: list[DiagnosticSignal],
+) -> None:
+    """Append model-mismatch context to deduped suggestions in place.
+
+    When a ``DelegationSuggestion`` was suppressed (``matched_agent``
+    set) because it overlaps an existing agent, and that agent also
+    has a live ``MODEL_MISMATCH`` signal, extend the suggestion's
+    ``dedup_note`` with the mismatch summary so the user sees both
+    facts in one place. Non-deduped suggestions and non-mismatch
+    signals are ignored.
+    """
+    mismatches_by_agent: dict[str, DiagnosticSignal] = {
+        s.agent_type.lower(): s
+        for s in signals
+        if s.signal_type == SignalType.MODEL_MISMATCH
+    }
+    if not mismatches_by_agent:
+        return
+    for sug in suggestions:
+        if not sug.matched_agent:
+            continue
+        mismatch = mismatches_by_agent.get(sug.matched_agent.lower())
+        if mismatch is None:
+            continue
+        sug.dedup_note = _append_mismatch_phrase(sug.dedup_note, mismatch)
+
+
 def _dedup_error_patterns(signals: list[DiagnosticSignal]) -> list[DiagnosticSignal]:
     """Drop metadata ERROR_PATTERN signals for agent_types that already
     have at least one trace-level signal.
@@ -133,6 +193,7 @@ def run_diagnostics(
             min_cluster_size=min_cluster_size,
             min_similarity=min_similarity,
         )
+        _enrich_dedup_with_mismatches(delegation_suggestions, signals)
     else:
         logger.debug(
             "Delegation clustering skipped: scikit-learn not installed. "

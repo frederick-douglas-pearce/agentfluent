@@ -322,6 +322,19 @@ class TestDedup:
         result = _apply_dedup([draft], configs, min_similarity=0.3)
         assert result[0].dedup_note
         assert "pytest-runner" in result[0].dedup_note
+        # `matched_agent` is populated alongside `dedup_note` so
+        # cross-reference consumers don't have to parse the note string.
+        assert result[0].matched_agent == "pytest-runner"
+
+    def test_non_deduped_suggestion_has_empty_matched_agent(self) -> None:
+        draft = self._draft()
+        configs = [_config(
+            name="database-migrator",
+            description="Manages SQL schema migrations for the payments service",
+        )]
+        result = _apply_dedup([draft], configs, min_similarity=0.7)
+        assert result[0].dedup_note == ""
+        assert result[0].matched_agent == ""
 
     def test_dissimilar_existing_agent_leaves_dedup_note_empty(self) -> None:
         draft = self._draft()

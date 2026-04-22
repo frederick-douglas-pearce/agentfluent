@@ -131,6 +131,11 @@ class DelegationSuggestion(BaseModel):
     """Non-empty when the draft overlaps an existing agent config above
     the similarity threshold. Holds the matched agent name + similarity."""
 
+    matched_agent: str = ""
+    """Name of the existing agent that deduped this draft (empty when
+    not deduped). Exposed as a first-class field so cross-reference
+    logic can look up the matched agent without parsing ``dedup_note``."""
+
 
 class DiagnosticsResult(BaseModel):
     """Complete diagnostics output for a session or set of sessions."""
