@@ -397,6 +397,59 @@ class ErrorSequenceRule:
         )
 
 
+class ModelRoutingRule:
+    """MODEL_MISMATCH -> recommend switching to the right-tier model.
+
+    Overspec: switch down + cite the cost-savings estimate when pricing
+    is available. Underspec: switch up, no savings (this would cost
+    more, but the tradeoff is quality).
+    """
+
+    def matches(self, signal: DiagnosticSignal, config: AgentConfig | None) -> bool:
+        return signal.signal_type == SignalType.MODEL_MISMATCH
+
+    def recommend(
+        self, signal: DiagnosticSignal, config: AgentConfig | None,
+    ) -> DiagnosticRecommendation:
+        detail = signal.detail
+        mismatch_type = str(detail.get("mismatch_type", ""))
+        current_model = str(detail.get("current_model", ""))
+        recommended_model = str(detail.get("recommended_model", ""))
+        complexity = str(detail.get("complexity_tier", "moderate"))
+        invocation_count = detail.get("invocation_count", 0)
+        savings = detail.get("estimated_savings_usd")
+
+        observation = signal.message
+        reason = (
+            f"Observed complexity tier is '{complexity}' but the agent is "
+            f"configured with {current_model}."
+        )
+
+        action_parts = [f"Switch to {recommended_model}"]
+        if mismatch_type == "overspec" and isinstance(savings, int | float):
+            action_parts.append(
+                f"(estimated savings: ${savings:.2f} across "
+                f"{invocation_count} invocations)",
+            )
+        if config:
+            action_parts.append(f"— edit the `model:` field in {config.file_path}.")
+        else:
+            action_parts[-1] = action_parts[-1] + "."
+        action = " ".join(action_parts)
+
+        return DiagnosticRecommendation(
+            target="model",
+            severity=Severity.WARNING,
+            message=f"{observation} {reason} {action}",
+            observation=observation,
+            reason=reason,
+            action=action,
+            agent_type=signal.agent_type,
+            config_file=str(config.file_path) if config else "",
+            signal_types=[signal.signal_type],
+        )
+
+
 # Module-level rule registry. Add new rules here.
 RULES: list[CorrelationRule] = [
     AccessErrorRule(),
@@ -407,6 +460,7 @@ RULES: list[CorrelationRule] = [
     RetryLoopRule(),
     StuckPatternRule(),
     ErrorSequenceRule(),
+    ModelRoutingRule(),
 ]
 
 

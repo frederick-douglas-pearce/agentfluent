@@ -27,6 +27,7 @@ from agentfluent.diagnostics.delegation import (
     SKLEARN_AVAILABLE,
     suggest_delegations,
 )
+from agentfluent.diagnostics.model_routing import extract_model_routing_signals
 from agentfluent.diagnostics.models import (
     DelegationSuggestion,
     DiagnosticSignal,
@@ -115,6 +116,11 @@ def run_diagnostics(
     configs_by_name = (
         {c.name.lower(): c for c in agent_configs} if agent_configs else None
     )
+
+    # Aggregate-level signals (model-routing) use the same config lookup
+    # the correlator will read from; fold them in before correlation.
+    signals.extend(extract_model_routing_signals(invocations, configs_by_name))
+
     recommendations = correlate(signals, configs_by_name)
 
     subagent_trace_count = sum(1 for inv in invocations if inv.trace is not None)

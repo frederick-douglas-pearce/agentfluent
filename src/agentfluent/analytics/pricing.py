@@ -55,10 +55,14 @@ _PRICING: dict[str, ModelPricing] = {
 }
 
 # Aliases map short names and variant identifiers to canonical model names.
+# Aliases mirror the ID forms used elsewhere in the codebase (e.g.
+# diagnostics/delegation.py recommends `claude-haiku-4-5`, the
+# undated alias — pricing must resolve the same string).
 _ALIASES: dict[str, str] = {
     "opus": "claude-opus-4-7",
     "sonnet": "claude-sonnet-4-6",
     "haiku": "claude-haiku-4-5-20251001",
+    "claude-haiku-4-5": "claude-haiku-4-5-20251001",
     "claude-opus-4-7[1m]": "claude-opus-4-7",
     "claude-opus-4-6[1m]": "claude-opus-4-6",
     "claude-sonnet-4-6[1m]": "claude-sonnet-4-6",
