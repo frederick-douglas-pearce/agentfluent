@@ -1,13 +1,15 @@
-"""Data models for diagnostics: signals and recommendations.
+"""Data models for diagnostics: signals, recommendations, and delegation drafts.
 
-These models are the output of the diagnostics pipeline. DiagnosticSignal
-represents an observed behavior pattern; DiagnosticRecommendation maps
-that signal to an actionable config change.
+DiagnosticSignal represents an observed behavior pattern;
+DiagnosticRecommendation maps that signal to an actionable config
+change; DelegationSuggestion is the draft for a brand-new subagent
+proposed by clustering recurring general-purpose delegations.
 """
 
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -78,10 +80,61 @@ class DiagnosticRecommendation(BaseModel):
     """Which signal types contributed to this recommendation."""
 
 
+class DelegationSuggestion(BaseModel):
+    """A draft subagent definition derived from a cluster of recurring
+    ``general-purpose`` delegations.
+
+    Produced by the delegation clustering pipeline in
+    ``agentfluent.diagnostics.delegation``. Deduped suggestions (those
+    already covered by an existing agent config) are retained in output
+    with a populated ``dedup_note`` so the user sees what was suppressed
+    and why, rather than having the signal silently dropped.
+    """
+
+    name: str
+    """Kebab-case agent name synthesized from the cluster's top terms."""
+
+    description: str
+    """One-line description synthesized from top terms."""
+
+    model: str
+    """Recommended Claude model ID (haiku / sonnet / opus)."""
+
+    tools: list[str] = Field(default_factory=list)
+    """Union of tools observed in the cluster's subagent traces. Empty
+    when no traces were linked to the member invocations."""
+
+    tools_note: str = ""
+    """Diagnostic note when ``tools`` cannot be derived (e.g., older
+    sessions lacking trace capture)."""
+
+    prompt_template: str
+    """Draft prompt scaffold anchored on the cluster's top terms."""
+
+    confidence: Literal["high", "medium", "low"]
+    """Confidence tier based on cluster size + cohesion."""
+
+    cluster_size: int
+    """How many invocations formed this cluster."""
+
+    cohesion_score: float
+    """Mean pairwise cosine similarity within the cluster."""
+
+    top_terms: list[str] = Field(default_factory=list)
+    """Top TF-IDF terms that characterize the cluster."""
+
+    dedup_note: str = ""
+    """Non-empty when the draft overlaps an existing agent config above
+    the similarity threshold. Holds the matched agent name + similarity."""
+
+
 class DiagnosticsResult(BaseModel):
     """Complete diagnostics output for a session or set of sessions."""
 
     signals: list[DiagnosticSignal] = Field(default_factory=list)
     recommendations: list[DiagnosticRecommendation] = Field(default_factory=list)
     subagent_trace_count: int = 0
-    """Number of subagent trace files detected (teaser for v1.1)."""
+    """Number of subagent traces that successfully parsed and linked."""
+
+    delegation_suggestions: list[DelegationSuggestion] = Field(default_factory=list)
+    """Draft subagent definitions proposed by the clustering pipeline."""

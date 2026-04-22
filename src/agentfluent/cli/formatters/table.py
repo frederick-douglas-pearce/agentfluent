@@ -297,6 +297,7 @@ def _format_diagnostics_table(
         console.print(rec_table)
 
     _format_deep_diagnostics(console, diag, verbose=verbose)
+    _format_delegation_suggestions(console, diag, verbose=verbose)
 
 
 def _format_deep_diagnostics(
@@ -366,6 +367,65 @@ def _render_trace_signal_evidence(console: Console, sig: DiagnosticSignal) -> No
             escape(truncate(str(entry.get("result_summary", "")), 60)),
         )
     console.print(ev_table)
+
+
+def _format_delegation_suggestions(
+    console: Console,
+    diag: DiagnosticsResult,
+    *,
+    verbose: bool,
+) -> None:
+    """Render the "Suggested Subagents" section.
+
+    Compact table by default: one row per suggestion with name, model,
+    confidence, size, tools summary, dedup note. Verbose adds the
+    synthesized prompt + top-terms block under each row.
+
+    All JSONL-derived fields (name, description, tools, dedup note)
+    pass through ``escape`` before hitting Rich — trace content is
+    untrusted and could smuggle markup.
+    """
+    suggestions = diag.delegation_suggestions
+    if not suggestions:
+        return
+
+    console.print("\n[bold]Suggested Subagents[/bold]")
+    sug_table = Table(show_header=True, title_style="")
+    sug_table.add_column("Name", style="cyan")
+    sug_table.add_column("Model")
+    sug_table.add_column("Confidence")
+    sug_table.add_column("Cluster size", justify="right")
+    sug_table.add_column("Tools")
+    sug_table.add_column("Note")
+
+    confidence_colors = {"high": "green", "medium": "yellow", "low": "red"}
+    for sug in suggestions:
+        color = confidence_colors.get(sug.confidence, "white")
+        tools_display = (
+            ", ".join(sug.tools) if sug.tools
+            else escape(sug.tools_note) or "[dim]—[/dim]"
+        )
+        note = escape(sug.dedup_note) if sug.dedup_note else ""
+        sug_table.add_row(
+            escape(sug.name),
+            escape(sug.model),
+            f"[{color}]{sug.confidence}[/{color}]",
+            str(sug.cluster_size),
+            escape(tools_display) if sug.tools else tools_display,
+            note,
+        )
+    console.print(sug_table)
+
+    if verbose:
+        for sug in suggestions:
+            top_terms = ", ".join(sug.top_terms) if sug.top_terms else "—"
+            console.print(
+                f"\n[cyan]{escape(sug.name)}[/cyan]  "
+                f"[dim](cohesion {sug.cohesion_score:.2f}, "
+                f"top terms: {escape(top_terms)})[/dim]",
+            )
+            console.print(f"  {escape(sug.description)}")
+            console.print(f"  [dim]prompt draft:[/dim] {escape(sug.prompt_template)}")
 
 
 def _format_diagnostics_summary(console: Console, diag: DiagnosticsResult) -> None:

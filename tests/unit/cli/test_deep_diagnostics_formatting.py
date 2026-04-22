@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from rich.console import Console
 
-from agentfluent.cli.formatters.table import _format_deep_diagnostics
+from agentfluent.cli.formatters.table import (
+    _format_deep_diagnostics,
+    _format_delegation_suggestions,
+)
 from agentfluent.config.models import Severity
 from agentfluent.diagnostics.models import (
+    DelegationSuggestion,
     DiagnosticSignal,
     DiagnosticsResult,
     SignalType,
@@ -163,3 +167,94 @@ class TestJsonRoundTrip:
         assert restored["signals"][0]["signal_type"] == "stuck_pattern"
         assert restored["signals"][0]["detail"]["tool_calls"][0]["tool_name"] == "Bash"
         assert restored["signals"][0]["detail"]["stuck_count"] == 5
+
+
+def _suggestion(
+    name: str = "test-runner",
+    description: str = "Handles delegations related to: pytest, tests, run.",
+    tools: list[str] | None = None,
+    tools_note: str = "",
+    confidence: str = "high",
+    dedup_note: str = "",
+    top_terms: list[str] | None = None,
+) -> DelegationSuggestion:
+    return DelegationSuggestion(
+        name=name,
+        description=description,
+        model="claude-sonnet-4-6",
+        tools=tools if tools is not None else ["Read", "Grep"],
+        tools_note=tools_note,
+        prompt_template="You run pytest tests and report results.",
+        confidence=confidence,  # type: ignore[arg-type]
+        cluster_size=10,
+        cohesion_score=0.85,
+        top_terms=top_terms if top_terms is not None else ["pytest", "tests", "run"],
+        dedup_note=dedup_note,
+    )
+
+
+def _result_with_suggestions(
+    suggestions: list[DelegationSuggestion],
+) -> DiagnosticsResult:
+    return DiagnosticsResult(delegation_suggestions=suggestions)
+
+
+def _render_suggestions(diag: DiagnosticsResult, *, verbose: bool) -> str:
+    console = Console(record=True, width=140)
+    _format_delegation_suggestions(console, diag, verbose=verbose)
+    return console.export_text()
+
+
+class TestDelegationSuggestionsSection:
+    def test_absent_when_no_suggestions(self) -> None:
+        out = _render_suggestions(_result_with_suggestions([]), verbose=False)
+        assert "Suggested Subagents" not in out
+
+    def test_table_rendered_when_suggestions_present(self) -> None:
+        out = _render_suggestions(
+            _result_with_suggestions([_suggestion()]), verbose=False,
+        )
+        assert "Suggested Subagents" in out
+        assert "test-runner" in out
+        assert "claude-sonnet-4-6" in out
+
+    def test_verbose_adds_prompt_draft_block(self) -> None:
+        out = _render_suggestions(
+            _result_with_suggestions([_suggestion()]), verbose=True,
+        )
+        assert "prompt draft" in out
+        assert "pytest" in out  # top terms surface
+
+    def test_dedup_note_rendered(self) -> None:
+        sug = _suggestion(dedup_note="suppressed — already covered by 'pm' (similarity 0.85)")
+        out = _render_suggestions(
+            _result_with_suggestions([sug]), verbose=False,
+        )
+        assert "suppressed" in out
+        assert "pm" in out
+
+    def test_tools_note_rendered_when_no_tools(self) -> None:
+        sug = _suggestion(tools=[], tools_note="# run with newer session data")
+        out = _render_suggestions(
+            _result_with_suggestions([sug]), verbose=False,
+        )
+        assert "newer session data" in out
+
+
+class TestDelegationMarkupInjection:
+    """Trace-derived strings in delegation suggestions must be Rich-escaped,
+    same contract as TestMarkupInjection above."""
+
+    def test_name_with_markup_is_escaped(self) -> None:
+        sug = _suggestion(name="[link=https://evil]click[/link]")
+        out = _render_suggestions(
+            _result_with_suggestions([sug]), verbose=False,
+        )
+        assert "[link=https://evil]" in out
+
+    def test_dedup_note_with_markup_is_escaped(self) -> None:
+        sug = _suggestion(dedup_note="[bold red]CRITICAL[/bold red]")
+        out = _render_suggestions(
+            _result_with_suggestions([sug]), verbose=False,
+        )
+        assert "[bold red]" in out

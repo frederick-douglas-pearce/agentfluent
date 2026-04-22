@@ -3,8 +3,10 @@
 Owns the `run_diagnostics` pipeline: extracts metadata-level and
 trace-level signals, deduplicates overlapping metadata error signals
 when strictly-more-informative trace signals cover the same
-`agent_type`, runs correlation against any available agent configs, and
-computes the parsed-trace count surfaced on `DiagnosticsResult`.
+`agent_type`, runs correlation against any available agent configs,
+computes the parsed-trace count, and (when scikit-learn is installed)
+proposes draft subagent definitions from clustered general-purpose
+delegations.
 
 Kept separate from `analytics/pipeline.py` to keep the analytics layer
 free of diagnostics imports and to match the one-file-per-concern
@@ -19,7 +21,14 @@ from agentfluent.agents.models import AgentInvocation
 from agentfluent.config.models import AgentConfig
 from agentfluent.config.scanner import scan_agents
 from agentfluent.diagnostics.correlator import correlate
+from agentfluent.diagnostics.delegation import (
+    _SKLEARN_AVAILABLE,
+    DEFAULT_MIN_CLUSTER_SIZE,
+    DEFAULT_MIN_SIMILARITY,
+    suggest_delegations,
+)
 from agentfluent.diagnostics.models import (
+    DelegationSuggestion,
     DiagnosticSignal,
     DiagnosticsResult,
     SignalType,
@@ -71,14 +80,19 @@ def _dedup_error_patterns(signals: list[DiagnosticSignal]) -> list[DiagnosticSig
 
 def run_diagnostics(
     invocations: list[AgentInvocation],
+    *,
+    min_cluster_size: int = DEFAULT_MIN_CLUSTER_SIZE,
+    min_similarity: float = DEFAULT_MIN_SIMILARITY,
 ) -> DiagnosticsResult:
     """Run the full diagnostics pipeline on agent invocations.
 
     Extracts metadata + trace-level signals, dedups overlapping metadata
     error signals, scans for agent config files, correlates signals
-    with config, and produces recommendations. `subagent_trace_count`
-    on the result reflects traces that successfully parsed and linked,
-    not the raw filesystem enumeration.
+    with config, produces recommendations, and (when scikit-learn is
+    installed) proposes draft subagent definitions from clustered
+    general-purpose delegations. ``subagent_trace_count`` on the result
+    reflects traces that successfully parsed and linked, not the raw
+    filesystem enumeration.
     """
     signals = extract_signals(invocations)
 
@@ -92,20 +106,36 @@ def run_diagnostics(
 
     signals = _dedup_error_patterns(signals)
 
-    configs: dict[str, AgentConfig] | None = None
+    agent_configs: list[AgentConfig] = []
     try:
-        agent_configs = scan_agents("all")
-        if agent_configs:
-            configs = {c.name.lower(): c for c in agent_configs}
+        agent_configs = list(scan_agents("all"))
     except OSError:
         logger.debug("Could not scan agent config files", exc_info=True)
 
-    recommendations = correlate(signals, configs)
+    configs_by_name = (
+        {c.name.lower(): c for c in agent_configs} if agent_configs else None
+    )
+    recommendations = correlate(signals, configs_by_name)
 
     subagent_trace_count = sum(1 for inv in invocations if inv.trace is not None)
+
+    delegation_suggestions: list[DelegationSuggestion] = []
+    if _SKLEARN_AVAILABLE:
+        delegation_suggestions = suggest_delegations(
+            invocations,
+            existing_configs=agent_configs or None,
+            min_cluster_size=min_cluster_size,
+            min_similarity=min_similarity,
+        )
+    else:
+        logger.debug(
+            "Delegation clustering skipped: scikit-learn not installed. "
+            "Install agentfluent[clustering] to enable.",
+        )
 
     return DiagnosticsResult(
         signals=signals,
         recommendations=recommendations,
         subagent_trace_count=subagent_trace_count,
+        delegation_suggestions=delegation_suggestions,
     )
