@@ -1,10 +1,14 @@
 """Tests for the diagnostics orchestration pipeline.
 
 Covers: metadata/trace signal dedup, subagent_trace_count semantics,
-and backward compatibility of the public `run_diagnostics` import path.
+backward compatibility of the public `run_diagnostics` import path,
+and v0.2 output-shape regression for trace-less sessions.
 """
 
+import pytest
+
 from agentfluent.agents.models import AgentInvocation
+from agentfluent.diagnostics import TRACE_SIGNAL_TYPES
 from agentfluent.diagnostics.models import SignalType
 from agentfluent.diagnostics.pipeline import run_diagnostics
 from agentfluent.traces.models import (
@@ -166,7 +170,57 @@ class TestBackwardCompatImport:
         assert rd_from_pkg is run_diagnostics
 
     def test_trace_signal_types_exported(self) -> None:
-        from agentfluent.diagnostics import TRACE_SIGNAL_TYPES
-
         assert SignalType.STUCK_PATTERN in TRACE_SIGNAL_TYPES
         assert SignalType.ERROR_PATTERN not in TRACE_SIGNAL_TYPES
+
+
+class TestAgentConfigScanError:
+    def test_oserror_in_scan_agents_is_swallowed(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """OSError from scan_agents must not crash the pipeline.
+
+        A user with unreadable agent directories still needs diagnostics
+        — the failure path is a debug log, not a raise.
+        """
+        def raise_oserror(*_a: object, **_kw: object) -> list[object]:
+            raise OSError("simulated permission error")
+
+        monkeypatch.setattr(
+            "agentfluent.diagnostics.pipeline.scan_agents", raise_oserror,
+        )
+        # Pipeline completes without raising; correlator still runs,
+        # but all recommendations lack a config_file reference since
+        # configs=None.
+        result = run_diagnostics([_inv(output_text="operation failed")])
+        assert any(s.signal_type == SignalType.ERROR_PATTERN for s in result.signals)
+        assert all(r.config_file == "" for r in result.recommendations)
+
+
+class TestV02Regression:
+    """Trace-less sessions must produce v0.2-shaped output.
+
+    A session with no subagent traces (all `inv.trace is None`) exists in
+    two scenarios: (1) older sessions predating trace capture, (2)
+    sessions where no Agent tool was invoked. Both paths must yield
+    metadata-only signals and `subagent_trace_count == 0` — no trace
+    signal types, no regressions relative to pre-#107 behavior.
+    """
+
+    def test_no_trace_signals_when_invocations_lack_traces(self) -> None:
+        inv = _inv(output_text="permission denied on /etc/passwd")
+        result = run_diagnostics([inv])
+        # Only metadata ERROR_PATTERN should appear; no trace-level types.
+        assert not any(s.signal_type in TRACE_SIGNAL_TYPES for s in result.signals)
+        assert any(s.signal_type == SignalType.ERROR_PATTERN for s in result.signals)
+
+    def test_subagent_trace_count_zero_when_no_traces(self) -> None:
+        invs = [_inv(output_text=""), _inv(output_text="failed")]
+        result = run_diagnostics(invs)
+        assert result.subagent_trace_count == 0
+
+    def test_empty_invocations_produces_empty_result(self) -> None:
+        result = run_diagnostics([])
+        assert result.signals == []
+        assert result.recommendations == []
+        assert result.subagent_trace_count == 0

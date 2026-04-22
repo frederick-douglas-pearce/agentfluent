@@ -82,6 +82,13 @@ class TestErrorHandlingCorrelation:
         assert len(recs) == 1
         assert "more specific" in recs[0].action.lower()
 
+    def test_error_without_config(self) -> None:
+        signals = [_signal(keyword="failed")]
+        recs = correlate(signals, None)
+        assert len(recs) == 1
+        assert recs[0].target == "prompt"
+        assert recs[0].config_file == ""
+
 
 class TestTokenOutlierCorrelation:
     def test_with_large_tools_list(self) -> None:
@@ -124,6 +131,13 @@ class TestDurationOutlierCorrelation:
         recs = correlate(signals, configs)
         assert len(recs) == 1
         assert recs[0].target == "prompt"
+
+    def test_without_config(self) -> None:
+        signals = [_signal(signal_type=SignalType.DURATION_OUTLIER, keyword="")]
+        recs = correlate(signals, None)
+        assert len(recs) == 1
+        assert recs[0].target == "model"
+        assert recs[0].config_file == ""
 
 
 class TestCorrelateGeneral:
