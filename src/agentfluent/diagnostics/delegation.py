@@ -9,7 +9,7 @@ list of ``DelegationSuggestion`` records that surface on
 scikit-learn is an **optional extra** (``agentfluent[clustering]``).
 Users who only run ``agentfluent analyze`` without clustering flags do
 not need to install it. The top-level try/except sets
-``_SKLEARN_AVAILABLE``; direct callers of the public functions here
+``SKLEARN_AVAILABLE``; direct callers of the public functions here
 get a clear ``SklearnMissingError`` instead of an ImportError. The
 pipeline silently skips clustering when unavailable; the CLI surfaces
 an error + non-zero exit when a user explicitly passes a clustering
@@ -25,7 +25,7 @@ import logging
 import re
 import warnings
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 try:
@@ -36,10 +36,11 @@ try:
     from sklearn.metrics import silhouette_score
     from sklearn.metrics.pairwise import cosine_similarity
 
-    _SKLEARN_AVAILABLE = True
+    SKLEARN_AVAILABLE = True
 except ImportError:  # pragma: no cover — exercised via the install-path test
-    _SKLEARN_AVAILABLE = False
+    SKLEARN_AVAILABLE = False
 
+from agentfluent.agents.models import is_general_purpose
 from agentfluent.diagnostics.models import DelegationSuggestion
 
 if TYPE_CHECKING:
@@ -56,6 +57,8 @@ DEFAULT_MIN_SIMILARITY = 0.7
 _SILHOUETTE_K_MAX = 10        # upper bound on silhouette-selected k
 _SMALL_N_THRESHOLD = 10       # below this, force k=2 without silhouette
 _FORCED_SMALL_K = 2
+_KMEANS_RANDOM_STATE = 42     # default seed for reproducible clustering
+_KMEANS_N_INIT = 10           # KMeans restarts; higher resists bad local minima
 _CONFIDENCE_HIGH_SIZE = 10
 _CONFIDENCE_HIGH_COHESION = 0.8
 _CONFIDENCE_MEDIUM_COHESION = 0.6
@@ -90,25 +93,8 @@ class DelegationCluster:
 ConfidenceTier = Literal["high", "medium", "low"]
 
 
-@dataclass
-class AgentDraft:
-    """Internal: the synthesized draft before it becomes a DelegationSuggestion."""
-
-    name: str
-    description: str
-    model: str
-    tools: list[str]
-    tools_note: str
-    prompt_template: str
-    confidence: ConfidenceTier
-    cluster_size: int
-    cohesion_score: float
-    top_terms: list[str]
-    dedup_note: str = field(default="")
-
-
 def _require_sklearn() -> None:
-    if not _SKLEARN_AVAILABLE:
+    if not SKLEARN_AVAILABLE:
         raise SklearnMissingError(
             "Install agentfluent[clustering] to enable delegation analysis.",
         )
@@ -128,9 +114,26 @@ def _filter_candidates(
     """Keep general-purpose invocations with enough text to cluster on."""
     return [
         inv for inv in invocations
-        if inv.agent_type.lower() == "general-purpose"
+        if is_general_purpose(inv.agent_type)
         and _combined_text_tokens(inv) >= MIN_TEXT_TOKENS
     ]
+
+
+def _fit_kmeans(
+    embeddings: np.ndarray,
+    n_clusters: int,
+    *,
+    random_state: int = _KMEANS_RANDOM_STATE,
+    n_init: int = _KMEANS_N_INIT,
+) -> np.ndarray:
+    """Fit KMeans and return labels as a concrete ndarray.
+
+    Thin wrapper that fixes the ``random_state`` / ``n_init`` defaults
+    (both tunable via kwargs) and converts sklearn's ``Any``-typed
+    ``fit_predict`` return value to an ndarray so mypy stays strict.
+    """
+    km = KMeans(n_clusters=n_clusters, random_state=random_state, n_init=n_init)
+    return np.asarray(km.fit_predict(embeddings))
 
 
 def _cluster_embeddings(embeddings: np.ndarray, n_samples: int) -> np.ndarray:
@@ -142,19 +145,16 @@ def _cluster_embeddings(embeddings: np.ndarray, n_samples: int) -> np.ndarray:
     refit.
     """
     if n_samples < _SMALL_N_THRESHOLD:
-        km = KMeans(n_clusters=_FORCED_SMALL_K, random_state=42, n_init=10)
-        return np.asarray(km.fit_predict(embeddings))
+        return _fit_kmeans(embeddings, _FORCED_SMALL_K)
 
     k_upper = min(_SILHOUETTE_K_MAX, n_samples // 5)
     if k_upper < 2:
-        km = KMeans(n_clusters=_FORCED_SMALL_K, random_state=42, n_init=10)
-        return np.asarray(km.fit_predict(embeddings))
+        return _fit_kmeans(embeddings, _FORCED_SMALL_K)
 
     best_labels: np.ndarray | None = None
     best_score = -1.0
     for k in range(2, k_upper + 1):
-        km = KMeans(n_clusters=k, random_state=42, n_init=10)
-        labels = np.asarray(km.fit_predict(embeddings))
+        labels = _fit_kmeans(embeddings, k)
         if len(set(labels)) < 2:
             continue
         score = silhouette_score(embeddings, labels)
@@ -176,8 +176,7 @@ def _cluster_embeddings(embeddings: np.ndarray, n_samples: int) -> np.ndarray:
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            km = KMeans(n_clusters=_FORCED_SMALL_K, random_state=42, n_init=10)
-            return np.asarray(km.fit_predict(embeddings))
+            return _fit_kmeans(embeddings, _FORCED_SMALL_K)
 
     return best_labels
 
@@ -224,14 +223,19 @@ def _all_rows_identical(tfidf_matrix: np.ndarray) -> bool:
     non-probabilistic output. Detecting this case lets us emit a clear
     warning instead of silently producing zero clusters or sklearn
     convergence noise.
+
+    Densifies once and compares rows to row 0 with a vectorized numpy
+    equality check. A single ``toarray()`` + broadcast is ~O(n × features);
+    faster and more predictable than a row-by-row densify loop, and
+    avoids sparse-sparse ``!=`` short-circuit quirks across scipy
+    versions.
     """
     if tfidf_matrix.shape[0] <= 1:
         return True
-    first = tfidf_matrix[0].toarray()
-    for i in range(1, tfidf_matrix.shape[0]):
-        if not np.array_equal(tfidf_matrix[i].toarray(), first):
-            return False
-    return True
+    # sklearn TfidfVectorizer returns a scipy sparse matrix, not a
+    # numpy ndarray — no type stubs for scipy.sparse in this project.
+    dense = tfidf_matrix.toarray()  # type: ignore[attr-defined]
+    return bool((dense == dense[0]).all())
 
 
 def _build_single_cluster(
@@ -409,14 +413,14 @@ def _classify_confidence(cluster_size: int, cohesion: float) -> ConfidenceTier:
     return "low"
 
 
-def generate_draft(cluster: DelegationCluster) -> AgentDraft:
+def generate_draft(cluster: DelegationCluster) -> DelegationSuggestion:
     """Synthesize a draft subagent definition from a cluster."""
     tools = _collect_tools_from_traces(cluster.members)
     tools_note = (
         "" if tools
         else "# run with newer session data for tool recommendations"
     )
-    return AgentDraft(
+    return DelegationSuggestion(
         name=_synthesize_name(cluster.top_terms),
         description=_synthesize_description(cluster.top_terms),
         model=_classify_model(tools, cluster.members),
@@ -443,10 +447,10 @@ def _config_text(config: AgentConfig) -> str:
 
 
 def _apply_dedup(
-    drafts: list[AgentDraft],
+    drafts: list[DelegationSuggestion],
     existing_configs: list[AgentConfig],
     min_similarity: float,
-) -> list[AgentDraft]:
+) -> list[DelegationSuggestion]:
     """Mark drafts whose description+prompt is too close to any existing
     agent config. Deduped drafts are NOT removed from the output — they
     ship with a ``dedup_note`` so users see what was suppressed and why.
@@ -479,22 +483,6 @@ def _apply_dedup(
     return drafts
 
 
-def _draft_to_suggestion(draft: AgentDraft) -> DelegationSuggestion:
-    return DelegationSuggestion(
-        name=draft.name,
-        description=draft.description,
-        model=draft.model,
-        tools=draft.tools,
-        tools_note=draft.tools_note,
-        prompt_template=draft.prompt_template,
-        confidence=draft.confidence,
-        cluster_size=draft.cluster_size,
-        cohesion_score=draft.cohesion_score,
-        top_terms=draft.top_terms,
-        dedup_note=draft.dedup_note,
-    )
-
-
 def suggest_delegations(
     invocations: list[AgentInvocation],
     *,
@@ -515,4 +503,4 @@ def suggest_delegations(
     drafts = [generate_draft(c) for c in clusters]
     if existing_configs:
         drafts = _apply_dedup(drafts, existing_configs, min_similarity)
-    return [_draft_to_suggestion(d) for d in drafts]
+    return drafts

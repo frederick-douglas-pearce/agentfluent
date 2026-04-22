@@ -21,7 +21,6 @@ from agentfluent.diagnostics.delegation import (  # noqa: E402
     MODEL_HAIKU,
     MODEL_OPUS,
     MODEL_SONNET,
-    AgentDraft,
     DelegationCluster,
     SklearnMissingError,
     _apply_dedup,
@@ -32,6 +31,7 @@ from agentfluent.diagnostics.delegation import (  # noqa: E402
     generate_draft,
     suggest_delegations,
 )
+from agentfluent.diagnostics.models import DelegationSuggestion  # noqa: E402
 from agentfluent.traces.models import SubagentToolCall, SubagentTrace  # noqa: E402
 
 
@@ -297,8 +297,10 @@ class TestClassifyHelpers:
 
 
 class TestDedup:
-    def _draft(self, description: str = "run pytest suite") -> AgentDraft:
-        return AgentDraft(
+    def _draft(
+        self, description: str = "run pytest suite",
+    ) -> DelegationSuggestion:
+        return DelegationSuggestion(
             name="test-runner",
             description=description,
             model=MODEL_SONNET,
@@ -413,13 +415,13 @@ class TestSklearnMissing:
     def test_cluster_delegations_raises_when_sklearn_unavailable(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setattr(delegation, "_SKLEARN_AVAILABLE", False)
+        monkeypatch.setattr(delegation, "SKLEARN_AVAILABLE", False)
         with pytest.raises(SklearnMissingError, match="agentfluent\\[clustering\\]"):
             cluster_delegations(_TEST_INVS)
 
     def test_suggest_delegations_raises_when_sklearn_unavailable(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setattr(delegation, "_SKLEARN_AVAILABLE", False)
+        monkeypatch.setattr(delegation, "SKLEARN_AVAILABLE", False)
         with pytest.raises(SklearnMissingError):
             suggest_delegations(_TEST_INVS)

@@ -17,9 +17,9 @@ from agentfluent.core.discovery import find_project
 from agentfluent.core.paths import projects_dir_for
 from agentfluent.diagnostics import run_diagnostics
 from agentfluent.diagnostics.delegation import (
-    _SKLEARN_AVAILABLE,
     DEFAULT_MIN_CLUSTER_SIZE,
     DEFAULT_MIN_SIMILARITY,
+    SKLEARN_AVAILABLE,
 )
 
 ANALYZE_EPILOG = """\
@@ -146,7 +146,7 @@ def analyze(
     # absent — the lean install stays usable.
     if (
         min_cluster_size is not None or min_similarity is not None
-    ) and not _SKLEARN_AVAILABLE:
+    ) and not SKLEARN_AVAILABLE:
         err_console.print(
             "[red]Error:[/red] Delegation clustering requires scikit-learn. "
             "Install with: [bold]uv pip install 'agentfluent[clustering]'[/bold]",

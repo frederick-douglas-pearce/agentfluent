@@ -271,7 +271,7 @@ class TestDelegationSuggestions:
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr(
-            "agentfluent.diagnostics.pipeline._SKLEARN_AVAILABLE", False,
+            "agentfluent.diagnostics.pipeline.SKLEARN_AVAILABLE", False,
         )
         # Silent skip — no raise, no suggestions, other output intact.
         result = run_diagnostics(self._GP_INVS)

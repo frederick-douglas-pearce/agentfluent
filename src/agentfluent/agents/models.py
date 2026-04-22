@@ -20,9 +20,17 @@ BUILTIN_AGENT_TYPES: frozenset[str] = frozenset(
 )
 
 
+GENERAL_PURPOSE_AGENT_TYPE = "general-purpose"
+
+
 def is_builtin_agent(agent_type: str) -> bool:
     """Check if an agent type is a built-in Claude Code agent."""
     return agent_type.lower() in BUILTIN_AGENT_TYPES
+
+
+def is_general_purpose(agent_type: str) -> bool:
+    """Check if an agent type is the built-in ``general-purpose`` agent."""
+    return agent_type.lower() == GENERAL_PURPOSE_AGENT_TYPE
 
 
 class AgentInvocation(BaseModel):

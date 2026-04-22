@@ -15,6 +15,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from agentfluent.cli.formatters.helpers import (
+    CONFIDENCE_COLORS,
     SEVERITY_COLORS,
     average_score,
     format_cost,
@@ -398,9 +399,8 @@ def _format_delegation_suggestions(
     sug_table.add_column("Tools")
     sug_table.add_column("Note")
 
-    confidence_colors = {"high": "green", "medium": "yellow", "low": "red"}
     for sug in suggestions:
-        color = confidence_colors.get(sug.confidence, "white")
+        color = CONFIDENCE_COLORS.get(sug.confidence, "white")
         tools_display = (
             ", ".join(sug.tools) if sug.tools
             else escape(sug.tools_note) or "[dim]—[/dim]"

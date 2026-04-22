@@ -22,9 +22,9 @@ from agentfluent.config.models import AgentConfig
 from agentfluent.config.scanner import scan_agents
 from agentfluent.diagnostics.correlator import correlate
 from agentfluent.diagnostics.delegation import (
-    _SKLEARN_AVAILABLE,
     DEFAULT_MIN_CLUSTER_SIZE,
     DEFAULT_MIN_SIMILARITY,
+    SKLEARN_AVAILABLE,
     suggest_delegations,
 )
 from agentfluent.diagnostics.models import (
@@ -120,7 +120,7 @@ def run_diagnostics(
     subagent_trace_count = sum(1 for inv in invocations if inv.trace is not None)
 
     delegation_suggestions: list[DelegationSuggestion] = []
-    if _SKLEARN_AVAILABLE:
+    if SKLEARN_AVAILABLE:
         delegation_suggestions = suggest_delegations(
             invocations,
             existing_configs=agent_configs or None,
