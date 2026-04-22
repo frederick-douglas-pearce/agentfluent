@@ -323,3 +323,55 @@ class TestErrorSequenceCorrelation:
         signals = [_err_seq_signal(count=4, severity=Severity.CRITICAL)]
         recs = correlate(signals, None)
         assert recs[0].severity == Severity.CRITICAL
+
+
+def _model_mismatch_signal(
+    mismatch_type: str = "overspec",
+    current_model: str = "claude-opus-4-7",
+    recommended_model: str = "claude-haiku-4-5",
+    savings: float | None = 12.50,
+    agent_type: str = "pm",
+) -> DiagnosticSignal:
+    return _signal(
+        signal_type=SignalType.MODEL_MISMATCH,
+        severity=Severity.WARNING,
+        agent_type=agent_type,
+        detail={
+            "mismatch_type": mismatch_type,
+            "current_model": current_model,
+            "recommended_model": recommended_model,
+            "complexity_tier": "simple" if mismatch_type == "overspec" else "complex",
+            "invocation_count": 8,
+            "mean_tool_calls": 2.5,
+            "mean_tokens": 500.0,
+            "error_rate": 0.0,
+            "estimated_savings_usd": savings,
+            "current_cost_usd": 20.0 if savings is not None else None,
+        },
+        message=f"{mismatch_type.capitalize()}'d model: {agent_type} on {current_model}",
+    )
+
+
+class TestModelRoutingCorrelation:
+    def test_overspec_with_config_includes_savings(self) -> None:
+        signals = [_model_mismatch_signal(savings=12.5)]
+        configs = {"pm": _config()}
+        recs = correlate(signals, configs)
+        assert len(recs) == 1
+        assert recs[0].target == "model"
+        assert "12.50" in recs[0].action
+        assert "pm.md" in recs[0].config_file
+
+    def test_overspec_without_pricing_omits_savings_phrase(self) -> None:
+        signals = [_model_mismatch_signal(savings=None)]
+        configs = {"pm": _config()}
+        recs = correlate(signals, configs)
+        assert len(recs) == 1
+        # "savings:" phrase only emitted when dollars are known.
+        assert "savings:" not in recs[0].action.lower()
+
+    def test_without_config(self) -> None:
+        signals = [_model_mismatch_signal(savings=12.5)]
+        recs = correlate(signals, None)
+        assert len(recs) == 1
+        assert recs[0].config_file == ""

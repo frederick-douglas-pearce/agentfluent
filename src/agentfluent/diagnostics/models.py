@@ -25,6 +25,9 @@ class SignalType(StrEnum):
     Trace-level signals (extracted from `SubagentTrace` evidence):
     - `TOOL_ERROR_SEQUENCE`, `RETRY_LOOP`, `PERMISSION_FAILURE`,
       `STUCK_PATTERN`
+
+    Aggregate-level signals (extracted from per-agent-type rollups):
+    - `MODEL_MISMATCH`
     """
 
     ERROR_PATTERN = "error_pattern"
@@ -34,6 +37,7 @@ class SignalType(StrEnum):
     RETRY_LOOP = "retry_loop"
     PERMISSION_FAILURE = "permission_failure"
     STUCK_PATTERN = "stuck_pattern"
+    MODEL_MISMATCH = "model_mismatch"
 
 
 class DiagnosticSignal(BaseModel):

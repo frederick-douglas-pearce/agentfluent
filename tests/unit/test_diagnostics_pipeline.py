@@ -276,3 +276,49 @@ class TestDelegationSuggestions:
         # Silent skip — no raise, no suggestions, other output intact.
         result = run_diagnostics(self._GP_INVS)
         assert result.delegation_suggestions == []
+
+
+class TestModelRoutingWiring:
+    """Sanity wiring check — the real model-routing logic is covered by
+    test_model_routing.py. Here we just verify signals flow through
+    run_diagnostics and become correlator recommendations."""
+
+    def test_model_mismatch_signal_produces_target_model_recommendation(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from pathlib import Path
+
+        from agentfluent.config.models import AgentConfig, Scope
+        from agentfluent.diagnostics.delegation import MODEL_OPUS
+
+        # 5 "pm" invocations with simple workload but declaring Opus —
+        # overspec case. Stub scan_agents to return a config that
+        # declares model=Opus; otherwise the agent gets skipped.
+        def fake_scan(_scope: str) -> list[AgentConfig]:
+            return [
+                AgentConfig(
+                    name="pm",
+                    file_path=Path("/home/user/.claude/agents/pm.md"),
+                    scope=Scope.USER,
+                    model=MODEL_OPUS,
+                ),
+            ]
+        monkeypatch.setattr(
+            "agentfluent.diagnostics.pipeline.scan_agents", fake_scan,
+        )
+
+        invs = [
+            AgentInvocation(
+                agent_type="pm",
+                is_builtin=False,
+                description="task",
+                prompt="do it",
+                tool_use_id=f"t{i}",
+                total_tokens=500,
+                tool_uses=2,
+            )
+            for i in range(5)
+        ]
+        result = run_diagnostics(invs)
+        assert any(s.signal_type == SignalType.MODEL_MISMATCH for s in result.signals)
+        assert any(r.target == "model" for r in result.recommendations)
