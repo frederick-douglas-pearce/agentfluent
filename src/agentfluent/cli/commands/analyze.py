@@ -16,6 +16,11 @@ from agentfluent.cli.formatters.table import format_analysis_table
 from agentfluent.core.discovery import find_project
 from agentfluent.core.paths import projects_dir_for
 from agentfluent.diagnostics import run_diagnostics
+from agentfluent.diagnostics.delegation import (
+    DEFAULT_MIN_CLUSTER_SIZE,
+    DEFAULT_MIN_SIMILARITY,
+    SKLEARN_AVAILABLE,
+)
 
 ANALYZE_EPILOG = """\
 Examples:
@@ -110,12 +115,43 @@ def analyze(
         "-f",
         help="Output format: table or json.",
     ),
+    min_cluster_size: Optional[int] = typer.Option(  # noqa: UP007, UP045
+        None,
+        "--min-cluster-size",
+        help=(
+            "Delegation clustering: minimum invocations per cluster "
+            f"(default {DEFAULT_MIN_CLUSTER_SIZE}). Requires "
+            "agentfluent[clustering]."
+        ),
+    ),
+    min_similarity: Optional[float] = typer.Option(  # noqa: UP007, UP045
+        None,
+        "--min-similarity",
+        help=(
+            "Delegation dedup: cosine similarity threshold against existing "
+            f"agents (default {DEFAULT_MIN_SIMILARITY}). Requires "
+            "agentfluent[clustering]."
+        ),
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output."),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Show summary only."),
 ) -> None:
     """Analyze agent sessions for token usage, cost, and behavior diagnostics."""
     if verbose and quiet:
         raise typer.BadParameter("--verbose and --quiet are mutually exclusive")
+
+    # Fail fast if the user explicitly asked for clustering-tuning behavior
+    # but the optional extra is not installed. When both flags are left at
+    # their defaults (None), clustering is silently skipped if sklearn is
+    # absent — the lean install stays usable.
+    if (
+        min_cluster_size is not None or min_similarity is not None
+    ) and not SKLEARN_AVAILABLE:
+        err_console.print(
+            "[red]Error:[/red] Delegation clustering requires scikit-learn. "
+            "Install with: [bold]uv pip install 'agentfluent[clustering]'[/bold]",
+        )
+        raise typer.Exit(code=EXIT_USER_ERROR)
 
     config_dir: Path | None = ctx.obj.claude_config_dir if ctx.obj else None
 
@@ -147,7 +183,17 @@ def analyze(
     all_invocations = [inv for s in result.sessions for inv in s.invocations]
 
     if all_invocations:
-        result.diagnostics = run_diagnostics(all_invocations)
+        result.diagnostics = run_diagnostics(
+            all_invocations,
+            min_cluster_size=(
+                min_cluster_size if min_cluster_size is not None
+                else DEFAULT_MIN_CLUSTER_SIZE
+            ),
+            min_similarity=(
+                min_similarity if min_similarity is not None
+                else DEFAULT_MIN_SIMILARITY
+            ),
+        )
     elif result.agent_metrics.total_invocations == 0 and diagnostics:
         console.print(
             "[dim]No agent invocations found -- "

@@ -224,3 +224,55 @@ class TestV02Regression:
         assert result.signals == []
         assert result.recommendations == []
         assert result.subagent_trace_count == 0
+
+
+class TestDelegationSuggestions:
+    """Pipeline wiring for the clustering feature. Real clustering
+    behavior is covered in test_delegation.py; this class just confirms
+    the suggestions surface on DiagnosticsResult and that the sklearn-
+    unavailable path is silently skipped (not raised)."""
+
+    # 10 general-purpose delegations representing a single recurring
+    # pattern — reading + summarizing different files. Each has distinct
+    # text (as a real parent agent would generate) but shares the
+    # dominant content words. Combined length clears MIN_TEXT_TOKENS.
+    _GP_INVS = [
+        AgentInvocation(
+            agent_type="general-purpose",
+            is_builtin=True,
+            description=f"read file {target} and summarize",
+            prompt=(
+                f"Read the file {target} from the repository and produce "
+                "a concise summary of the main functions, classes, and "
+                f"dependencies. Focus on the public surface of {target}."
+            ),
+            tool_use_id=f"tool_{i}",
+        )
+        for i, target in enumerate([
+            "auth/tokens.py",
+            "auth/sessions.py",
+            "db/migrations.py",
+            "db/schema.py",
+            "api/handlers.py",
+            "api/routes.py",
+            "core/config.py",
+            "core/logging.py",
+            "utils/strings.py",
+            "utils/paths.py",
+        ])
+    ]
+
+    def test_pipeline_populates_delegation_suggestions(self) -> None:
+        pytest.importorskip("sklearn")
+        result = run_diagnostics(self._GP_INVS)
+        assert len(result.delegation_suggestions) >= 1
+
+    def test_pipeline_empty_suggestions_when_sklearn_missing(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            "agentfluent.diagnostics.pipeline.SKLEARN_AVAILABLE", False,
+        )
+        # Silent skip — no raise, no suggestions, other output intact.
+        result = run_diagnostics(self._GP_INVS)
+        assert result.delegation_suggestions == []

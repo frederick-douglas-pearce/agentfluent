@@ -16,6 +16,12 @@ SEVERITY_COLORS: dict[Severity, str] = {
     Severity.INFO: "cyan",
 }
 
+CONFIDENCE_COLORS: dict[str, str] = {
+    "high": "green",
+    "medium": "yellow",
+    "low": "red",
+}
+
 
 def format_cost(cost: float) -> str:
     """Format a dollar cost for display."""

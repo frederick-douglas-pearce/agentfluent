@@ -28,6 +28,9 @@ dependencies = [
     "pyyaml>=6.0",
 ]
 
+[project.optional-dependencies]
+clustering = ["scikit-learn>=1.4"]
+
 [project.urls]
 Homepage = "https://github.com/frederick-douglas-pearce/agentfluent"
 Repository = "https://github.com/frederick-douglas-pearce/agentfluent"
@@ -44,6 +47,7 @@ dev = [
     "ruff>=0.11",
     "mypy>=1.15",
     "types-pyyaml>=6.0",
+    "scikit-learn>=1.4",
 ]
 
 [build-system]
@@ -75,3 +79,7 @@ python_version = "3.12"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = ["sklearn.*"]
+ignore_missing_imports = true
