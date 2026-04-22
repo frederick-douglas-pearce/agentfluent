@@ -428,3 +428,19 @@ class TestCrossReferenceEnrichment:
         signals = [self._mismatch_signal(agent_type="pm")]
         _enrich_dedup_with_mismatches(suggestions, signals)
         assert "claude-haiku-4-5" in suggestions[0].dedup_note
+
+    def test_enrichment_strips_trailing_punctuation_from_dedup_note(self) -> None:
+        # Regression guard: if the dedup_note format ever gains a
+        # trailing period, the appended mismatch phrase should still
+        # produce a well-formed single-sentence output, not "..). Note: ..".
+        suggestions = [
+            self._suggestion(
+                matched_agent="pm",
+                dedup_note="suppressed — already covered by 'pm'.",
+            ),
+        ]
+        signals = [self._mismatch_signal(agent_type="pm")]
+        _enrich_dedup_with_mismatches(suggestions, signals)
+        note = suggestions[0].dedup_note
+        assert ".." not in note  # no double-period from naive concat
+        assert "pm" in note and "claude-haiku-4-5" in note

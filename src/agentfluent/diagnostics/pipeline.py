@@ -60,7 +60,9 @@ def _append_mismatch_phrase(
     Format mirrors `ModelRoutingRule.recommend`'s action text so the
     user sees the same phrasing across the "Suggested Subagents" and
     "Recommendations" surfaces. Omits the savings clause when pricing
-    is unavailable.
+    is unavailable. The original dedup prefix ("suppressed — already
+    covered by ... (similarity ...)") is preserved intact so existing
+    CLI parsing and assertions still hold.
     """
     detail = signal.detail
     matched_name = str(detail.get("current_model", ""))
@@ -77,10 +79,11 @@ def _append_mismatch_phrase(
         clauses.append(
             f"est. savings ${savings:.2f} across {invocation_count} invocations",
         )
-    # Mutate the note in place by appending the new sentence. Keep the
-    # original "suppressed — already covered by ... (similarity ...)"
-    # prefix intact so existing CLI parsing / assertions still hold.
-    return f"{dedup_note}. {'; '.join(clauses)}."
+    # Strip trailing terminal punctuation from the incoming note so the
+    # ". " separator produces a well-formed sentence regardless of the
+    # dedup-note format's current or future shape.
+    prefix = dedup_note.rstrip(" .;")
+    return f"{prefix}. {'; '.join(clauses)}."
 
 
 def _enrich_dedup_with_mismatches(
@@ -95,7 +98,13 @@ def _enrich_dedup_with_mismatches(
     ``dedup_note`` with the mismatch summary so the user sees both
     facts in one place. Non-deduped suggestions and non-mismatch
     signals are ignored.
+
+    Agent names are matched case-insensitively so frontmatter casing
+    (``PM`` in the draft vs ``pm`` in the signal) does not defeat the
+    cross-reference.
     """
+    if not suggestions:
+        return
     mismatches_by_agent: dict[str, DiagnosticSignal] = {
         s.agent_type.lower(): s
         for s in signals
