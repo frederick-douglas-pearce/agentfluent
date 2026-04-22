@@ -40,7 +40,7 @@ try:
 except ImportError:  # pragma: no cover — exercised via the install-path test
     SKLEARN_AVAILABLE = False
 
-from agentfluent.agents.models import is_general_purpose
+from agentfluent.agents.models import WRITE_TOOLS, is_general_purpose
 from agentfluent.diagnostics.models import DelegationSuggestion
 
 if TYPE_CHECKING:
@@ -65,7 +65,6 @@ _CONFIDENCE_MEDIUM_COHESION = 0.6
 _TOOL_READ_ONLY = frozenset(
     {"Read", "Grep", "Glob", "WebFetch", "WebSearch", "LS"},
 )
-_TOOL_HEAVY_WRITE = frozenset({"Write", "Edit", "Bash", "NotebookEdit"})
 _HEAVY_TOKEN_THRESHOLD = 20_000
 _TOP_TERMS_COUNT = 5
 _PROMPT_BODY_SNIPPET_CHARS = 500
@@ -400,7 +399,7 @@ def _classify_model(tools: list[str], members: list[AgentInvocation]) -> str:
     tool_set = set(tools)
     if tool_set and tool_set <= _TOOL_READ_ONLY:
         return MODEL_HAIKU
-    if tool_set & _TOOL_HEAVY_WRITE and _mean_tokens(members) > _HEAVY_TOKEN_THRESHOLD:
+    if tool_set & WRITE_TOOLS and _mean_tokens(members) > _HEAVY_TOKEN_THRESHOLD:
         return MODEL_OPUS
     return MODEL_SONNET
 

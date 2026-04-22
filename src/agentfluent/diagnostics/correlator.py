@@ -433,9 +433,9 @@ class ModelRoutingRule:
             )
         if config:
             action_parts.append(f"— edit the `model:` field in {config.file_path}.")
+            action = " ".join(action_parts)
         else:
-            action_parts[-1] = action_parts[-1] + "."
-        action = " ".join(action_parts)
+            action = " ".join(action_parts) + "."
 
         return DiagnosticRecommendation(
             target="model",

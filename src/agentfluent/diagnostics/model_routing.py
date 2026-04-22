@@ -30,8 +30,9 @@ import logging
 from collections import defaultdict
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
+from agentfluent.agents.models import WRITE_TOOLS
 from agentfluent.analytics.pricing import compute_cost, get_pricing
 from agentfluent.config.models import Severity
 from agentfluent.diagnostics.delegation import MODEL_HAIKU, MODEL_OPUS, MODEL_SONNET
@@ -58,15 +59,6 @@ _COMPLEX_MIN_TOOL_CALLS = 10
 _COMPLEX_MIN_TOKENS = 5_000
 _COMPLEX_MIN_ERROR_RATE = 0.20
 
-# Tool tiers — mirrored from delegation.py's classification. Kept as
-# local copies so model_routing doesn't depend on private helpers in
-# delegation; the read-only set is the meaningful contract.
-_READ_ONLY_TOOLS = frozenset(
-    {"Read", "Grep", "Glob", "WebFetch", "WebSearch", "LS"},
-)
-_WRITE_TOOLS = frozenset({"Write", "Edit", "Bash", "NotebookEdit"})
-
-
 # Mapping: declared model → complexity tier the model is suited for.
 # Older/unknown aliases fall through to "moderate" via .get().
 MODEL_TIER_MAP: dict[str, ComplexityTier] = {
@@ -88,7 +80,6 @@ class AgentStats(BaseModel):
     current_model: str | None
     """Declared model from `AgentConfig.model` — None if the agent has
     no config or the config doesn't set a model. MVP skips None."""
-    observed_tools: set[str] = Field(default_factory=set)
 
 
 def _compute_error_rate(inv: AgentInvocation) -> float:
@@ -113,13 +104,7 @@ def _has_write_tools_in_trace(inv: AgentInvocation) -> bool:
     trace = inv.trace
     if trace is None:
         return False
-    return bool(trace.unique_tool_names & _WRITE_TOOLS)
-
-
-def _invocation_tools(inv: AgentInvocation) -> set[str]:
-    if inv.trace is None:
-        return set()
-    return set(inv.trace.unique_tool_names)
+    return bool(trace.unique_tool_names & WRITE_TOOLS)
 
 
 def aggregate_agent_stats(
@@ -144,9 +129,6 @@ def aggregate_agent_stats(
         token_values = [i.total_tokens for i in group if i.total_tokens is not None]
         error_rates = [_compute_error_rate(i) for i in group]
         has_writes = any(_has_write_tools_in_trace(i) for i in group)
-        observed: set[str] = set()
-        for inv in group:
-            observed.update(_invocation_tools(inv))
 
         config = configs.get(key) if configs else None
         current_model = config.model if (config and config.model) else None
@@ -167,7 +149,6 @@ def aggregate_agent_stats(
             ),
             has_write_tools=has_writes,
             current_model=current_model,
-            observed_tools=observed,
         )
     return stats_by_type
 
@@ -225,15 +206,21 @@ def _build_mismatch_signal(
     complexity: ComplexityTier,
     recommended_model: str,
 ) -> DiagnosticSignal:
-    savings, current_cost = _compute_savings(stats, recommended_model)
+    # Savings are only meaningful for overspec (cheap recommended model).
+    # For underspec, Haiku → Sonnet costs MORE; `max(0.0, ...)` would
+    # always wipe it to zero anyway, so skip the pricing lookup.
+    if mismatch_type == "overspec":
+        savings, current_cost = _compute_savings(stats, recommended_model)
+    else:
+        savings, current_cost = None, None
     phrase = (
         f"complexity '{complexity}' agent '{stats.agent_type}' runs on "
         f"{stats.current_model} — consider {recommended_model}"
     )
-    if mismatch_type == "overspec":
-        message = f"Overspec'd model: {phrase}."
-    else:
-        message = f"Underspec'd model: {phrase}."
+    message = (
+        f"Overspec'd model: {phrase}." if mismatch_type == "overspec"
+        else f"Underspec'd model: {phrase}."
+    )
     return DiagnosticSignal(
         signal_type=SignalType.MODEL_MISMATCH,
         severity=Severity.WARNING,

@@ -22,6 +22,14 @@ BUILTIN_AGENT_TYPES: frozenset[str] = frozenset(
 
 GENERAL_PURPOSE_AGENT_TYPE = "general-purpose"
 
+# Tools that cause state changes to the host environment. Used by
+# diagnostics modules (delegation, model_routing) to classify task
+# complexity — presence of any of these signals a write workload that
+# typically needs a higher-tier model or different routing.
+WRITE_TOOLS: frozenset[str] = frozenset(
+    {"Write", "Edit", "Bash", "NotebookEdit"},
+)
+
 
 def is_builtin_agent(agent_type: str) -> bool:
     """Check if an agent type is a built-in Claude Code agent."""
