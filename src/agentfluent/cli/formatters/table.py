@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from agentfluent.cli.formatters.helpers import (
@@ -21,6 +22,7 @@ from agentfluent.cli.formatters.helpers import (
     format_size,
     format_tokens,
     score_color,
+    truncate,
 )
 
 API_RATE_FOOTNOTE = (
@@ -33,7 +35,7 @@ if TYPE_CHECKING:
     from agentfluent.analytics.pipeline import AnalysisResult
     from agentfluent.config.models import ConfigScore
     from agentfluent.core.discovery import ProjectInfo, SessionInfo
-    from agentfluent.diagnostics.models import DiagnosticsResult
+    from agentfluent.diagnostics.models import DiagnosticSignal, DiagnosticsResult
 
 
 def format_projects_table(
@@ -218,12 +220,14 @@ def format_analysis_table(
                 tokens = format_tokens(inv.total_tokens) if inv.total_tokens else "-"
                 tools = str(inv.tool_uses) if inv.tool_uses else "-"
                 duration = f"{inv.duration_ms / 1000:.1f}s" if inv.duration_ms else "-"
-                desc = (
-                    inv.description
-                    if len(inv.description) <= 60
-                    else inv.description[:57] + "..."
+                desc = truncate(inv.description, 60)
+                inv_table.add_row(
+                    escape(inv.agent_type),
+                    escape(desc),
+                    tokens,
+                    tools,
+                    duration,
                 )
-                inv_table.add_row(inv.agent_type, desc, tokens, tools, duration)
         console.print(inv_table)
 
     console.print(API_RATE_FOOTNOTE, style="dim")
@@ -255,10 +259,10 @@ def _format_diagnostics_table(
         for sig in diag.signals:
             color = SEVERITY_COLORS.get(sig.severity, "white")
             sig_table.add_row(
-                sig.agent_type,
-                sig.signal_type.value,
+                escape(sig.agent_type),
+                escape(sig.signal_type.value),
                 f"[{color}]{sig.severity.value}[/{color}]",
-                sig.message,
+                escape(sig.message),
             )
         console.print(sig_table)
 
@@ -277,26 +281,91 @@ def _format_diagnostics_table(
             color = SEVERITY_COLORS.get(rec.severity, "white")
             if verbose:
                 rec_table.add_row(
-                    rec.agent_type,
-                    rec.target,
+                    escape(rec.agent_type),
+                    escape(rec.target),
                     f"[{color}]{rec.severity.value}[/{color}]",
-                    rec.observation,
-                    rec.action,
+                    escape(rec.observation),
+                    escape(rec.action),
                 )
             else:
                 rec_table.add_row(
-                    rec.agent_type,
-                    rec.target,
+                    escape(rec.agent_type),
+                    escape(rec.target),
                     f"[{color}]{rec.severity.value}[/{color}]",
-                    rec.message,
+                    escape(rec.message),
                 )
         console.print(rec_table)
 
-    if diag.subagent_trace_count > 0:
+    _format_deep_diagnostics(console, diag, verbose=verbose)
+
+
+def _format_deep_diagnostics(
+    console: Console,
+    diag: DiagnosticsResult,
+    *,
+    verbose: bool,
+) -> None:
+    """Render the Deep Diagnostics section with trace-signal evidence.
+
+    Compact summary by default; per-signal evidence sub-tables under
+    --verbose. Emits nothing when no trace-level signals are present.
+    """
+    from agentfluent.diagnostics import TRACE_SIGNAL_TYPES
+
+    trace_signals = [s for s in diag.signals if s.signal_type in TRACE_SIGNAL_TYPES]
+    if not trace_signals:
+        return
+
+    unique_agents = {s.agent_type for s in trace_signals}
+    if not verbose:
         console.print(
-            f"\n[dim]{diag.subagent_trace_count} subagent trace files available. "
-            "Deep diagnostics (per-tool-call analysis) coming in v1.1.[/dim]"
+            f"\n[bold]Deep Diagnostics:[/bold] {len(trace_signals)} trace signal(s) "
+            f"across {len(unique_agents)} subagent(s). "
+            "Use [bold]--verbose[/bold] for per-call evidence."
         )
+        return
+
+    console.print("\n[bold]Deep Diagnostics[/bold]")
+    for sig in trace_signals:
+        _render_trace_signal_evidence(console, sig)
+
+
+def _render_trace_signal_evidence(console: Console, sig: DiagnosticSignal) -> None:
+    """Render one trace signal with its evidence sub-table.
+
+    All JSONL-sourced strings (agent_type, message, and every evidence
+    dict field) are escaped before being passed to Rich — trace content
+    is untrusted and could otherwise smuggle markup like `[link=…]`.
+    """
+    color = SEVERITY_COLORS.get(sig.severity, "white")
+    header = (
+        f"\n[{color}]{escape(sig.signal_type.value)}[/{color}] "
+        f"[cyan]{escape(sig.agent_type)}[/cyan] — {escape(sig.message)}"
+    )
+    console.print(header)
+
+    evidence = sig.detail.get("tool_calls", [])
+    if not isinstance(evidence, list) or not evidence:
+        return
+
+    ev_table = Table(show_header=True, box=None, padding=(0, 1))
+    ev_table.add_column("#", style="dim", justify="right")
+    ev_table.add_column("Tool")
+    ev_table.add_column("Input", overflow="fold")
+    ev_table.add_column("Err", justify="center")
+    ev_table.add_column("Result", overflow="fold")
+
+    for entry in evidence:
+        if not isinstance(entry, dict):
+            continue
+        ev_table.add_row(
+            escape(str(entry.get("index", ""))),
+            escape(str(entry.get("tool_name", ""))),
+            escape(truncate(str(entry.get("input_summary", "")), 60)),
+            "✗" if entry.get("is_error") else "",
+            escape(truncate(str(entry.get("result_summary", "")), 60)),
+        )
+    console.print(ev_table)
 
 
 def _format_diagnostics_summary(console: Console, diag: DiagnosticsResult) -> None:
