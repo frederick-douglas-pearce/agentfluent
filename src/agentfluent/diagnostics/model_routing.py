@@ -60,11 +60,26 @@ _COMPLEX_MIN_TOKENS = 5_000
 _COMPLEX_MIN_ERROR_RATE = 0.20
 
 # Mapping: declared model → complexity tier the model is suited for.
-# Older/unknown aliases fall through to "moderate" via .get().
+# Covers both short aliases (`claude-opus-4-7`) and dated pinned forms
+# (`claude-haiku-4-5-20251001`) since subagent traces record whichever
+# ID was in use at runtime. Unknown aliases still fall through to
+# "moderate" via `.get(..., "moderate")`. Keep in sync with
+# `analytics.pricing._PRICING` so every priced model maps cleanly;
+# tracked as a maintenance concern — a mismatch here silently defaults
+# a real model to "moderate" and suppresses legitimate MODEL_MISMATCH
+# signals.
 MODEL_TIER_MAP: dict[str, ComplexityTier] = {
+    # Haiku tier — cheap/fast.
     MODEL_HAIKU: "simple",
+    "claude-haiku-4-5-20251001": "simple",
+    # Sonnet tier — default mid-tier.
     MODEL_SONNET: "moderate",
+    "claude-sonnet-4-5-20250929": "moderate",
+    "claude-sonnet-4-20250514": "moderate",
+    # Opus tier — heavy/expensive.
     MODEL_OPUS: "complex",
+    "claude-opus-4-6": "complex",
+    "claude-opus-4-5-20251101": "complex",
 }
 
 
@@ -107,6 +122,28 @@ def _has_write_tools_in_trace(inv: AgentInvocation) -> bool:
     return bool(trace.unique_tool_names & WRITE_TOOLS)
 
 
+def _resolve_current_model(
+    group: list[AgentInvocation],
+    config: AgentConfig | None,
+) -> str | None:
+    """Pick the model for an agent_type using `config → trace → None`.
+
+    The explicit ``AgentConfig.model`` wins when set — it's the
+    declaration the user would edit. Fallback to the first linked
+    trace's ``model`` field (populated at parse time from the
+    subagent's first assistant message), which covers the common case
+    where subagents inherit the parent session's model without
+    declaring anything in frontmatter. Returns ``None`` when neither
+    source has a value; downstream skips those agents.
+    """
+    if config and config.model:
+        return config.model
+    for inv in group:
+        if inv.trace is not None and inv.trace.model:
+            return inv.trace.model
+    return None
+
+
 def aggregate_agent_stats(
     invocations: list[AgentInvocation],
     configs: dict[str, AgentConfig] | None,
@@ -114,9 +151,9 @@ def aggregate_agent_stats(
     """Roll up per-invocation metrics into per-agent-type aggregates.
 
     Keyed by lowercased agent_type to match the correlator's config
-    lookup contract. ``current_model`` is sourced from the matching
-    ``AgentConfig.model`` (MVP); invocations with no config map to
-    ``None`` and are skipped downstream.
+    lookup contract. ``current_model`` is resolved by
+    ``_resolve_current_model`` using the ``config → trace → None``
+    precedence chain.
     """
     groups: dict[str, list[AgentInvocation]] = defaultdict(list)
     for inv in invocations:
@@ -131,7 +168,7 @@ def aggregate_agent_stats(
         has_writes = any(_has_write_tools_in_trace(i) for i in group)
 
         config = configs.get(key) if configs else None
-        current_model = config.model if (config and config.model) else None
+        current_model = _resolve_current_model(group, config)
 
         stats_by_type[key] = AgentStats(
             agent_type=canonical_name,

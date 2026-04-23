@@ -137,6 +137,58 @@ class TestAggregateAgentStats:
         assert result["pm"].current_model is None
 
 
+class TestModelPrecedence:
+    """Precedence chain: `AgentConfig.model` → `SubagentTrace.model`
+    → None. See #142 — when no config is declared, fall back to the
+    model observed on the subagent's own trace so model-routing can
+    still analyze the agent."""
+
+    def _trace_with_model(self, model: str) -> SubagentTrace:
+        return SubagentTrace(
+            agent_id="t", agent_type="unknown",
+            delegation_prompt="", model=model,
+        )
+
+    def test_trace_model_used_when_no_config(self) -> None:
+        trace = self._trace_with_model(MODEL_OPUS)
+        invs = [
+            _inv(agent_type="pm", trace=trace, tool_uses=2, total_tokens=500)
+            for _ in range(5)
+        ]
+        # No config at all — previously this would skip the agent.
+        signals = extract_model_routing_signals(invs, configs=None)
+        assert len(signals) == 1
+        assert signals[0].detail["mismatch_type"] == "overspec"
+        assert signals[0].detail["current_model"] == MODEL_OPUS
+
+    def test_config_model_wins_over_trace_model(self) -> None:
+        # Config says Opus; trace says Haiku. Config is the explicit
+        # declaration the author would edit, so it wins.
+        trace = self._trace_with_model(MODEL_HAIKU)
+        invs = [
+            _inv(agent_type="pm", trace=trace, tool_uses=2, total_tokens=500)
+            for _ in range(5)
+        ]
+        configs = {"pm": _config(model=MODEL_OPUS)}
+        signals = extract_model_routing_signals(invs, configs)
+        # Flagged as overspec because config says Opus on a simple task.
+        assert len(signals) == 1
+        assert signals[0].detail["current_model"] == MODEL_OPUS
+
+    def test_no_model_anywhere_still_skipped(self) -> None:
+        # Neither config nor trace carries a model — agent stays
+        # invisible to model-routing, the existing MVP behavior.
+        trace = SubagentTrace(
+            agent_id="t", agent_type="unknown",
+            delegation_prompt="", model=None,
+        )
+        invs = [
+            _inv(agent_type="pm", trace=trace, tool_uses=2, total_tokens=500)
+            for _ in range(5)
+        ]
+        assert extract_model_routing_signals(invs, configs=None) == []
+
+
 class TestClassifyComplexity:
     def test_simple_case(self) -> None:
         assert classify_complexity(
@@ -307,6 +359,20 @@ class TestHelpers:
         assert MODEL_TIER_MAP[MODEL_HAIKU] == "simple"
         assert MODEL_TIER_MAP[MODEL_SONNET] == "moderate"
         assert MODEL_TIER_MAP[MODEL_OPUS] == "complex"
+
+    def test_model_tier_map_covers_dated_aliases_from_pricing(self) -> None:
+        # Regression guard: subagent traces record dated pinned forms
+        # like "claude-haiku-4-5-20251001" at runtime. Every model
+        # that pricing knows about must also tier-map, or real-world
+        # signals silently fall through to "moderate" and suppress
+        # legitimate MODEL_MISMATCH emissions.
+        from agentfluent.analytics.pricing import get_known_models
+        known = get_known_models()
+        missing = [m for m in known if m not in MODEL_TIER_MAP]
+        assert not missing, (
+            f"Models priced but not tier-mapped: {missing}. Add them to "
+            "MODEL_TIER_MAP in diagnostics/model_routing.py."
+        )
 
     def test_severity_is_warning(self) -> None:
         invs = [_inv(agent_type="pm", tool_uses=2, total_tokens=500) for _ in range(5)]

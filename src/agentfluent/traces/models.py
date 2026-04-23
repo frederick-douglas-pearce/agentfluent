@@ -105,6 +105,15 @@ class SubagentTrace(BaseModel):
     duration_ms: int | None = None
     source_file: Path | None = None
 
+    model: str | None = None
+    """Model observed on the first assistant message in the subagent's
+    trace (e.g., ``'claude-sonnet-4-6'``). ``None`` when the trace has
+    no assistant messages. Set at parse time by the trace parser;
+    downstream (``diagnostics.model_routing``) uses this as a fallback
+    when the agent's ``AgentConfig`` doesn't declare a model explicitly —
+    which is the common case for Claude Code subagents that inherit the
+    parent session's model."""
+
     @cached_property
     def unique_tool_names(self) -> set[str]:
         return {tc.tool_name for tc in self.tool_calls}
