@@ -182,6 +182,19 @@ def _parse_assistant_message(data: dict[str, Any]) -> SessionMessage:
     )
 
 
+def _pick_max_tokens_fragment(fragments: list[SessionMessage]) -> SessionMessage:
+    """Return the fragment with the highest ``usage.output_tokens``.
+
+    Treats missing usage as 0 tokens. Ties resolve to the first
+    fragment with that value. Used by ``_merge_fragment_group`` for
+    both the streaming-path block selection and usage-metadata lift.
+    """
+    return max(
+        fragments,
+        key=lambda f: f.usage.output_tokens if f.usage else 0,
+    )
+
+
 def _merge_fragment_group(fragments: list[SessionMessage]) -> SessionMessage:
     """Merge a list of assistant-message fragments that share a `message_id`.
 
@@ -203,7 +216,10 @@ def _merge_fragment_group(fragments: list[SessionMessage]) -> SessionMessage:
     Detection uses a single invariant: all fragments sharing the same
     ``output_tokens`` → block-per-line; varying tokens → streaming.
     Both paths dedup ``tool_use`` blocks by ``tool_use_id`` so
-    re-observations can't double-emit a tool call.
+    re-observations can't double-emit a tool call. Fragments with
+    missing ``usage`` metadata collapse the distinct-token set toward
+    empty and route through the block-per-line path; this is the
+    conservative choice (union is safer than drop).
     """
     if len(fragments) == 1:
         return fragments[0]
@@ -212,6 +228,7 @@ def _merge_fragment_group(fragments: list[SessionMessage]) -> SessionMessage:
         f.usage.output_tokens for f in fragments if f.usage is not None
     }
     is_block_per_line = len(output_tokens) <= 1
+    winner = _pick_max_tokens_fragment(fragments)
 
     if is_block_per_line:
         # Union content blocks. Dedup tool_use by `ContentBlock.id` (the
@@ -229,19 +246,7 @@ def _merge_fragment_group(fragments: list[SessionMessage]) -> SessionMessage:
     else:
         # Streaming: the max-tokens fragment is the final cumulative
         # snapshot. Use its blocks as-is.
-        winner = max(
-            fragments,
-            key=lambda f: f.usage.output_tokens if f.usage else 0,
-        )
         blocks = list(winner.content_blocks)
-
-    # Usage: pick the fragment with the max output_tokens. For
-    # block-per-line that's the invariant (all equal); for streaming
-    # that's the final snapshot's correct total.
-    usage = max(
-        fragments,
-        key=lambda f: f.usage.output_tokens if f.usage else 0,
-    ).usage
 
     # Timestamp: first fragment's (matches JSONL insertion order; for
     # block-per-line all fragments are adjacent lines, so there's no
@@ -252,11 +257,13 @@ def _merge_fragment_group(fragments: list[SessionMessage]) -> SessionMessage:
         message_id=fragments[0].message_id,
         model=fragments[0].model,
         content_blocks=blocks,
-        usage=usage,
+        usage=winner.usage,
     )
 
 
-def deduplicate_messages(messages: list[SessionMessage]) -> list[SessionMessage]:
+def merge_assistant_fragments(
+    messages: list[SessionMessage],
+) -> list[SessionMessage]:
     """Merge assistant-message fragments sharing a `message_id`.
 
     Claude Code emits a single assistant response as multiple JSONL lines
@@ -269,17 +276,13 @@ def deduplicate_messages(messages: list[SessionMessage]) -> list[SessionMessage]
 
     Non-assistant messages and assistant messages without a
     ``message_id`` pass through unchanged.
-
-    The function name "deduplicate_messages" is retained for
-    backward-compatible imports; semantically the operation is
-    now a merge.
     """
-    # Two passes: first collect fragments and record the message_id at
-    # each "placeholder" position; second fill with the merged message.
-    # Passthrough messages (non-assistant, or assistant without id) go
-    # straight into the result list.
-    result: list[SessionMessage | str] = []  # str sentinel = message_id placeholder
+    # Build an ordered result list with ``None`` placeholders at each
+    # position where a merged message will land; track fragments per
+    # message_id in a parallel dict keyed by first-appearance order.
+    result: list[SessionMessage | None] = []
     fragments_by_id: dict[str, list[SessionMessage]] = {}
+    placeholder_ids: list[str] = []
 
     for msg in messages:
         if msg.type != "assistant" or not msg.message_id:
@@ -288,14 +291,21 @@ def deduplicate_messages(messages: list[SessionMessage]) -> list[SessionMessage]
         mid = msg.message_id
         if mid not in fragments_by_id:
             fragments_by_id[mid] = []
-            result.append(mid)
+            result.append(None)
+            placeholder_ids.append(mid)
         fragments_by_id[mid].append(msg)
 
-    merged = {
-        mid: _merge_fragment_group(frags)
-        for mid, frags in fragments_by_id.items()
-    }
-    return [merged[item] if isinstance(item, str) else item for item in result]
+    merged = [
+        _merge_fragment_group(fragments_by_id[mid]) for mid in placeholder_ids
+    ]
+    merged_iter = iter(merged)
+    return [next(merged_iter) if item is None else item for item in result]
+
+
+# Backward-compatible alias; prefer ``merge_assistant_fragments`` at new
+# call sites. The old name reflects the pre-#153 behavior when this
+# function was a pick-one-per-message_id dedup.
+deduplicate_messages = merge_assistant_fragments
 
 
 def parse_session(path: Path, *, deduplicate: bool = True) -> list[SessionMessage]:
@@ -338,6 +348,6 @@ def parse_session(path: Path, *, deduplicate: bool = True) -> list[SessionMessag
             continue
 
     if deduplicate:
-        messages = deduplicate_messages(messages)
+        messages = merge_assistant_fragments(messages)
 
     return messages
