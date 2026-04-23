@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,38 @@ logger = logging.getLogger(__name__)
 
 
 MCP_PROJECT_FILENAME = ".mcp.json"
+
+
+def resolve_project_disk_path(
+    slug: str,
+    claude_config_dir: Path | None,
+) -> Path | None:
+    """Map a ``~/.claude/projects/<slug>/`` directory name back to the
+    original on-disk project path.
+
+    Claude Code stores per-project data in ``~/.claude.json`` keyed by
+    absolute path (e.g., ``/home/user/myproj``). The project directory
+    inside ``~/.claude/projects/`` is a slug-encoded form of that
+    path (``-home-user-myproj``). Direct slug reversal would be lossy
+    for paths containing hyphens, so we look up the slug in the
+    ``projects`` dict keys and match by forward-encoding each
+    candidate absolute path — the unambiguous direction.
+
+    Returns ``None`` when no match is found or ``~/.claude.json`` is
+    missing / malformed. Callers typically degrade gracefully in that
+    case (MCP discovery falls back to user scope only).
+    """
+    claude_json_path = claude_json_for(claude_config_dir)
+    data = _load_json(claude_json_path)
+    if data is None:
+        return None
+    projects = data.get("projects")
+    if not isinstance(projects, dict):
+        return None
+    for abs_path_str in projects:
+        if str(abs_path_str).replace("/", "-") == slug:
+            return Path(str(abs_path_str))
+    return None
 
 
 def discover_mcp_servers(
@@ -90,11 +123,24 @@ def discover_mcp_servers(
     )
 
 
+@lru_cache(maxsize=16)
 def _load_json(path: Path) -> dict[str, Any] | None:
     """Read and decode a JSON object file.
 
     Returns ``None`` for missing files (silent), logs a warning and
     returns ``None`` for malformed JSON or non-object roots.
+
+    Cached per-path for the lifetime of the process. ``~/.claude.json``
+    is read by both ``resolve_project_disk_path`` (CLI) and
+    ``discover_mcp_servers`` (pipeline) during a single
+    ``agentfluent analyze`` invocation; caching eliminates the
+    redundant ~45KB file read + JSON parse. Real usage touches only
+    2 files per invocation (``~/.claude.json`` + the project's
+    ``.mcp.json``); ``maxsize=16`` is 8× headroom — generous for
+    future config sources without inviting unbounded growth. Callers
+    must not mutate the returned dict — it's shared state. Tests that
+    need a fresh read should call ``_load_json.cache_clear()`` in
+    setup.
     """
     if not path.exists():
         return None
