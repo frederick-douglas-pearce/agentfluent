@@ -263,6 +263,8 @@ corpus."""))
 gp_candidates = gp[gp["combined_tokens"] >= MIN_TEXT_TOKENS]
 print(f"gp after MIN_TEXT_TOKENS={MIN_TEXT_TOKENS}: {len(gp_candidates)}")
 
+VARIANCE_TARGET = 0.90
+
 if len(gp_candidates) >= 5:
     texts = [
         (inv.description + " " + inv.prompt)
@@ -278,27 +280,54 @@ if len(gp_candidates) >= 5:
         lsa.fit(X)
         explained = np.cumsum(lsa.explained_variance_ratio_)
 
+        # Sweep in increments of 5 first, then pick the lowest n that
+        # clears VARIANCE_TARGET. Reporting the table before the chart
+        # lets the reader see where the elbow sits.
+        sweep = list(range(5, len(explained) + 1, 5))
+        print(f"\\nn_components variance table:")
+        for ncomp in sweep:
+            marker = " ←" if explained[ncomp-1] >= VARIANCE_TARGET else ""
+            print(f"  n_components={ncomp:>3}: {explained[ncomp-1]:.1%}{marker}")
+
+        hitting = [n for n in sweep if explained[n-1] >= VARIANCE_TARGET]
+        recommended = hitting[0] if hitting else None
+        if recommended is not None:
+            print(
+                f"\\nLowest n_components reaching {VARIANCE_TARGET:.0%} "
+                f"variance: {recommended} "
+                f"({explained[recommended-1]:.1%})"
+            )
+        else:
+            print(
+                f"\\nNo swept value reaches {VARIANCE_TARGET:.0%} variance "
+                f"on this dataset (max {explained[-1]:.1%} at "
+                f"n={len(explained)})."
+            )
+
         fig, ax = plt.subplots()
         ax.plot(range(1, len(explained) + 1), explained)
-        for ncomp in [25, 50, 75]:
-            if ncomp <= len(explained):
-                ax.axvline(ncomp, color="red", linestyle="--", alpha=0.5,
-                           label=f"n={ncomp}: {explained[ncomp-1]:.1%} variance")
+        ax.axhline(
+            VARIANCE_TARGET, color="gray", linestyle=":", alpha=0.6,
+            label=f"{VARIANCE_TARGET:.0%} variance target",
+        )
+        if recommended is not None:
+            ax.axvline(
+                recommended, color="red", linestyle="--", alpha=0.6,
+                label=f"recommended n={recommended}: "
+                      f"{explained[recommended-1]:.1%} variance",
+            )
         ax.set_xlabel("LSA components")
         ax.set_ylabel("Cumulative explained variance")
         ax.set_title(f"LSA explained variance (general-purpose corpus, n={len(texts)})")
         ax.legend()
         plt.tight_layout()
         plt.show()
-
-        for ncomp in [10, 25, 50, 75]:
-            if ncomp <= len(explained):
-                print(f"  n_components={ncomp}: {explained[ncomp-1]:.1%} variance")
 else:
     print("Not enough candidates for LSA analysis.")"""))
 
     cells.append(md(r"""**Decision rule:** pick the smallest number of components that
-captures ≥ 90% of the variance. Higher components beyond that add
+captures ≥ 90% of the variance (marked `←` in the table above and as
+the red dashed line on the chart). Higher components beyond that add
 noise and slow KMeans."""))
 
     cells.append(md(r"""## 3 · `DEFAULT_MIN_CLUSTER_SIZE` — minimum cluster size
@@ -552,7 +581,7 @@ all changed substantially. Results below reflect the corrected state.
 | Constant | Default | Decision | Notes |
 |---|---|---|---|
 | `MIN_TEXT_TOKENS` | 50 (was 20) | **raised** | Observed combined lengths on this dataset start ~100 tokens. Because these are agent-to-agent prompts, the original `20` anti-noise floor was well below the realistic distribution. Raised to `50` to preserve margin while still guarding against truncated/malformed input. Sweep range also widened to `[20, 30, 50, 75, 100, 150]` since testing below ~20 is meaningless for agent-generated text. |
-| `LSA_COMPONENTS` | 50 | **keep** | Auto-clipped to `min(50, n-1)` when n is small. On n=44 corpus, effective value is 43; default is overkill-but-harmless for small n and kicks in at larger n. |
+| `LSA_COMPONENTS` | 50 | **flag for future review** | Sweep shows `n=30` reaches 91.2% variance on this dataset — the smallest swept value clearing the 90% target. Default of `50` auto-clips to `min(50, n-1)=43` on the 44-invocation corpus, so the effective value today is already 43 and KMeans still separates cleanly. Lowering to `30` would speed clustering at larger n without hurting quality on this data, but the optimal point depends on corpus diversity. Defer until multi-contributor data confirms. |
 | `DEFAULT_MIN_CLUSTER_SIZE` | 5 | **keep** | Emits 5 clusters on my data at the default. Sweep goes 8→8→7→5→4→2→0 as threshold climbs from 2 to 10 — smooth curve, no sharp elbow. Default balances meaningful output vs noise. |
 | `DEFAULT_MIN_SIMILARITY` | 0.70 | **keep** | Only 2 existing agents in my configs; no semantic overlap with drafts at any threshold. Dataset too small to calibrate dedup — requires configs with broader agent coverage. |
 | `_SILHOUETTE_K_MAX` | 10 | **keep** | On n=44 the binding cap is `n // 5 = 8`; cap of 10 never engages. Correct default for larger datasets. |
@@ -570,6 +599,11 @@ all changed substantially. Results below reflect the corrected state.
   `50` preserves full coverage with margin.
 
 **Flagged for future review (no change yet):**
+- **`LSA_COMPONENTS = 50`** could likely drop to `30`. On this data
+  `n=30` captures 91.2% variance (the smallest swept value ≥ 90%
+  target). Current default auto-clips to `min(50, n-1)=43` here, so
+  the over-spec is invisible on small corpora; at larger n it would
+  start to matter. Defer until multi-contributor data.
 - **Confidence thresholds (0.6/0.8)** appear too high given the
   observed cluster-cohesion distribution (mean pairwise cosine among
   cluster members). Lowering to ~0.3/0.5 would activate the
