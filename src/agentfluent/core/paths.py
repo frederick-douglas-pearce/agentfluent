@@ -41,6 +41,27 @@ def agents_dir_for(config_root: Path | None) -> Path | None:
     return (config_root / AGENTS_SUBDIR) if config_root else None
 
 
+def claude_json_for(config_root: Path | None) -> Path:
+    """Path to the user's ``.claude.json`` file.
+
+    Claude Code stores the primary user config (including top-level
+    ``mcpServers`` and the per-project ``projects[<path>]`` section)
+    in ``$HOME/.claude.json`` — a sibling of the ``.claude/``
+    directory, not a child of it.
+
+    When ``config_root`` is given (e.g., from ``--claude-config-dir``
+    pointing at ``/custom/.claude/``), the companion ``.claude.json``
+    is resolved at the override's parent (``/custom/.claude.json``).
+    This matches the pattern of overriding the whole Claude Code
+    config hierarchy — callers who want to test against an alternate
+    dataset expect both ``.claude/`` and ``.claude.json`` to move
+    together.
+    """
+    if config_root is None:
+        return Path.home() / ".claude.json"
+    return config_root.parent / ".claude.json"
+
+
 def validate_claude_config_dir(override: Path | None) -> Path | None:
     """Validate an override path for the Claude config directory.
 

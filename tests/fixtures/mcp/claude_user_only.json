@@ -1,0 +1,15 @@
+{
+  "numStartups": 42,
+  "theme": "dark",
+  "mcpServers": {
+    "github": {
+      "type": "stdio",
+      "command": "mcp-server-github",
+      "args": []
+    },
+    "unused-server": {
+      "command": "mcp-server-unused",
+      "args": []
+    }
+  }
+}

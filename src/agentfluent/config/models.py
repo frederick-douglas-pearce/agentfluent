@@ -9,9 +9,23 @@ from __future__ import annotations
 
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+McpScope = Literal["user", "project_shared", "project_local"]
+"""Where an MCP server entry was discovered.
+
+- ``user`` — top-level ``mcpServers`` in ``~/.claude.json``.
+- ``project_shared`` — ``mcpServers`` in ``.mcp.json`` at the project
+  root (committed to the repo; gated per-user by the project-local
+  ``enabledMcpjsonServers`` / ``disabledMcpjsonServers`` lists).
+- ``project_local`` — per-project ``mcpServers`` inside
+  ``~/.claude.json:projects[<project_dir>]``.
+
+Precedence when the same server name appears in multiple scopes:
+``project_local > project_shared > user`` (matches Claude Code's
+documented ``local > project > user`` resolution order)."""
 
 
 class Scope(StrEnum):
@@ -116,3 +130,31 @@ class ConfigScore(BaseModel):
 
     recommendations: list[ConfigRecommendation] = Field(default_factory=list)
     """Actionable recommendations for improving the config."""
+
+
+class McpServerConfig(BaseModel):
+    """A configured MCP server discovered from Claude Code config files."""
+
+    server_name: str
+
+    enabled: bool = True
+    """False when the server is off — either via a per-server
+    ``disabled: true`` flag, or (for project_shared entries) via the
+    project-local ``disabledMcpjsonServers`` gating list, or via
+    absence from ``enabledMcpjsonServers`` when that whitelist is
+    present. Disabled servers are excluded from the unused-server
+    audit because the user intentionally turned them off."""
+
+    configured_tools: list[str] | None = None
+    """Optional allow-list of tool names under this server. ``None``
+    is the common case and means "all tools from this server"; a
+    non-None list means only those tool names are expected."""
+
+    source_file: Path
+    """Absolute path to the file this server record was read from.
+    User-facing audit recommendations cite this path so the user
+    knows exactly which file to edit."""
+
+    scope: McpScope
+    """Where this config lives. Drives precedence when the same
+    server_name appears in multiple sources — see ``McpScope``."""
