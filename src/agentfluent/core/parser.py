@@ -182,58 +182,120 @@ def _parse_assistant_message(data: dict[str, Any]) -> SessionMessage:
     )
 
 
-def deduplicate_messages(messages: list[SessionMessage]) -> list[SessionMessage]:
-    """Deduplicate streaming snapshot assistant messages by message_id.
+def _merge_fragment_group(fragments: list[SessionMessage]) -> SessionMessage:
+    """Merge a list of assistant-message fragments that share a `message_id`.
 
-    Claude Code writes multiple assistant messages per API call as streaming
-    snapshots. All snapshots share the same message.id. Within a group:
-    - input_tokens/cache tokens are identical across snapshots
-    - output_tokens increases with each snapshot (partial -> final)
+    Two JSONL shapes appear in real data under the same message_id:
 
-    This function keeps the entry with the highest output_tokens per message_id.
-    Non-assistant messages and assistant messages without a message_id pass
-    through unchanged.
+    **Block-per-line** (the current Claude Code shape — ~100% of our
+    observed data). Each fragment carries one content block (text,
+    thinking, or tool_use). All fragments share the same ``output_tokens``
+    because it reports the full message's total, not a per-block count.
+    Merge: union every content block across fragments so nothing is
+    dropped.
+
+    **Classical streaming snapshots** (legacy; no longer observed but
+    covered for robustness). Each fragment is a cumulative snapshot of
+    the growing response. ``output_tokens`` increases monotonically from
+    partial → final. Merge: keep the max-``output_tokens`` fragment's
+    blocks intact; earlier snapshots are strict prefixes of the final.
+
+    Detection uses a single invariant: all fragments sharing the same
+    ``output_tokens`` → block-per-line; varying tokens → streaming.
+    Both paths dedup ``tool_use`` blocks by ``tool_use_id`` so
+    re-observations can't double-emit a tool call.
     """
-    # Track best assistant message per message_id
-    best_by_id: dict[str, SessionMessage] = {}
-    # Track insertion order for stable output
-    id_order: list[str] = []
+    if len(fragments) == 1:
+        return fragments[0]
 
-    result: list[SessionMessage] = []
+    output_tokens = {
+        f.usage.output_tokens for f in fragments if f.usage is not None
+    }
+    is_block_per_line = len(output_tokens) <= 1
+
+    if is_block_per_line:
+        # Union content blocks. Dedup tool_use by `ContentBlock.id` (the
+        # field carries the tool_use_id for tool_use blocks); keep all
+        # text/thinking blocks (they're disjoint in this shape).
+        blocks: list[ContentBlock] = []
+        seen_tool_ids: set[str] = set()
+        for f in fragments:
+            for b in f.content_blocks:
+                if b.type == "tool_use" and b.id:
+                    if b.id in seen_tool_ids:
+                        continue
+                    seen_tool_ids.add(b.id)
+                blocks.append(b)
+    else:
+        # Streaming: the max-tokens fragment is the final cumulative
+        # snapshot. Use its blocks as-is.
+        winner = max(
+            fragments,
+            key=lambda f: f.usage.output_tokens if f.usage else 0,
+        )
+        blocks = list(winner.content_blocks)
+
+    # Usage: pick the fragment with the max output_tokens. For
+    # block-per-line that's the invariant (all equal); for streaming
+    # that's the final snapshot's correct total.
+    usage = max(
+        fragments,
+        key=lambda f: f.usage.output_tokens if f.usage else 0,
+    ).usage
+
+    # Timestamp: first fragment's (matches JSONL insertion order; for
+    # block-per-line all fragments are adjacent lines, so there's no
+    # meaningful earlier/later distinction).
+    return SessionMessage(
+        type="assistant",
+        timestamp=fragments[0].timestamp,
+        message_id=fragments[0].message_id,
+        model=fragments[0].model,
+        content_blocks=blocks,
+        usage=usage,
+    )
+
+
+def deduplicate_messages(messages: list[SessionMessage]) -> list[SessionMessage]:
+    """Merge assistant-message fragments sharing a `message_id`.
+
+    Claude Code emits a single assistant response as multiple JSONL lines
+    — one per content block — all sharing the message's id. Legacy
+    Claude Code versions emitted streaming snapshots (same shape, but
+    each fragment is a cumulative snapshot with increasing
+    ``output_tokens``). This function detects which shape a group
+    follows and merges accordingly; see ``_merge_fragment_group`` for
+    the shape-specific rules.
+
+    Non-assistant messages and assistant messages without a
+    ``message_id`` pass through unchanged.
+
+    The function name "deduplicate_messages" is retained for
+    backward-compatible imports; semantically the operation is
+    now a merge.
+    """
+    # Two passes: first collect fragments and record the message_id at
+    # each "placeholder" position; second fill with the merged message.
+    # Passthrough messages (non-assistant, or assistant without id) go
+    # straight into the result list.
+    result: list[SessionMessage | str] = []  # str sentinel = message_id placeholder
+    fragments_by_id: dict[str, list[SessionMessage]] = {}
 
     for msg in messages:
         if msg.type != "assistant" or not msg.message_id:
             result.append(msg)
             continue
-
         mid = msg.message_id
-        existing = best_by_id.get(mid)
-        if existing is None:
-            best_by_id[mid] = msg
-            id_order.append(mid)
-            # Insert a placeholder — we'll replace later
-            result.append(msg)
-        else:
-            # Keep the one with higher output_tokens
-            existing_output = existing.usage.output_tokens if existing.usage else 0
-            new_output = msg.usage.output_tokens if msg.usage else 0
-            if new_output > existing_output:
-                best_by_id[mid] = msg
+        if mid not in fragments_by_id:
+            fragments_by_id[mid] = []
+            result.append(mid)
+        fragments_by_id[mid].append(msg)
 
-    # Replace placeholders with the best version
-    seen: set[str] = set()
-    final: list[SessionMessage] = []
-    for msg in result:
-        if msg.type == "assistant" and msg.message_id:
-            mid = msg.message_id
-            if mid not in seen:
-                seen.add(mid)
-                final.append(best_by_id[mid])
-            # Skip duplicates (placeholders for IDs we've already emitted)
-        else:
-            final.append(msg)
-
-    return final
+    merged = {
+        mid: _merge_fragment_group(frags)
+        for mid, frags in fragments_by_id.items()
+    }
+    return [merged[item] if isinstance(item, str) else item for item in result]
 
 
 def parse_session(path: Path, *, deduplicate: bool = True) -> list[SessionMessage]:

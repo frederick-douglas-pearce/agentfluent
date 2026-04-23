@@ -454,18 +454,7 @@ class TestAggregateCounts:
         trace = parse_subagent_trace(path)
         assert trace.total_errors == 2
 
-    def test_total_retries_is_zero_for_now(self, write_jsonl: WriteJSONL) -> None:
-        """Retry detection is deferred to a later story; parser emits zero."""
-        path = write_jsonl(
-            "agent-x.jsonl",
-            [
-                _user("go"),
-                _assistant([_tool_use("t1", "Bash", {"cmd": "fails"})]),
-                _user([_tool_result("t1", "error", is_error=True)]),
-                _assistant([_tool_use("t2", "Bash", {"cmd": "fails"})]),
-                _user([_tool_result("t2", "error", is_error=True)]),
-            ],
-        )
-        trace = parse_subagent_trace(path)
-        assert trace.total_retries == 0
-        assert trace.retry_sequences == []
+    # (Retry detection was deferred when this module was first written and
+    # later shipped in #104. See `test_traces_retry.py` for comprehensive
+    # retry-sequence tests; the obsolete "total_retries_is_zero" placeholder
+    # was removed when the parser-merge fix for #153 exposed it.)
