@@ -19,10 +19,13 @@ Audit logic (comparing observed usage to configured servers) lives in
 **Parsing.** MCP tool names follow the ``mcp__<server>__<tool>``
 format. Server names can contain internal underscores
 (e.g., ``claude_ai_Gmail``); tool names can start with an underscore
-(e.g., ``_internal_sync``). Parsing uses ``rfind("__")`` on the
-stripped suffix so the last ``__`` is the server/tool boundary.
-A server name containing ``__`` is fundamentally ambiguous in this
-format — not handled.
+(e.g., ``_internal_sync``). Parsing uses ``find("__")`` on the
+stripped suffix — the FIRST ``__`` after the ``mcp__`` prefix is the
+server/tool boundary. Last-delimiter splitting would break
+leading-underscore tool names (``srv___internal_sync`` would yield
+``("srv_", "internal_sync")`` instead of ``("srv", "_internal_sync")``).
+Server names containing ``__`` are fundamentally ambiguous in this
+format and aren't handled.
 """
 
 from __future__ import annotations
@@ -32,6 +35,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
 
+from agentfluent.core.session import index_tool_results_by_id
 from agentfluent.diagnostics.signals import ERROR_REGEX
 
 if TYPE_CHECKING:
@@ -126,19 +130,7 @@ def extract_mcp_calls_from_messages(
     Non-MCP ``tool_use`` blocks are silently skipped via
     ``parse_mcp_tool_name`` returning ``None``.
     """
-    # Index tool_result blocks by tool_use_id. Store (text, is_error)
-    # so the second pass can apply the priority ladder above without
-    # re-walking content_blocks.
-    results_by_id: dict[str, tuple[str, bool | None]] = {}
-    for msg in messages:
-        if msg.type != "user":
-            continue
-        for block in msg.content_blocks:
-            if block.type == "tool_result" and block.tool_use_id:
-                results_by_id[block.tool_use_id] = (
-                    block.text or "",
-                    block.is_error,
-                )
+    results = index_tool_results_by_id(messages)
 
     calls: list[McpToolCall] = []
     for msg in messages:
@@ -149,7 +141,11 @@ def extract_mcp_calls_from_messages(
             if parsed is None:
                 continue
             server, tool = parsed
-            result_text, explicit_error = results_by_id.get(tu.id, ("", None))
+            entry = results.get(tu.id)
+            if entry is not None:
+                _, result_text, explicit_error = entry
+            else:
+                result_text, explicit_error = "", None
             if explicit_error is True:
                 is_error = True
             elif explicit_error is False:

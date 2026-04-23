@@ -124,6 +124,34 @@ class SessionMessage(BaseModel):
         ]
 
 
+def index_tool_results_by_id(
+    messages: list[SessionMessage],
+) -> dict[str, tuple[SessionMessage, str, bool | None]]:
+    """Build a ``tool_use_id → (containing_message, text, is_error)`` index.
+
+    Extracted as a shared helper because multiple consumers walk the
+    same user-message → content-block → tool_result path:
+
+    - ``agents/extractor.py`` pairs each Agent ``tool_use`` with its
+      result to pull ``toolUseResult`` metadata off the container.
+    - ``diagnostics/mcp_assessment.py`` pairs each MCP ``tool_use``
+      with its result to determine ``is_error``.
+
+    Returning the container alongside text and is_error lets each
+    caller pick what it needs without re-walking messages.
+    """
+    results: dict[str, tuple[SessionMessage, str, bool | None]] = {}
+    for msg in messages:
+        if msg.type != "user":
+            continue
+        for block in msg.content_blocks:
+            if block.type == "tool_result" and block.tool_use_id:
+                results[block.tool_use_id] = (
+                    msg, block.text or "", block.is_error,
+                )
+    return results
+
+
 # Message types that the parser should skip
 SKIP_TYPES: frozenset[str] = frozenset(
     {
