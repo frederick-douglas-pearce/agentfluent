@@ -1,11 +1,32 @@
 """Build the threshold-calibration notebook programmatically.
 
-Generates ``threshold_validation.ipynb`` via ``nbformat`` then executes
-it against real ``~/.claude/projects/`` data. Kept in-tree so the
-notebook can be regenerated cleanly if the analysis needs to evolve.
+This script is the canonical source for
+``scripts/calibration/threshold_validation.ipynb``. The committed
+``.ipynb`` is a **generated artifact** — edit this file instead, then
+re-run to regenerate.
+
+What the notebook analyzes: 15 threshold constants across
+``diagnostics/delegation.py`` and ``diagnostics/model_routing.py``,
+validated against real agent session data from ``~/.claude/projects/``
+(or any ``CLAUDE_CONFIG_DIR``). Produces distribution plots, threshold
+sweeps, and a per-constant findings table. See ``scripts/calibration/README.md``
+for the full workflow.
+
+Single-dataset limitation: calibration on one contributor's data only
+informs — does not settle — defaults. Re-run when multi-contributor
+data is available; chosen values in the notebook's findings table
+should be updated alongside any matching source-constant changes in
+the same PR.
+
 Run with::
 
     uv run python scripts/calibration/build_notebook.py
+
+The script constructs the notebook via ``nbformat.v4``, executes every
+cell against the configured Claude config directory, and writes the
+resulting ``.ipynb`` with rendered outputs. Cell-execution failures
+re-raise so a broken analysis is never silently committed — investigate
+the traceback and fix before regenerating.
 """
 
 from __future__ import annotations
@@ -85,7 +106,7 @@ Jupyter::
 from __future__ import annotations
 
 import os
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -101,13 +122,10 @@ from agentfluent.diagnostics.delegation import (
 )
 from agentfluent.diagnostics.model_routing import (
     classify_complexity,
-    classify_model_tier,
     aggregate_agent_stats,
 )
 from sklearn.decomposition import TruncatedSVD
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
 
 plt.rcParams["figure.figsize"] = (10, 5)
 plt.rcParams["figure.dpi"] = 100
@@ -553,11 +571,11 @@ def main() -> None:
     nb = build()
     print(f"Built notebook with {len(nb.cells)} cells. Executing...")
     client = NotebookClient(nb, timeout=300, kernel_name="python3")
-    try:
-        client.execute()
-    except Exception as exc:
-        print(f"⚠️  Execution failed: {exc}")
-        print("   Writing partial notebook so you can open it and inspect.")
+    # Let execution errors propagate. A partial notebook written after
+    # a mid-execution failure is a trap: it's easy to commit an analysis
+    # with silently missing figures or stale intermediate state. Fix the
+    # failing cell, then regenerate.
+    client.execute()
     nbf.write(nb, NOTEBOOK_PATH)
     print(f"Wrote {NOTEBOOK_PATH}")
 
