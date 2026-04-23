@@ -3,20 +3,14 @@
 from __future__ import annotations
 
 from agentfluent.agents.models import AgentInvocation
-from agentfluent.core.session import SessionMessage
+from agentfluent.core.session import SessionMessage, index_tool_results_by_id
 
 
 def extract_agent_invocations(messages: list[SessionMessage]) -> list[AgentInvocation]:
     """Match Agent tool_use blocks to their tool_result content blocks by
     tool_use_id and pull metadata from the result-carrying message.
     """
-    results: dict[str, tuple[SessionMessage, str]] = {}
-
-    for msg in messages:
-        if msg.type == "user":
-            for block in msg.content_blocks:
-                if block.type == "tool_result" and block.tool_use_id:
-                    results[block.tool_use_id] = (msg, block.text or "")
+    results = index_tool_results_by_id(messages)
 
     invocations: list[AgentInvocation] = []
 
@@ -33,7 +27,10 @@ def extract_agent_invocations(messages: list[SessionMessage]) -> list[AgentInvoc
             prompt = tool_use.input.get("prompt", "")
 
             entry = results.get(tool_use.id)
-            container, output_text = entry if entry else (None, "")
+            if entry is not None:
+                container, output_text, _ = entry
+            else:
+                container, output_text = None, ""
 
             total_tokens = None
             tool_uses_count = None

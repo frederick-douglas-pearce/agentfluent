@@ -60,7 +60,11 @@ def discover_mcp_servers(
     JSON logs a warning and skips that file.
     """
     claude_json_path = claude_json_for(claude_config_dir)
-    user_servers = _read_user_mcp_servers(claude_json_path)
+    # Load ~/.claude.json once — it can be tens of KB (accumulates
+    # session state over time) and both user-scope and project-local
+    # readers pull from it.
+    claude_json_data = _load_json(claude_json_path)
+    user_servers = _parse_user_mcp_servers(claude_json_data, claude_json_path)
 
     project_local_servers: list[McpServerConfig] = []
     enabled_whitelist: list[str] | None = None
@@ -72,7 +76,9 @@ def discover_mcp_servers(
             project_local_servers,
             enabled_whitelist,
             disabled_list,
-        ) = _read_project_local_mcp_servers(claude_json_path, project_dir)
+        ) = _parse_project_local_mcp_servers(
+            claude_json_data, claude_json_path, project_dir,
+        )
         project_shared_servers = _read_project_shared_mcp_servers(
             project_dir,
             enabled_whitelist=enabled_whitelist,
@@ -152,23 +158,26 @@ def _parse_server_entries(
     return servers
 
 
-def _read_user_mcp_servers(claude_json_path: Path) -> list[McpServerConfig]:
-    """Read top-level ``mcpServers`` from ``~/.claude.json``."""
-    data = _load_json(claude_json_path)
-    if data is None:
+def _parse_user_mcp_servers(
+    claude_json_data: dict[str, Any] | None,
+    source_file: Path,
+) -> list[McpServerConfig]:
+    """Extract top-level ``mcpServers`` from a pre-loaded ``~/.claude.json``."""
+    if claude_json_data is None:
         return []
     return _parse_server_entries(
-        data.get("mcpServers"),
-        source_file=claude_json_path,
+        claude_json_data.get("mcpServers"),
+        source_file=source_file,
         scope="user",
     )
 
 
-def _read_project_local_mcp_servers(
-    claude_json_path: Path,
+def _parse_project_local_mcp_servers(
+    claude_json_data: dict[str, Any] | None,
+    source_file: Path,
     project_dir: Path,
 ) -> tuple[list[McpServerConfig], list[str] | None, list[str]]:
-    """Read per-project section from ``~/.claude.json``.
+    """Extract per-project section from a pre-loaded ``~/.claude.json``.
 
     Returns ``(servers, enabled_whitelist, disabled_list)`` where
     ``enabled_whitelist`` is ``None`` when the field is absent
@@ -179,11 +188,10 @@ def _read_project_local_mcp_servers(
     The enabled / disabled lists drive project_shared gating — the
     caller passes them to ``_read_project_shared_mcp_servers``.
     """
-    data = _load_json(claude_json_path)
-    if data is None:
+    if claude_json_data is None:
         return [], None, []
 
-    projects = data.get("projects")
+    projects = claude_json_data.get("projects")
     if not isinstance(projects, dict):
         return [], None, []
 
@@ -196,7 +204,7 @@ def _read_project_local_mcp_servers(
 
     servers = _parse_server_entries(
         entry.get("mcpServers"),
-        source_file=claude_json_path,
+        source_file=source_file,
         scope="project_local",
     )
     enabled_raw = entry.get("enabledMcpjsonServers")

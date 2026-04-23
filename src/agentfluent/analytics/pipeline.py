@@ -30,6 +30,10 @@ from agentfluent.analytics.tools import (
 )
 from agentfluent.core.parser import parse_session
 from agentfluent.core.session import SessionMessage
+from agentfluent.diagnostics.mcp_assessment import (
+    McpToolCall,
+    extract_mcp_calls_from_messages,
+)
 from agentfluent.diagnostics.models import DiagnosticsResult
 from agentfluent.traces.discovery import discover_session_subagents
 from agentfluent.traces.linker import link_traces
@@ -47,6 +51,12 @@ class SessionAnalysis(BaseModel):
     tool_metrics: ToolMetrics
     agent_metrics: AgentMetrics
     invocations: list[AgentInvocation] = Field(default_factory=list)
+    mcp_tool_calls: list[McpToolCall] = Field(default_factory=list)
+    """Parent-session MCP tool calls (those made directly in the main
+    session, outside any Agent delegation). Subagent-trace MCP calls
+    are already captured on ``invocations[i].trace.tool_calls`` and
+    not duplicated here."""
+
     message_count: int = 0
     user_message_count: int = 0
     assistant_message_count: int = 0
@@ -89,6 +99,7 @@ def analyze_session(
         ]
 
     invocations = _link_subagent_traces(invocations, path)
+    mcp_tool_calls = extract_mcp_calls_from_messages(messages)
 
     agent_metrics = compute_agent_metrics(
         invocations, session_total_tokens=token_metrics.total_tokens
@@ -100,6 +111,7 @@ def analyze_session(
         tool_metrics=tool_metrics,
         agent_metrics=agent_metrics,
         invocations=invocations,
+        mcp_tool_calls=mcp_tool_calls,
         message_count=len(messages),
         user_message_count=_count_type(messages, "user"),
         assistant_message_count=_count_type(messages, "assistant"),
