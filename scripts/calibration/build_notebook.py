@@ -409,7 +409,16 @@ else:
 Defaults:
 - `_CONFIDENCE_HIGH_SIZE = 10`, `_CONFIDENCE_HIGH_COHESION = 0.8`
 - `_CONFIDENCE_MEDIUM_COHESION = 0.6`
-- Otherwise → low"""))
+- Otherwise → low
+
+**Terminology.** *Cohesion* here is a cluster-level aggregate —
+specifically the mean pairwise cosine similarity among the cluster's
+TF-IDF-embedded members (`_mean_pairwise_cosine` in
+`delegation.py`). That makes it distinct from the `0.70` threshold in
+§4, which is a raw pairwise cosine between a single draft and a
+single existing agent. Both axes use cosine similarity under the
+hood; cohesion additionally averages over all member pairs in one
+cluster."""))
 
     cells.append(code("""\
 # Cohesion and size distribution for actual clusters we produced.
@@ -544,10 +553,11 @@ all changed substantially. Results below reflect the corrected state.
 ### Summary: no constant changes in this PR
 
 Two meaningful amber warnings:
-- **Confidence thresholds (0.6/0.8)** appear too high given observed
-  TF-IDF cohesion distributions. Lowering to ~0.3/0.5 would activate
-  the medium/high tiers that currently never fire. Defer until a
-  second contributor dataset confirms this isn't a my-data artifact.
+- **Confidence thresholds (0.6/0.8)** appear too high given the
+  observed cluster-cohesion distribution (mean pairwise cosine among
+  cluster members). Lowering to ~0.3/0.5 would activate the
+  medium/high tiers that currently never fire. Defer until a second
+  contributor dataset confirms this isn't a my-data artifact.
 - **Simple/complex boundaries** put everything on my workload in
   "complex." Either the defaults are calibrated for a lighter
   workload, or mine is genuinely heavy-all-the-time. Indistinguishable
