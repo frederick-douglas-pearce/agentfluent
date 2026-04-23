@@ -71,6 +71,14 @@ def streaming_dupes_session_path() -> Path:
 
 
 @pytest.fixture()
+def block_per_line_session_path() -> Path:
+    """Path to a session where one assistant message's content blocks are
+    split across multiple JSONL lines sharing the same `message_id` and
+    `output_tokens` — the shape current Claude Code emits. See #153."""
+    return FIXTURES_DIR / "session_block_per_line.jsonl"
+
+
+@pytest.fixture()
 def empty_session_path(tmp_path: Path) -> Path:
     """Path to an empty JSONL file."""
     p = tmp_path / "empty.jsonl"

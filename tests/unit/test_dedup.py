@@ -131,3 +131,132 @@ class TestDeduplicateConstructed:
         assert len(result) == 1
         assert result[0].usage is not None
         assert result[0].usage.output_tokens == 100
+
+
+class TestBlockPerLineMerge:
+    """Current Claude Code JSONL emits each content block on its own
+    line, all sharing message_id and output_tokens. The merge path must
+    UNION every content block rather than pick one. See #153."""
+
+    def test_content_blocks_unioned_across_fragments(
+        self, block_per_line_session_path: Path,
+    ) -> None:
+        messages = parse_session(block_per_line_session_path)
+        assistant_msgs = [m for m in messages if m.type == "assistant"]
+        # 5 JSONL lines fragment into one logical assistant message.
+        assert len(assistant_msgs) == 1
+        # Fixture contains: 1 thinking + 1 text + 2 tool_use blocks.
+        blocks_by_type = {}
+        for b in assistant_msgs[0].content_blocks:
+            blocks_by_type.setdefault(b.type, []).append(b)
+        assert len(blocks_by_type["thinking"]) == 1
+        assert len(blocks_by_type["text"]) == 1
+        assert len(blocks_by_type["tool_use"]) == 2
+
+    def test_both_tool_use_ids_present(
+        self, block_per_line_session_path: Path,
+    ) -> None:
+        messages = parse_session(block_per_line_session_path)
+        assistant = next(m for m in messages if m.type == "assistant")
+        # Tool-use blocks carry their id on `ContentBlock.id`.
+        tool_use_ids = {
+            b.id for b in assistant.content_blocks
+            if b.type == "tool_use" and b.id
+        }
+        assert tool_use_ids == {"toolu_01PmCall", "toolu_02ExploreCall"}
+
+    def test_usage_not_double_counted(
+        self, block_per_line_session_path: Path,
+    ) -> None:
+        # All 5 fragments report output_tokens=420. The merge must carry
+        # 420 forward, NOT 5*420=2100.
+        messages = parse_session(block_per_line_session_path)
+        assistant = next(m for m in messages if m.type == "assistant")
+        assert assistant.usage is not None
+        assert assistant.usage.output_tokens == 420
+        assert assistant.usage.input_tokens == 1500
+
+    def test_merge_preserves_message_order(
+        self, block_per_line_session_path: Path,
+    ) -> None:
+        # Expected structure: user, merged assistant, user (pm result),
+        # user (explore result). The merged assistant collapses 5 input
+        # lines into 1, preserving its position at index 1.
+        messages = parse_session(block_per_line_session_path)
+        assert [m.type for m in messages] == ["user", "assistant", "user", "user"]
+
+    def test_constructed_block_per_line_merge(self) -> None:
+        # Explicit constructor form: three fragments of the same message,
+        # each with one block, all with matching output_tokens.
+        frags = [
+            SessionMessage(
+                type="assistant", message_id="m",
+                content_blocks=[ContentBlock(type="text", text="hello")],
+                usage=Usage(output_tokens=100),
+            ),
+            SessionMessage(
+                type="assistant", message_id="m",
+                content_blocks=[
+                    ContentBlock(type="tool_use", id="t1", name="Bash"),
+                ],
+                usage=Usage(output_tokens=100),
+            ),
+            SessionMessage(
+                type="assistant", message_id="m",
+                content_blocks=[
+                    ContentBlock(type="tool_use", tool_use_id="t2", name="Read"),
+                ],
+                usage=Usage(output_tokens=100),
+            ),
+        ]
+        result = deduplicate_messages(frags)
+        assert len(result) == 1
+        merged = result[0]
+        assert len(merged.content_blocks) == 3
+        types = [b.type for b in merged.content_blocks]
+        assert types == ["text", "tool_use", "tool_use"]
+        assert merged.usage is not None
+        assert merged.usage.output_tokens == 100
+
+    def test_duplicate_tool_use_ids_in_fragments_are_deduped(self) -> None:
+        # Defensive: if the same tool_use_id appears in two fragments of
+        # the same message (shouldn't normally happen, but guard against
+        # it), the merge keeps one.
+        frags = [
+            SessionMessage(
+                type="assistant", message_id="m",
+                content_blocks=[
+                    ContentBlock(type="tool_use", id="t1", name="Bash"),
+                ],
+                usage=Usage(output_tokens=50),
+            ),
+            SessionMessage(
+                type="assistant", message_id="m",
+                content_blocks=[
+                    ContentBlock(type="tool_use", id="t1", name="Bash"),
+                ],
+                usage=Usage(output_tokens=50),
+            ),
+        ]
+        result = deduplicate_messages(frags)
+        assert len(result) == 1
+        assert len(result[0].content_blocks) == 1
+
+    def test_fragments_with_missing_usage_still_merge(self) -> None:
+        # Edge case: one fragment has no usage metadata. Should still
+        # merge cleanly without crashing.
+        frags = [
+            SessionMessage(
+                type="assistant", message_id="m",
+                content_blocks=[ContentBlock(type="text", text="a")],
+                usage=Usage(output_tokens=50),
+            ),
+            SessionMessage(
+                type="assistant", message_id="m",
+                content_blocks=[ContentBlock(type="text", text="b")],
+                usage=None,
+            ),
+        ]
+        result = deduplicate_messages(frags)
+        assert len(result) == 1
+        assert len(result[0].content_blocks) == 2
