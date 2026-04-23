@@ -451,6 +451,62 @@ class ModelRoutingRule:
 
 
 # Module-level rule registry. Add new rules here.
+class McpAuditRule:
+    """MCP server audit signals -> recommend mcpServers config edit.
+
+    Both ``MCP_UNUSED_SERVER`` and ``MCP_MISSING_SERVER`` land here;
+    the recommendation branches on signal_type to produce the right
+    observation/reason/action. Severity mirrors the signal
+    (INFO for unused, WARNING for missing) so downstream sort by
+    severity keeps advisory notes below actionable warnings.
+    """
+
+    def matches(self, signal: DiagnosticSignal, config: AgentConfig | None) -> bool:
+        return signal.signal_type in (
+            SignalType.MCP_UNUSED_SERVER,
+            SignalType.MCP_MISSING_SERVER,
+        )
+
+    def recommend(
+        self, signal: DiagnosticSignal, config: AgentConfig | None,
+    ) -> DiagnosticRecommendation:
+        observation = signal.message
+        server_name = str(signal.detail.get("server_name", ""))
+
+        if signal.signal_type == SignalType.MCP_UNUSED_SERVER:
+            source_file = str(signal.detail.get("source_file", ""))
+            reason = (
+                "A configured server with no observed usage is either "
+                "unused or inactive — removing it reduces config drift."
+            )
+            action = (
+                f"Remove '{server_name}' from mcpServers in {source_file}, "
+                "or set disabled: true if you expect to use it later."
+            )
+        else:  # MCP_MISSING_SERVER
+            reason = (
+                "Failed calls to an unconfigured MCP server indicate the "
+                "server is expected but not installed in any config "
+                "scope visible to the agent."
+            )
+            action = (
+                f"Add '{server_name}' to ~/.claude.json (user scope) or "
+                ".mcp.json (project scope) so the agent can reach it."
+            )
+
+        return DiagnosticRecommendation(
+            target="mcp",
+            severity=signal.severity,
+            message=f"{observation} {reason} {action}",
+            observation=observation,
+            reason=reason,
+            action=action,
+            agent_type=signal.agent_type,
+            config_file=str(signal.detail.get("source_file", "")),
+            signal_types=[signal.signal_type],
+        )
+
+
 RULES: list[CorrelationRule] = [
     AccessErrorRule(),
     ErrorHandlingRule(),
@@ -461,6 +517,7 @@ RULES: list[CorrelationRule] = [
     StuckPatternRule(),
     ErrorSequenceRule(),
     ModelRoutingRule(),
+    McpAuditRule(),
 ]
 
 

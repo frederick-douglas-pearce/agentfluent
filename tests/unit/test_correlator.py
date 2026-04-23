@@ -375,3 +375,76 @@ class TestModelRoutingCorrelation:
         recs = correlate(signals, None)
         assert len(recs) == 1
         assert recs[0].config_file == ""
+
+
+class TestMcpAuditCorrelation:
+    def _unused_signal(
+        self, server_name: str = "slack", source_file: str = "/home/u/.claude.json",
+    ) -> DiagnosticSignal:
+        return _signal(
+            signal_type=SignalType.MCP_UNUSED_SERVER,
+            severity=Severity.INFO,
+            agent_type="",
+            message=(
+                f"MCP server '{server_name}' is configured in {source_file} "
+                "but has 0 tool calls across 12 analyzed sessions. "
+                "Consider removing from mcpServers or marking as disabled."
+            ),
+            detail={
+                "server_name": server_name,
+                "source_file": source_file,
+                "configured_tools": None,
+                "sessions_analyzed": 12,
+            },
+        )
+
+    def _missing_signal(
+        self, server_name: str = "slack",
+    ) -> DiagnosticSignal:
+        return _signal(
+            signal_type=SignalType.MCP_MISSING_SERVER,
+            severity=Severity.WARNING,
+            agent_type="",
+            message=(
+                f"3 failed calls to mcp__{server_name}__* across 5 sessions, "
+                f"but no '{server_name}' server configured. "
+                "Add to .mcp.json or ~/.claude.json."
+            ),
+            detail={
+                "server_name": server_name,
+                "total_calls": 5,
+                "error_count": 3,
+                "unique_tools": ["send_message"],
+                "sessions_analyzed": 5,
+            },
+        )
+
+    def test_unused_signal_produces_mcp_target_recommendation(self) -> None:
+        recs = correlate([self._unused_signal()])
+        assert len(recs) == 1
+        rec = recs[0]
+        assert rec.target == "mcp"
+        assert rec.severity == Severity.INFO
+        # Action names the server and points at the source file.
+        assert "slack" in rec.action
+        assert "/home/u/.claude.json" in rec.action
+        assert rec.signal_types == [SignalType.MCP_UNUSED_SERVER]
+
+    def test_missing_signal_produces_warning_recommendation(self) -> None:
+        recs = correlate([self._missing_signal()])
+        assert len(recs) == 1
+        rec = recs[0]
+        assert rec.target == "mcp"
+        assert rec.severity == Severity.WARNING
+        assert "slack" in rec.action
+        # Action suggests adding to either user or project config.
+        assert "~/.claude.json" in rec.action or ".mcp.json" in rec.action
+        assert rec.signal_types == [SignalType.MCP_MISSING_SERVER]
+
+    def test_non_mcp_signal_is_not_claimed_by_mcp_rule(self) -> None:
+        # A plain ERROR_PATTERN signal should route through other rules,
+        # not McpAuditRule. If McpAuditRule.matches were too loose this
+        # test would fail.
+        recs = correlate([_signal(keyword="error")])
+        # At least one recommendation; target is NOT "mcp".
+        assert all(r.target != "mcp" for r in recs)
