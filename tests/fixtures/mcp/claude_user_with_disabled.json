@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "alpha": {
+      "command": "mcp-alpha",
+      "args": [],
+      "disabled": true
+    },
+    "beta": {
+      "command": "mcp-beta",
+      "args": [],
+      "tools": ["read", "write"]
+    }
+  }
+}
