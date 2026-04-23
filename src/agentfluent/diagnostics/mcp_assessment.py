@@ -229,6 +229,28 @@ def extract_mcp_usage(
     return {server: a.build(server) for server, a in agg.items()}
 
 
+def _mcp_signal(
+    signal_type: SignalType,
+    severity: Severity,
+    message: str,
+    detail: dict[str, object],
+) -> DiagnosticSignal:
+    """Build an MCP audit signal with the boilerplate prefilled.
+
+    All MCP signals share ``agent_type=""`` (MCP servers aren't scoped
+    to a single agent_type — they're cross-agent concerns). This
+    helper pins that default so callers only specify the varying
+    fields.
+    """
+    return DiagnosticSignal(
+        signal_type=signal_type,
+        severity=severity,
+        agent_type="",
+        message=message,
+        detail=detail,
+    )
+
+
 def audit_mcp_servers(
     usage_by_server: dict[str, McpServerUsage],
     configured: list[McpServerConfig],
@@ -271,25 +293,22 @@ def _detect_unused_servers(
         usage = usage_by_server.get(server.server_name)
         if usage is not None and usage.total_calls > 0:
             continue
-        signals.append(
-            DiagnosticSignal(
-                signal_type=SignalType.MCP_UNUSED_SERVER,
-                severity=Severity.INFO,
-                agent_type="",
-                message=(
-                    f"MCP server '{server.server_name}' is configured in "
-                    f"{server.source_file} but has 0 tool calls across "
-                    f"{sessions_analyzed} analyzed sessions. "
-                    "Consider removing from mcpServers or marking as disabled."
-                ),
-                detail={
-                    "server_name": server.server_name,
-                    "source_file": str(server.source_file),
-                    "configured_tools": server.configured_tools,
-                    "sessions_analyzed": sessions_analyzed,
-                },
+        signals.append(_mcp_signal(
+            signal_type=SignalType.MCP_UNUSED_SERVER,
+            severity=Severity.INFO,
+            message=(
+                f"MCP server '{server.server_name}' is configured in "
+                f"{server.source_file} but has 0 tool calls across "
+                f"{sessions_analyzed} analyzed sessions. "
+                "Consider removing from mcpServers or marking as disabled."
             ),
-        )
+            detail={
+                "server_name": server.server_name,
+                "source_file": str(server.source_file),
+                "configured_tools": server.configured_tools,
+                "sessions_analyzed": sessions_analyzed,
+            },
+        ))
     return signals
 
 
@@ -307,24 +326,21 @@ def _detect_missing_servers(
         if usage.error_count == 0:
             # All calls succeeded — mystery server but not broken.
             continue
-        signals.append(
-            DiagnosticSignal(
-                signal_type=SignalType.MCP_MISSING_SERVER,
-                severity=Severity.WARNING,
-                agent_type="",
-                message=(
-                    f"{usage.error_count} failed calls to "
-                    f"mcp__{name}__* across {sessions_analyzed} sessions, "
-                    f"but no '{name}' server configured. "
-                    "Add to .mcp.json or ~/.claude.json."
-                ),
-                detail={
-                    "server_name": name,
-                    "total_calls": usage.total_calls,
-                    "error_count": usage.error_count,
-                    "unique_tools": usage.unique_tools,
-                    "sessions_analyzed": sessions_analyzed,
-                },
+        signals.append(_mcp_signal(
+            signal_type=SignalType.MCP_MISSING_SERVER,
+            severity=Severity.WARNING,
+            message=(
+                f"{usage.error_count} failed calls to "
+                f"mcp__{name}__* across {sessions_analyzed} sessions, "
+                f"but no '{name}' server configured. "
+                "Add to .mcp.json or ~/.claude.json."
             ),
-        )
+            detail={
+                "server_name": name,
+                "total_calls": usage.total_calls,
+                "error_count": usage.error_count,
+                "unique_tools": usage.unique_tools,
+                "sessions_analyzed": sessions_analyzed,
+            },
+        ))
     return signals
