@@ -35,7 +35,7 @@ from pydantic import BaseModel
 from agentfluent.agents.models import WRITE_TOOLS
 from agentfluent.analytics.pricing import compute_cost, get_pricing
 from agentfluent.config.models import Severity
-from agentfluent.diagnostics.delegation import MODEL_HAIKU, MODEL_OPUS, MODEL_SONNET
+from agentfluent.diagnostics.delegation import MODEL_HAIKU, MODEL_SONNET
 from agentfluent.diagnostics.models import DiagnosticSignal, SignalType
 from agentfluent.diagnostics.signals import ERROR_REGEX
 
@@ -59,28 +59,29 @@ _COMPLEX_MIN_TOOL_CALLS = 10
 _COMPLEX_MIN_TOKENS = 5_000
 _COMPLEX_MIN_ERROR_RATE = 0.20
 
-# Mapping: declared model → complexity tier the model is suited for.
-# Covers both short aliases (`claude-opus-4-7`) and dated pinned forms
-# (`claude-haiku-4-5-20251001`) since subagent traces record whichever
-# ID was in use at runtime. Unknown aliases still fall through to
-# "moderate" via `.get(..., "moderate")`. Keep in sync with
-# `analytics.pricing._PRICING` so every priced model maps cleanly;
-# tracked as a maintenance concern — a mismatch here silently defaults
-# a real model to "moderate" and suppresses legitimate MODEL_MISMATCH
-# signals.
-MODEL_TIER_MAP: dict[str, ComplexityTier] = {
-    # Haiku tier — cheap/fast.
-    MODEL_HAIKU: "simple",
-    "claude-haiku-4-5-20251001": "simple",
-    # Sonnet tier — default mid-tier.
-    MODEL_SONNET: "moderate",
-    "claude-sonnet-4-5-20250929": "moderate",
-    "claude-sonnet-4-20250514": "moderate",
-    # Opus tier — heavy/expensive.
-    MODEL_OPUS: "complex",
-    "claude-opus-4-6": "complex",
-    "claude-opus-4-5-20251101": "complex",
+# Complexity tier by Claude model family. Model IDs follow the pattern
+# `claude-<family>-<version>[-<date>]`, so a prefix match covers both
+# short aliases (`claude-opus-4-7`) and dated pinned forms
+# (`claude-haiku-4-5-20251001`) that subagent traces record at runtime.
+# Avoids duplicating the model catalog with `analytics.pricing._PRICING`.
+_TIER_BY_FAMILY: dict[ComplexityTier, tuple[str, ...]] = {
+    "simple": ("claude-haiku",),
+    "moderate": ("claude-sonnet",),
+    "complex": ("claude-opus",),
 }
+
+
+def classify_model_tier(model: str) -> ComplexityTier:
+    """Classify a Claude model ID into a complexity tier by family prefix.
+
+    Returns "moderate" for anything that doesn't match a known family —
+    a safe default that doesn't emit MODEL_MISMATCH signals against
+    unrecognized models.
+    """
+    for tier, prefixes in _TIER_BY_FAMILY.items():
+        if any(model.startswith(p) for p in prefixes):
+            return tier
+    return "moderate"
 
 
 class AgentStats(BaseModel):
@@ -291,7 +292,7 @@ def _detect_mismatch(stats: AgentStats) -> DiagnosticSignal | None:
         return None
     if stats.current_model is None:
         return None
-    current_tier = MODEL_TIER_MAP.get(stats.current_model, "moderate")
+    current_tier = classify_model_tier(stats.current_model)
     complexity = classify_complexity(stats)
 
     if complexity == "simple" and current_tier in ("moderate", "complex"):

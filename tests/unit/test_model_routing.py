@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agentfluent.agents.models import AgentInvocation
+from agentfluent.analytics.pricing import get_known_models
 from agentfluent.config.models import AgentConfig, Scope, Severity
 from agentfluent.diagnostics.delegation import (
     MODEL_HAIKU,
@@ -12,12 +13,12 @@ from agentfluent.diagnostics.delegation import (
     MODEL_SONNET,
 )
 from agentfluent.diagnostics.model_routing import (
-    MODEL_TIER_MAP,
     AgentStats,
     _compute_error_rate,
     _compute_savings,
     aggregate_agent_stats,
     classify_complexity,
+    classify_model_tier,
     extract_model_routing_signals,
 )
 from agentfluent.diagnostics.models import SignalType
@@ -355,23 +356,37 @@ class TestHelpers:
         inv = _inv(tool_uses=0, output_text="")
         assert _compute_error_rate(inv) == 0.0
 
-    def test_model_tier_map_covers_all_canonical_models(self) -> None:
-        assert MODEL_TIER_MAP[MODEL_HAIKU] == "simple"
-        assert MODEL_TIER_MAP[MODEL_SONNET] == "moderate"
-        assert MODEL_TIER_MAP[MODEL_OPUS] == "complex"
+    def test_classify_model_tier_short_aliases(self) -> None:
+        assert classify_model_tier(MODEL_HAIKU) == "simple"
+        assert classify_model_tier(MODEL_SONNET) == "moderate"
+        assert classify_model_tier(MODEL_OPUS) == "complex"
 
-    def test_model_tier_map_covers_dated_aliases_from_pricing(self) -> None:
-        # Regression guard: subagent traces record dated pinned forms
-        # like "claude-haiku-4-5-20251001" at runtime. Every model
-        # that pricing knows about must also tier-map, or real-world
-        # signals silently fall through to "moderate" and suppress
-        # legitimate MODEL_MISMATCH emissions.
-        from agentfluent.analytics.pricing import get_known_models
-        known = get_known_models()
-        missing = [m for m in known if m not in MODEL_TIER_MAP]
-        assert not missing, (
-            f"Models priced but not tier-mapped: {missing}. Add them to "
-            "MODEL_TIER_MAP in diagnostics/model_routing.py."
+    def test_classify_model_tier_handles_dated_pinned_forms(self) -> None:
+        # Subagent traces record dated forms at runtime; family-prefix
+        # matching covers both short aliases and pinned variants.
+        assert classify_model_tier("claude-haiku-4-5-20251001") == "simple"
+        assert classify_model_tier("claude-sonnet-4-5-20250929") == "moderate"
+        assert classify_model_tier("claude-opus-4-5-20251101") == "complex"
+
+    def test_classify_model_tier_unknown_family_defaults_moderate(self) -> None:
+        assert classify_model_tier("claude-experimental-9000") == "moderate"
+        assert classify_model_tier("") == "moderate"
+
+    def test_every_priced_model_classifies_by_family(self) -> None:
+        # Regression guard: every model pricing knows about should
+        # match one of the three family prefixes (haiku / sonnet /
+        # opus). A priced model landing on the "moderate" default
+        # without being sonnet means we've shipped a new family the
+        # classifier doesn't recognize — which would silently suppress
+        # real MODEL_MISMATCH emissions.
+        priced = get_known_models()
+        unknown = [
+            m for m in priced
+            if classify_model_tier(m) == "moderate"
+            and not m.startswith("claude-sonnet")
+        ]
+        assert not unknown, (
+            f"Priced models not claimed by any family prefix: {unknown}"
         )
 
     def test_severity_is_warning(self) -> None:
