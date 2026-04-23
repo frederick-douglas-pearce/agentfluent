@@ -37,6 +37,38 @@ logger = logging.getLogger(__name__)
 MCP_PROJECT_FILENAME = ".mcp.json"
 
 
+def resolve_project_disk_path(
+    slug: str,
+    claude_config_dir: Path | None,
+) -> Path | None:
+    """Map a ``~/.claude/projects/<slug>/`` directory name back to the
+    original on-disk project path.
+
+    Claude Code stores per-project data in ``~/.claude.json`` keyed by
+    absolute path (e.g., ``/home/user/myproj``). The project directory
+    inside ``~/.claude/projects/`` is a slug-encoded form of that
+    path (``-home-user-myproj``). Direct slug reversal would be lossy
+    for paths containing hyphens, so we look up the slug in the
+    ``projects`` dict keys and match by forward-encoding each
+    candidate absolute path — the unambiguous direction.
+
+    Returns ``None`` when no match is found or ``~/.claude.json`` is
+    missing / malformed. Callers typically degrade gracefully in that
+    case (MCP discovery falls back to user scope only).
+    """
+    claude_json_path = claude_json_for(claude_config_dir)
+    data = _load_json(claude_json_path)
+    if data is None:
+        return None
+    projects = data.get("projects")
+    if not isinstance(projects, dict):
+        return None
+    for abs_path_str in projects:
+        if str(abs_path_str).replace("/", "-") == slug:
+            return Path(str(abs_path_str))
+    return None
+
+
 def discover_mcp_servers(
     claude_config_dir: Path | None,
     project_dir: Path | None,

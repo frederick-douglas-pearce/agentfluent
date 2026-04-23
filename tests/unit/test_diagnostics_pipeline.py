@@ -445,3 +445,67 @@ class TestCrossReferenceEnrichment:
         note = suggestions[0].dedup_note
         assert ".." not in note  # no double-period from naive concat
         assert "pm" in note and "claude-haiku-4-5" in note
+
+
+class TestMcpAuditWiring:
+    """run_diagnostics MCP-audit gate: runs only when caller passes
+    explicit MCP context. Prevents programmatic callers from silently
+    picking up the user's real ~/.claude.json.
+    """
+
+    def test_no_mcp_context_skips_audit(self, tmp_path, monkeypatch) -> None:
+        # Even if a real ~/.claude.json would return servers, a caller
+        # that passes nothing should see no MCP audit output. Redirect
+        # Path.home to an empty dir to also guarantee no accidental read.
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        result = run_diagnostics([_inv()])
+        assert all(
+            s.signal_type.value not in ("mcp_unused_server", "mcp_missing_server")
+            for s in result.signals
+        )
+
+    def test_mcp_tool_calls_provided_triggers_audit(
+        self, tmp_path, monkeypatch,
+    ) -> None:
+        # Even with no configured servers (empty home), providing
+        # mcp_tool_calls that had errors should fire MCP_MISSING_SERVER.
+        from agentfluent.diagnostics.mcp_assessment import McpToolCall
+
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        calls = [
+            McpToolCall(
+                server_name="unknown_server", tool_name="x", is_error=True,
+            ),
+            McpToolCall(
+                server_name="unknown_server", tool_name="y", is_error=True,
+            ),
+        ]
+        result = run_diagnostics([_inv()], mcp_tool_calls=calls)
+        assert any(
+            s.signal_type == SignalType.MCP_MISSING_SERVER
+            for s in result.signals
+        )
+
+    def test_configured_servers_read_when_claude_config_dir_passed(
+        self, tmp_path, monkeypatch,
+    ) -> None:
+        # Passing claude_config_dir is enough to trigger audit even
+        # without mcp_tool_calls — caller opts in explicitly.
+        import json
+
+        claude_root = tmp_path / ".claude"
+        claude_root.mkdir()
+        claude_json = tmp_path / ".claude.json"
+        claude_json.write_text(
+            json.dumps({"mcpServers": {"unused-svc": {"command": "x"}}}),
+        )
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+        result = run_diagnostics([_inv()], claude_config_dir=claude_root)
+
+        unused = [
+            s for s in result.signals
+            if s.signal_type == SignalType.MCP_UNUSED_SERVER
+        ]
+        assert len(unused) == 1
+        assert unused[0].detail["server_name"] == "unused-svc"

@@ -13,6 +13,7 @@ from agentfluent.cli.exit_codes import EXIT_NO_DATA, EXIT_USER_ERROR
 from agentfluent.cli.formatters.helpers import format_cost, format_tokens
 from agentfluent.cli.formatters.json_output import format_json_output
 from agentfluent.cli.formatters.table import format_analysis_table
+from agentfluent.config.mcp_discovery import resolve_project_disk_path
 from agentfluent.core.discovery import find_project
 from agentfluent.core.paths import projects_dir_for
 from agentfluent.diagnostics import run_diagnostics
@@ -181,8 +182,16 @@ def analyze(
     result = analyze_sessions(paths, agent_filter=agent)
 
     all_invocations = [inv for s in result.sessions for inv in s.invocations]
+    all_mcp_calls = [c for s in result.sessions for c in s.mcp_tool_calls]
 
     if all_invocations:
+        # `project_info.path` is the ~/.claude/projects/<slug>/ dir, not
+        # the original project source path. MCP discovery needs the
+        # real path (for .mcp.json and ~/.claude.json:projects[<abs>]
+        # lookups); resolve it via the slug.
+        project_disk_path = resolve_project_disk_path(
+            project_info.slug, claude_config_dir=config_dir,
+        )
         result.diagnostics = run_diagnostics(
             all_invocations,
             min_cluster_size=(
@@ -193,6 +202,9 @@ def analyze(
                 min_similarity if min_similarity is not None
                 else DEFAULT_MIN_SIMILARITY
             ),
+            mcp_tool_calls=all_mcp_calls,
+            claude_config_dir=config_dir,
+            project_dir=project_disk_path,
         )
     elif result.agent_metrics.total_invocations == 0 and diagnostics:
         console.print(

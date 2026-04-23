@@ -16,8 +16,10 @@ pattern used elsewhere.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from agentfluent.agents.models import AgentInvocation
+from agentfluent.config.mcp_discovery import discover_mcp_servers
 from agentfluent.config.models import AgentConfig
 from agentfluent.config.scanner import scan_agents
 from agentfluent.diagnostics.correlator import correlate
@@ -26,6 +28,11 @@ from agentfluent.diagnostics.delegation import (
     DEFAULT_MIN_SIMILARITY,
     SKLEARN_AVAILABLE,
     suggest_delegations,
+)
+from agentfluent.diagnostics.mcp_assessment import (
+    McpToolCall,
+    audit_mcp_servers,
+    extract_mcp_usage,
 )
 from agentfluent.diagnostics.model_routing import extract_model_routing_signals
 from agentfluent.diagnostics.models import (
@@ -153,6 +160,9 @@ def run_diagnostics(
     *,
     min_cluster_size: int = DEFAULT_MIN_CLUSTER_SIZE,
     min_similarity: float = DEFAULT_MIN_SIMILARITY,
+    mcp_tool_calls: list[McpToolCall] | None = None,
+    claude_config_dir: Path | None = None,
+    project_dir: Path | None = None,
 ) -> DiagnosticsResult:
     """Run the full diagnostics pipeline on agent invocations.
 
@@ -163,6 +173,14 @@ def run_diagnostics(
     general-purpose delegations. ``subagent_trace_count`` on the result
     reflects traces that successfully parsed and linked, not the raw
     filesystem enumeration.
+
+    MCP audit runs when any of three conditions hold: a user has
+    configured MCP servers discovered at ``claude_config_dir`` /
+    ``project_dir``, subagent traces carry MCP tool calls, or
+    ``mcp_tool_calls`` (parent-session MCP calls collected by
+    ``analyze_session``) is non-empty. Silent-skips the whole audit
+    when all three are empty — no noisy "MCP Assessment" section on
+    projects that don't use MCP at all.
     """
     signals = extract_signals(invocations)
 
@@ -189,6 +207,32 @@ def run_diagnostics(
     # Aggregate-level signals (model-routing) use the same config lookup
     # the correlator will read from; fold them in before correlation.
     signals.extend(extract_model_routing_signals(invocations, configs_by_name))
+
+    # MCP audit. Runs only when the caller has provided explicit MCP
+    # context — avoids silently picking up the user's real
+    # ~/.claude.json from programmatic callers (tests, libraries) that
+    # don't opt in. The CLI always passes at least `mcp_tool_calls`
+    # and `claude_config_dir`, so users still get audit by default.
+    # Final silent-skip when audit runs but has no content to avoid a
+    # noisy "MCP Assessment" section on non-MCP projects.
+    mcp_audit_requested = (
+        mcp_tool_calls is not None
+        or claude_config_dir is not None
+        or project_dir is not None
+    )
+    if mcp_audit_requested:
+        mcp_usage = extract_mcp_usage(invocations, mcp_tool_calls)
+        configured_mcp = discover_mcp_servers(
+            claude_config_dir=claude_config_dir, project_dir=project_dir,
+        )
+        if mcp_usage or configured_mcp:
+            signals.extend(
+                audit_mcp_servers(
+                    mcp_usage,
+                    configured_mcp,
+                    sessions_analyzed=len(invocations) or 1,
+                ),
+            )
 
     recommendations = correlate(signals, configs_by_name)
 
