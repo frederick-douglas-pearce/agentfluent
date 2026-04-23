@@ -330,6 +330,58 @@ class TestDurationMs:
         assert parse_subagent_trace(path).duration_ms is None
 
 
+class TestModelCapture:
+    """The parser retains the first assistant message's `model` string
+    on `SubagentTrace.model` so `diagnostics.model_routing` can fall
+    back to it when an agent has no declared `AgentConfig.model`. See
+    #142."""
+
+    def test_populates_from_first_assistant_message(
+        self, write_jsonl: WriteJSONL,
+    ) -> None:
+        path = write_jsonl(
+            "agent-x.jsonl",
+            [
+                _user("go"),
+                _assistant(
+                    [{"type": "text", "text": "hi"}],
+                    message_id="msg_01",
+                ),
+            ],
+        )
+        trace = parse_subagent_trace(path)
+        # Default model on _assistant is `claude-opus-4-6`.
+        assert trace.model == "claude-opus-4-6"
+
+    def test_no_assistants_leaves_model_none(
+        self, write_jsonl: WriteJSONL,
+    ) -> None:
+        path = write_jsonl("agent-x.jsonl", [_user("only user")])
+        assert parse_subagent_trace(path).model is None
+
+    def test_uses_first_when_multiple_assistants_present(
+        self, write_jsonl: WriteJSONL,
+    ) -> None:
+        # Two assistant messages with different models (a data anomaly
+        # — subagents don't switch models mid-run — but we still pick
+        # the first deterministically).
+        first = _assistant(
+            [{"type": "text", "text": "a"}],
+            message_id="msg_a",
+            timestamp="2026-04-21T10:00:01.000Z",
+        )
+        first["message"]["model"] = "claude-haiku-4-5"
+        second = _assistant(
+            [{"type": "text", "text": "b"}],
+            message_id="msg_b",
+            timestamp="2026-04-21T10:00:02.000Z",
+        )
+        second["message"]["model"] = "claude-opus-4-7"
+
+        path = write_jsonl("agent-x.jsonl", [_user("go"), first, second])
+        assert parse_subagent_trace(path).model == "claude-haiku-4-5"
+
+
 class TestEdgeCases:
     def test_empty_file(self, tmp_path: Path) -> None:
         path = tmp_path / "agent-x.jsonl"
@@ -339,6 +391,7 @@ class TestEdgeCases:
         assert trace.delegation_prompt == ""
         assert trace.usage.total_tokens == 0
         assert trace.duration_ms is None
+        assert trace.model is None
 
     def test_missing_file_raises(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError, match="not found"):

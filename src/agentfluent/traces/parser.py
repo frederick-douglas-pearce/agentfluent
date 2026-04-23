@@ -188,4 +188,20 @@ def parse_subagent_trace(path: Path) -> SubagentTrace:
         usage=_sum_usage(messages),
         duration_ms=_compute_duration_ms(messages),
         source_file=path.resolve(),
+        model=_first_assistant_model(messages),
     )
+
+
+def _first_assistant_model(messages: list[SessionMessage]) -> str | None:
+    """Return the model string from the first assistant message, or None.
+
+    Subagents are spawned with a model and don't switch mid-run; the
+    first assistant message's model is authoritative for the trace.
+    Later drift (different models across assistant messages) would be a
+    data anomaly — not worth special-casing here; ``diagnostics.model_routing``
+    consumes this single value.
+    """
+    for msg in messages:
+        if msg.type == "assistant" and msg.model:
+            return msg.model
+    return None

@@ -35,7 +35,7 @@ from pydantic import BaseModel
 from agentfluent.agents.models import WRITE_TOOLS
 from agentfluent.analytics.pricing import compute_cost, get_pricing
 from agentfluent.config.models import Severity
-from agentfluent.diagnostics.delegation import MODEL_HAIKU, MODEL_OPUS, MODEL_SONNET
+from agentfluent.diagnostics.delegation import MODEL_HAIKU, MODEL_SONNET
 from agentfluent.diagnostics.models import DiagnosticSignal, SignalType
 from agentfluent.diagnostics.signals import ERROR_REGEX
 
@@ -59,13 +59,29 @@ _COMPLEX_MIN_TOOL_CALLS = 10
 _COMPLEX_MIN_TOKENS = 5_000
 _COMPLEX_MIN_ERROR_RATE = 0.20
 
-# Mapping: declared model → complexity tier the model is suited for.
-# Older/unknown aliases fall through to "moderate" via .get().
-MODEL_TIER_MAP: dict[str, ComplexityTier] = {
-    MODEL_HAIKU: "simple",
-    MODEL_SONNET: "moderate",
-    MODEL_OPUS: "complex",
+# Complexity tier by Claude model family. Model IDs follow the pattern
+# `claude-<family>-<version>[-<date>]`, so a prefix match covers both
+# short aliases (`claude-opus-4-7`) and dated pinned forms
+# (`claude-haiku-4-5-20251001`) that subagent traces record at runtime.
+# Avoids duplicating the model catalog with `analytics.pricing._PRICING`.
+_TIER_BY_FAMILY: dict[ComplexityTier, tuple[str, ...]] = {
+    "simple": ("claude-haiku",),
+    "moderate": ("claude-sonnet",),
+    "complex": ("claude-opus",),
 }
+
+
+def classify_model_tier(model: str) -> ComplexityTier:
+    """Classify a Claude model ID into a complexity tier by family prefix.
+
+    Returns "moderate" for anything that doesn't match a known family —
+    a safe default that doesn't emit MODEL_MISMATCH signals against
+    unrecognized models.
+    """
+    for tier, prefixes in _TIER_BY_FAMILY.items():
+        if any(model.startswith(p) for p in prefixes):
+            return tier
+    return "moderate"
 
 
 class AgentStats(BaseModel):
@@ -107,6 +123,28 @@ def _has_write_tools_in_trace(inv: AgentInvocation) -> bool:
     return bool(trace.unique_tool_names & WRITE_TOOLS)
 
 
+def _resolve_current_model(
+    group: list[AgentInvocation],
+    config: AgentConfig | None,
+) -> str | None:
+    """Pick the model for an agent_type using `config → trace → None`.
+
+    The explicit ``AgentConfig.model`` wins when set — it's the
+    declaration the user would edit. Fallback to the first linked
+    trace's ``model`` field (populated at parse time from the
+    subagent's first assistant message), which covers the common case
+    where subagents inherit the parent session's model without
+    declaring anything in frontmatter. Returns ``None`` when neither
+    source has a value; downstream skips those agents.
+    """
+    if config and config.model:
+        return config.model
+    for inv in group:
+        if inv.trace is not None and inv.trace.model:
+            return inv.trace.model
+    return None
+
+
 def aggregate_agent_stats(
     invocations: list[AgentInvocation],
     configs: dict[str, AgentConfig] | None,
@@ -114,9 +152,9 @@ def aggregate_agent_stats(
     """Roll up per-invocation metrics into per-agent-type aggregates.
 
     Keyed by lowercased agent_type to match the correlator's config
-    lookup contract. ``current_model`` is sourced from the matching
-    ``AgentConfig.model`` (MVP); invocations with no config map to
-    ``None`` and are skipped downstream.
+    lookup contract. ``current_model`` is resolved by
+    ``_resolve_current_model`` using the ``config → trace → None``
+    precedence chain.
     """
     groups: dict[str, list[AgentInvocation]] = defaultdict(list)
     for inv in invocations:
@@ -131,7 +169,7 @@ def aggregate_agent_stats(
         has_writes = any(_has_write_tools_in_trace(i) for i in group)
 
         config = configs.get(key) if configs else None
-        current_model = config.model if (config and config.model) else None
+        current_model = _resolve_current_model(group, config)
 
         stats_by_type[key] = AgentStats(
             agent_type=canonical_name,
@@ -254,7 +292,7 @@ def _detect_mismatch(stats: AgentStats) -> DiagnosticSignal | None:
         return None
     if stats.current_model is None:
         return None
-    current_tier = MODEL_TIER_MAP.get(stats.current_model, "moderate")
+    current_tier = classify_model_tier(stats.current_model)
     complexity = classify_complexity(stats)
 
     if complexity == "simple" and current_tier in ("moderate", "complex"):

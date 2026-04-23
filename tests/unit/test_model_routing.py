@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agentfluent.agents.models import AgentInvocation
+from agentfluent.analytics.pricing import get_known_models
 from agentfluent.config.models import AgentConfig, Scope, Severity
 from agentfluent.diagnostics.delegation import (
     MODEL_HAIKU,
@@ -12,12 +13,12 @@ from agentfluent.diagnostics.delegation import (
     MODEL_SONNET,
 )
 from agentfluent.diagnostics.model_routing import (
-    MODEL_TIER_MAP,
     AgentStats,
     _compute_error_rate,
     _compute_savings,
     aggregate_agent_stats,
     classify_complexity,
+    classify_model_tier,
     extract_model_routing_signals,
 )
 from agentfluent.diagnostics.models import SignalType
@@ -135,6 +136,58 @@ class TestAggregateAgentStats:
         invs = [_inv(agent_type="pm")]
         result = aggregate_agent_stats(invs, configs=None)
         assert result["pm"].current_model is None
+
+
+class TestModelPrecedence:
+    """Precedence chain: `AgentConfig.model` → `SubagentTrace.model`
+    → None. See #142 — when no config is declared, fall back to the
+    model observed on the subagent's own trace so model-routing can
+    still analyze the agent."""
+
+    def _trace_with_model(self, model: str) -> SubagentTrace:
+        return SubagentTrace(
+            agent_id="t", agent_type="unknown",
+            delegation_prompt="", model=model,
+        )
+
+    def test_trace_model_used_when_no_config(self) -> None:
+        trace = self._trace_with_model(MODEL_OPUS)
+        invs = [
+            _inv(agent_type="pm", trace=trace, tool_uses=2, total_tokens=500)
+            for _ in range(5)
+        ]
+        # No config at all — previously this would skip the agent.
+        signals = extract_model_routing_signals(invs, configs=None)
+        assert len(signals) == 1
+        assert signals[0].detail["mismatch_type"] == "overspec"
+        assert signals[0].detail["current_model"] == MODEL_OPUS
+
+    def test_config_model_wins_over_trace_model(self) -> None:
+        # Config says Opus; trace says Haiku. Config is the explicit
+        # declaration the author would edit, so it wins.
+        trace = self._trace_with_model(MODEL_HAIKU)
+        invs = [
+            _inv(agent_type="pm", trace=trace, tool_uses=2, total_tokens=500)
+            for _ in range(5)
+        ]
+        configs = {"pm": _config(model=MODEL_OPUS)}
+        signals = extract_model_routing_signals(invs, configs)
+        # Flagged as overspec because config says Opus on a simple task.
+        assert len(signals) == 1
+        assert signals[0].detail["current_model"] == MODEL_OPUS
+
+    def test_no_model_anywhere_still_skipped(self) -> None:
+        # Neither config nor trace carries a model — agent stays
+        # invisible to model-routing, the existing MVP behavior.
+        trace = SubagentTrace(
+            agent_id="t", agent_type="unknown",
+            delegation_prompt="", model=None,
+        )
+        invs = [
+            _inv(agent_type="pm", trace=trace, tool_uses=2, total_tokens=500)
+            for _ in range(5)
+        ]
+        assert extract_model_routing_signals(invs, configs=None) == []
 
 
 class TestClassifyComplexity:
@@ -303,10 +356,38 @@ class TestHelpers:
         inv = _inv(tool_uses=0, output_text="")
         assert _compute_error_rate(inv) == 0.0
 
-    def test_model_tier_map_covers_all_canonical_models(self) -> None:
-        assert MODEL_TIER_MAP[MODEL_HAIKU] == "simple"
-        assert MODEL_TIER_MAP[MODEL_SONNET] == "moderate"
-        assert MODEL_TIER_MAP[MODEL_OPUS] == "complex"
+    def test_classify_model_tier_short_aliases(self) -> None:
+        assert classify_model_tier(MODEL_HAIKU) == "simple"
+        assert classify_model_tier(MODEL_SONNET) == "moderate"
+        assert classify_model_tier(MODEL_OPUS) == "complex"
+
+    def test_classify_model_tier_handles_dated_pinned_forms(self) -> None:
+        # Subagent traces record dated forms at runtime; family-prefix
+        # matching covers both short aliases and pinned variants.
+        assert classify_model_tier("claude-haiku-4-5-20251001") == "simple"
+        assert classify_model_tier("claude-sonnet-4-5-20250929") == "moderate"
+        assert classify_model_tier("claude-opus-4-5-20251101") == "complex"
+
+    def test_classify_model_tier_unknown_family_defaults_moderate(self) -> None:
+        assert classify_model_tier("claude-experimental-9000") == "moderate"
+        assert classify_model_tier("") == "moderate"
+
+    def test_every_priced_model_classifies_by_family(self) -> None:
+        # Regression guard: every model pricing knows about should
+        # match one of the three family prefixes (haiku / sonnet /
+        # opus). A priced model landing on the "moderate" default
+        # without being sonnet means we've shipped a new family the
+        # classifier doesn't recognize — which would silently suppress
+        # real MODEL_MISMATCH emissions.
+        priced = get_known_models()
+        unknown = [
+            m for m in priced
+            if classify_model_tier(m) == "moderate"
+            and not m.startswith("claude-sonnet")
+        ]
+        assert not unknown, (
+            f"Priced models not claimed by any family prefix: {unknown}"
+        )
 
     def test_severity_is_warning(self) -> None:
         invs = [_inv(agent_type="pm", tool_uses=2, total_tokens=500) for _ in range(5)]

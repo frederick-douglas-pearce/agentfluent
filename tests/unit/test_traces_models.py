@@ -204,6 +204,17 @@ class TestSubagentTrace:
     def test_duration_ms_optional(self) -> None:
         assert self._minimal().duration_ms is None
 
+    def test_model_field_defaults_to_none(self) -> None:
+        # Model is populated by the parser from the first assistant
+        # message's `model` field; programmatically-constructed traces
+        # default to None. Downstream diagnostics.model_routing uses
+        # this as a fallback when AgentConfig.model is absent.
+        assert self._minimal().model is None
+        with_model = SubagentTrace(
+            agent_id="u", delegation_prompt="p", model="claude-sonnet-4-6",
+        )
+        assert with_model.model == "claude-sonnet-4-6"
+
     def test_unique_tool_names_property(self) -> None:
         trace = SubagentTrace(
             agent_id="u",
