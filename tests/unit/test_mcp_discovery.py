@@ -22,7 +22,9 @@ import pytest
 
 from agentfluent.config.mcp_discovery import (
     MCP_PROJECT_FILENAME,
+    _load_json,
     discover_mcp_servers,
+    resolve_project_disk_path,
 )
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "mcp"
@@ -397,3 +399,164 @@ class TestConfigDirOverride:
         assert servers[0].server_name == "project-scope"
         assert servers[0].scope == "project_shared"
         assert servers[0].source_file == project_dir / MCP_PROJECT_FILENAME
+
+
+class TestResolveProjectDiskPath:
+    """Slug → original project-path lookup via ~/.claude.json's
+    ``projects`` dict keys. Uses unambiguous forward-encoding
+    (abs_path → slug) rather than lossy reverse parsing.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_cache(self) -> None:
+        _load_json.cache_clear()
+        yield
+        _load_json.cache_clear()
+
+    def _write_projects_json(
+        self, path: Path, project_abs_paths: list[str],
+    ) -> None:
+        data = {"projects": {p: {"mcpServers": {}} for p in project_abs_paths}}
+        path.write_text(json.dumps(data))
+
+    def test_match_returns_original_path(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> None:
+        claude_json = tmp_path / ".claude.json"
+        self._write_projects_json(
+            claude_json,
+            ["/home/user/my-project", "/home/user/other"],
+        )
+        _override_claude_json_location(monkeypatch, claude_json)
+        assert resolve_project_disk_path(
+            "-home-user-my-project", claude_config_dir=None,
+        ) == Path("/home/user/my-project")
+
+    def test_no_match_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> None:
+        claude_json = tmp_path / ".claude.json"
+        self._write_projects_json(claude_json, ["/home/user/project-a"])
+        _override_claude_json_location(monkeypatch, claude_json)
+        assert resolve_project_disk_path(
+            "-home-user-unknown", claude_config_dir=None,
+        ) is None
+
+    def test_missing_claude_json_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> None:
+        # No ~/.claude.json at the mocked home.
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        assert resolve_project_disk_path(
+            "-home-user-any", claude_config_dir=None,
+        ) is None
+
+    def test_non_dict_projects_key_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> None:
+        # ~/.claude.json with projects key as a list (malformed).
+        claude_json = tmp_path / ".claude.json"
+        claude_json.write_text(json.dumps({"projects": ["not", "a", "dict"]}))
+        _override_claude_json_location(monkeypatch, claude_json)
+        assert resolve_project_disk_path(
+            "-home-user-x", claude_config_dir=None,
+        ) is None
+
+
+class TestDefensiveParsing:
+    """Covers the parser's guards against malformed input shapes so we
+    don't silently accept garbage that will mangle downstream data."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_cache(self) -> None:
+        _load_json.cache_clear()
+        yield
+        _load_json.cache_clear()
+
+    def test_non_object_json_root_logs_warning_and_returns_empty(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        claude_json = tmp_path / ".claude.json"
+        claude_json.write_text(json.dumps(["not", "an", "object"]))
+        _override_claude_json_location(monkeypatch, claude_json)
+        with caplog.at_level(
+            logging.WARNING, logger="agentfluent.config.mcp_discovery",
+        ):
+            servers = discover_mcp_servers(
+                claude_config_dir=None, project_dir=None,
+            )
+        assert servers == []
+        assert any("not an object" in rec.message for rec in caplog.records)
+
+    def test_non_dict_server_entry_is_skipped_with_warning(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Server entry as a string rather than dict — pathological but
+        # defensible to skip rather than crash.
+        claude_json = tmp_path / ".claude.json"
+        claude_json.write_text(
+            json.dumps({
+                "mcpServers": {
+                    "valid": {"command": "c"},
+                    "broken": "not-a-dict",
+                },
+            }),
+        )
+        _override_claude_json_location(monkeypatch, claude_json)
+        with caplog.at_level(
+            logging.WARNING, logger="agentfluent.config.mcp_discovery",
+        ):
+            servers = discover_mcp_servers(
+                claude_config_dir=None, project_dir=None,
+            )
+        # Only the valid entry survives; the broken one was skipped.
+        assert [s.server_name for s in servers] == ["valid"]
+        assert any("broken" in rec.message for rec in caplog.records)
+
+    def test_mcp_project_file_with_non_dict_mcpservers_returns_empty(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> None:
+        # `.mcp.json` present but mcpServers value isn't a dict.
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        claude_json = tmp_path / ".claude.json"
+        _write_claude_json(claude_json)
+        (project_dir / MCP_PROJECT_FILENAME).write_text(
+            json.dumps({"mcpServers": "oops"}),
+        )
+        _override_claude_json_location(monkeypatch, claude_json)
+        servers = discover_mcp_servers(
+            claude_config_dir=None, project_dir=project_dir,
+        )
+        assert servers == []
+
+    def test_mcp_project_file_with_non_dict_server_entry_skipped(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        claude_json = tmp_path / ".claude.json"
+        _write_claude_json(claude_json)
+        (project_dir / MCP_PROJECT_FILENAME).write_text(
+            json.dumps({
+                "mcpServers": {"ok": {"command": "c"}, "bad": 42},
+            }),
+        )
+        _override_claude_json_location(monkeypatch, claude_json)
+        with caplog.at_level(
+            logging.WARNING, logger="agentfluent.config.mcp_discovery",
+        ):
+            servers = discover_mcp_servers(
+                claude_config_dir=None, project_dir=project_dir,
+            )
+        assert [s.server_name for s in servers] == ["ok"]
+        assert any("bad" in rec.message for rec in caplog.records)
