@@ -81,15 +81,32 @@ def _config(
 
 # Two distinct delegation patterns, 5 invocations each — TF-IDF should
 # separate these cleanly. Each combined description + prompt clears the
-# MIN_TEXT_TOKENS filter (20 tokens). The default threshold itself is
+# MIN_TEXT_TOKENS filter (50 tokens). The default threshold itself is
 # tracked for empirical calibration in #140; these fixtures test
 # algorithm correctness at the current setting, not the threshold choice.
+# Appended to every pytest-cluster prompt to push combined length above
+# MIN_TEXT_TOKENS=50 without blunting inter-cluster separation. Uses only
+# pytest-flavored vocabulary so it doesn't pollute the JSONL cluster.
+_PYTEST_TAIL = (
+    " use pytest xdist for parallel execution include conftest fixtures "
+    "assert statement introspection monkeypatch and parametrize to exercise "
+    "edge cases in the pytest runner report failures via pytest plugins "
+    "collect coverage with pytest cov and emit xunit results per pytest module"
+)
+# Appended to every JSONL-cluster prompt. Parser-flavored vocabulary only.
+_JSONL_TAIL = (
+    " iterate each JSONL line decode the JSON payload validate schema handle "
+    "malformed records surface the tool_use_id and toolUseResult metadata "
+    "for each extracted block deserialize usage stats retain content blocks "
+    "per message and preserve the JSONL line ordering for downstream parsers"
+)
 _TEST_INVS = [
     _inv(
         description="run the pytest suite and report failures",
         prompt=(
             "execute pytest on the tests directory report failures coverage "
             "and any slow tests collect output pytest fixtures markers"
+            + _PYTEST_TAIL
         ),
     ),
     _inv(
@@ -97,6 +114,7 @@ _TEST_INVS = [
         prompt=(
             "invoke pytest for the unit tests collect coverage metrics "
             "report slow failures fixtures markers output across the suite"
+            + _PYTEST_TAIL
         ),
     ),
     _inv(
@@ -104,6 +122,7 @@ _TEST_INVS = [
         prompt=(
             "run pytest against the testing folder capture output report "
             "failures fixtures markers coverage slow tests across the suite"
+            + _PYTEST_TAIL
         ),
     ),
     _inv(
@@ -111,6 +130,7 @@ _TEST_INVS = [
         prompt=(
             "please run pytest over the entire testing directory report "
             "failures coverage markers fixtures output slow tests collect"
+            + _PYTEST_TAIL
         ),
     ),
     _inv(
@@ -118,6 +138,7 @@ _TEST_INVS = [
         prompt=(
             "kick off pytest across the test modules return results "
             "coverage markers fixtures output failures slow tests collect"
+            + _PYTEST_TAIL
         ),
     ),
     _inv(
@@ -125,6 +146,7 @@ _TEST_INVS = [
         prompt=(
             "read the claude JSONL session file extract tool_use content "
             "blocks from assistant messages parse metadata timestamps model"
+            + _JSONL_TAIL
         ),
     ),
     _inv(
@@ -132,6 +154,7 @@ _TEST_INVS = [
         prompt=(
             "parse a session JSONL surface the assistant tool_use "
             "invocations extract metadata timestamps model content blocks"
+            + _JSONL_TAIL
         ),
     ),
     _inv(
@@ -139,6 +162,7 @@ _TEST_INVS = [
         prompt=(
             "extract tool_use blocks from the claude session JSONL "
             "parse assistant message metadata timestamps model content"
+            + _JSONL_TAIL
         ),
     ),
     _inv(
@@ -146,6 +170,7 @@ _TEST_INVS = [
         prompt=(
             "read the JSONL session parse assistant messages for tool "
             "calls extract metadata timestamps model content blocks"
+            + _JSONL_TAIL
         ),
     ),
     _inv(
@@ -153,6 +178,7 @@ _TEST_INVS = [
         prompt=(
             "open the session JSONL file extract the tool_use content "
             "blocks parse assistant messages metadata timestamps model"
+            + _JSONL_TAIL
         ),
     ),
 ]
@@ -399,12 +425,21 @@ class TestIdenticalRowsAnomaly:
     def _identical_invs(self, n: int = 10) -> list[AgentInvocation]:
         # Identical prompt across all N — simulates an upstream bug
         # producing duplicate records, not a realistic use case.
+        # Length clears MIN_TEXT_TOKENS=50.
         shared_prompt = (
             "read the session JSONL file extract tool_use blocks "
-            "parse assistant messages metadata timestamps model content"
+            "parse assistant messages metadata timestamps model content "
+            "iterate each JSONL line decode the JSON payload validate "
+            "schema handle malformed records surface the tool_use_id "
+            "and toolUseResult metadata for each extracted block "
+            "deserialize usage stats retain content blocks per message "
+            "and preserve the JSONL line ordering for downstream parsers"
         )
         return [
-            _inv(description="extract tool_use blocks from session", prompt=shared_prompt)
+            _inv(
+                description="extract tool_use blocks from session files",
+                prompt=shared_prompt,
+            )
             for _ in range(n)
         ]
 

@@ -246,11 +246,15 @@ class TestDelegationSuggestions:
     _GP_INVS = [
         AgentInvocation(
             agent_type="general-purpose",
-            description=f"read file {target} and summarize",
+            description=f"read file {target} and summarize the public surface",
             prompt=(
                 f"Read the file {target} from the repository and produce "
                 "a concise summary of the main functions, classes, and "
-                f"dependencies. Focus on the public surface of {target}."
+                f"dependencies. Focus on the public surface of {target}, "
+                "describe how callers use it, list any exported constants "
+                "and types, note relationships to adjacent modules, and "
+                "surface any documented invariants or preconditions that "
+                "a consumer should be aware of when integrating with it."
             ),
             tool_use_id=f"tool_{i}",
         )
