@@ -5,11 +5,17 @@ backward compatibility of the public `run_diagnostics` import path,
 and v0.2 output-shape regression for trace-less sessions.
 """
 
+import json
+from pathlib import Path
+
 import pytest
 
 from agentfluent.agents.models import AgentInvocation
-from agentfluent.config.models import Severity
+from agentfluent.config.mcp_discovery import _load_json
+from agentfluent.config.models import AgentConfig, Scope, Severity
 from agentfluent.diagnostics import TRACE_SIGNAL_TYPES
+from agentfluent.diagnostics.delegation import MODEL_OPUS
+from agentfluent.diagnostics.mcp_assessment import McpToolCall
 from agentfluent.diagnostics.models import (
     DelegationSuggestion,
     DiagnosticSignal,
@@ -296,11 +302,6 @@ class TestModelRoutingWiring:
     def test_model_mismatch_signal_produces_target_model_recommendation(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from pathlib import Path
-
-        from agentfluent.config.models import AgentConfig, Scope
-        from agentfluent.diagnostics.delegation import MODEL_OPUS
-
         # 5 "pm" invocations with simple workload but declaring Opus —
         # overspec case. Stub scan_agents to return a config that
         # declares model=Opus; otherwise the agent gets skipped.
@@ -453,25 +454,31 @@ class TestMcpAuditWiring:
     picking up the user's real ~/.claude.json.
     """
 
-    def test_no_mcp_context_skips_audit(self, tmp_path, monkeypatch) -> None:
-        # Even if a real ~/.claude.json would return servers, a caller
-        # that passes nothing should see no MCP audit output. Redirect
-        # Path.home to an empty dir to also guarantee no accidental read.
+    @pytest.fixture(autouse=True)
+    def _isolate_home(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Redirect Path.home so audit can never accidentally read the
+        # contributor's real ~/.claude.json. Clear _load_json's lru_cache
+        # before and after so tmp_path reuse across tests doesn't return
+        # a stale parsed dict from a prior test's file.
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        _load_json.cache_clear()
+        yield
+        _load_json.cache_clear()
+
+    def test_no_mcp_context_skips_audit(self) -> None:
+        # A caller that passes nothing should see no MCP audit output,
+        # even if a real ~/.claude.json would return servers.
         result = run_diagnostics([_inv()])
         assert all(
             s.signal_type.value not in ("mcp_unused_server", "mcp_missing_server")
             for s in result.signals
         )
 
-    def test_mcp_tool_calls_provided_triggers_audit(
-        self, tmp_path, monkeypatch,
-    ) -> None:
-        # Even with no configured servers (empty home), providing
-        # mcp_tool_calls that had errors should fire MCP_MISSING_SERVER.
-        from agentfluent.diagnostics.mcp_assessment import McpToolCall
-
-        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    def test_mcp_tool_calls_provided_triggers_audit(self) -> None:
+        # Providing mcp_tool_calls with errors fires MCP_MISSING_SERVER
+        # even with no configured servers.
         calls = [
             McpToolCall(
                 server_name="unknown_server", tool_name="x", is_error=True,
@@ -487,19 +494,16 @@ class TestMcpAuditWiring:
         )
 
     def test_configured_servers_read_when_claude_config_dir_passed(
-        self, tmp_path, monkeypatch,
+        self, tmp_path: Path,
     ) -> None:
         # Passing claude_config_dir is enough to trigger audit even
         # without mcp_tool_calls — caller opts in explicitly.
-        import json
-
         claude_root = tmp_path / ".claude"
         claude_root.mkdir()
         claude_json = tmp_path / ".claude.json"
         claude_json.write_text(
             json.dumps({"mcpServers": {"unused-svc": {"command": "x"}}}),
         )
-        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
 
         result = run_diagnostics([_inv()], claude_config_dir=claude_root)
 

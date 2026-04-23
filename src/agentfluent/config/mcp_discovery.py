@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -122,11 +123,24 @@ def discover_mcp_servers(
     )
 
 
+@lru_cache(maxsize=16)
 def _load_json(path: Path) -> dict[str, Any] | None:
     """Read and decode a JSON object file.
 
     Returns ``None`` for missing files (silent), logs a warning and
     returns ``None`` for malformed JSON or non-object roots.
+
+    Cached per-path for the lifetime of the process. ``~/.claude.json``
+    is read by both ``resolve_project_disk_path`` (CLI) and
+    ``discover_mcp_servers`` (pipeline) during a single
+    ``agentfluent analyze`` invocation; caching eliminates the
+    redundant ~45KB file read + JSON parse. Real usage touches only
+    2 files per invocation (``~/.claude.json`` + the project's
+    ``.mcp.json``); ``maxsize=16`` is 8× headroom — generous for
+    future config sources without inviting unbounded growth. Callers
+    must not mutate the returned dict — it's shared state. Tests that
+    need a fresh read should call ``_load_json.cache_clear()`` in
+    setup.
     """
     if not path.exists():
         return None
