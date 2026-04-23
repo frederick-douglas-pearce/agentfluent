@@ -48,6 +48,10 @@ dev = [
     "mypy>=1.15",
     "types-pyyaml>=6.0",
     "scikit-learn>=1.4",
+    # Calibration notebook (scripts/calibration/threshold_validation.ipynb, #140).
+    "jupyter>=1.0",
+    "matplotlib>=3.8",
+    "pandas>=2.0",
 ]
 
 [build-system]

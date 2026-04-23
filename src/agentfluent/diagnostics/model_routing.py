@@ -50,8 +50,13 @@ ComplexityTier = Literal["simple", "moderate", "complex"]
 MismatchType = Literal["overspec", "underspec"]
 
 
-# Thresholds — initial values per backlog E5-S1 guidance.
-# Empirical calibration against real project data is tracked in #140.
+# Thresholds — initial values per backlog E5-S1 guidance. Empirical
+# validation: `scripts/calibration/threshold_validation.ipynb` (#140).
+# On the v0.3.0 single-dataset calibration, every observed agent type
+# classified as "complex" — suggesting the simple/complex boundaries
+# may be set to a lighter workload than the reference dataset exhibits.
+# Kept as shipped pending multi-contributor data to tell noise from
+# signal.
 _MIN_INVOCATIONS_FOR_ANALYSIS = 3
 _SIMPLE_MAX_TOOL_CALLS = 5
 _SIMPLE_MAX_TOKENS = 2_000
