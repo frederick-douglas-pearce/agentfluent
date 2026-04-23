@@ -12,13 +12,17 @@ from typing import Any
 
 from agentfluent.agents.models import AgentInvocation
 from agentfluent.analytics.pipeline import analyze_session
+from agentfluent.config.models import McpServerConfig, Severity
 from agentfluent.core.session import ContentBlock, SessionMessage
 from agentfluent.diagnostics.mcp_assessment import (
+    McpServerUsage,
     McpToolCall,
+    audit_mcp_servers,
     extract_mcp_calls_from_messages,
     extract_mcp_usage,
     parse_mcp_tool_name,
 )
+from agentfluent.diagnostics.models import SignalType
 from agentfluent.traces.models import SubagentToolCall, SubagentTrace
 from tests._builders import (
     assistant_message,
@@ -26,6 +30,36 @@ from tests._builders import (
     tool_use_block,
     user_message,
 )
+
+
+def _server(
+    name: str = "github",
+    *,
+    enabled: bool = True,
+    source: str = "/home/u/.claude.json",
+    scope: str = "user",
+) -> McpServerConfig:
+    return McpServerConfig(
+        server_name=name,
+        enabled=enabled,
+        source_file=Path(source),
+        scope=scope,  # type: ignore[arg-type]
+    )
+
+
+def _usage(
+    name: str = "github",
+    *,
+    total: int = 1,
+    errors: int = 0,
+    tools: list[str] | None = None,
+) -> McpServerUsage:
+    return McpServerUsage(
+        server_name=name,
+        total_calls=total,
+        unique_tools=tools or ["create_issue"],
+        error_count=errors,
+    )
 
 
 def _assistant_with_mcp(
@@ -285,3 +319,100 @@ class TestAnalyzeSessionWiresInMcpCalls:
     ) -> None:
         result = analyze_session(basic_session_path)
         assert result.mcp_tool_calls == []
+
+
+class TestAuditMcpServers:
+    def test_configured_enabled_unused_fires_info_signal(self) -> None:
+        signals = audit_mcp_servers(
+            usage_by_server={},
+            configured=[_server("slack")],
+            sessions_analyzed=10,
+        )
+        assert len(signals) == 1
+        s = signals[0]
+        assert s.signal_type == SignalType.MCP_UNUSED_SERVER
+        assert s.severity == Severity.INFO
+        assert s.agent_type == ""
+        assert s.detail["server_name"] == "slack"
+        assert s.detail["sessions_analyzed"] == 10
+
+    def test_disabled_server_does_not_fire_unused(self) -> None:
+        # Disabled servers are intentionally off — not a noise source.
+        signals = audit_mcp_servers(
+            usage_by_server={},
+            configured=[_server("slack", enabled=False)],
+            sessions_analyzed=10,
+        )
+        assert signals == []
+
+    def test_used_server_does_not_fire_unused(self) -> None:
+        signals = audit_mcp_servers(
+            usage_by_server={"slack": _usage("slack", total=2)},
+            configured=[_server("slack")],
+            sessions_analyzed=5,
+        )
+        assert signals == []
+
+    def test_observed_with_errors_not_in_config_fires_missing(self) -> None:
+        signals = audit_mcp_servers(
+            usage_by_server={"nonexistent": _usage("nonexistent", total=3, errors=2)},
+            configured=[],
+            sessions_analyzed=5,
+        )
+        assert len(signals) == 1
+        s = signals[0]
+        assert s.signal_type == SignalType.MCP_MISSING_SERVER
+        assert s.severity == Severity.WARNING
+        assert s.detail["server_name"] == "nonexistent"
+        assert s.detail["error_count"] == 2
+
+    def test_observed_without_errors_not_in_config_does_not_fire_missing(
+        self,
+    ) -> None:
+        # Mystery server with all-successful calls — unactionable.
+        signals = audit_mcp_servers(
+            usage_by_server={"mystery": _usage("mystery", total=5, errors=0)},
+            configured=[],
+            sessions_analyzed=5,
+        )
+        assert signals == []
+
+    def test_observed_and_configured_fires_neither(self) -> None:
+        signals = audit_mcp_servers(
+            usage_by_server={"github": _usage("github", total=10, errors=1)},
+            configured=[_server("github")],
+            sessions_analyzed=3,
+        )
+        assert signals == []
+
+    def test_mixed_scenario_emits_per_server_signals(self) -> None:
+        # Four servers: github (used + configured), slack (unused +
+        # configured), unknown (missing + errors), friendly (missing
+        # + no errors).
+        signals = audit_mcp_servers(
+            usage_by_server={
+                "github": _usage("github", total=5, errors=0),
+                "unknown": _usage("unknown", total=3, errors=2),
+                "friendly": _usage("friendly", total=2, errors=0),
+            },
+            configured=[_server("github"), _server("slack")],
+            sessions_analyzed=8,
+        )
+        types = [s.signal_type for s in signals]
+        assert SignalType.MCP_UNUSED_SERVER in types
+        assert SignalType.MCP_MISSING_SERVER in types
+        # github fires nothing; friendly has no errors so it's skipped;
+        # so 2 signals total: slack (unused) + unknown (missing).
+        assert len(signals) == 2
+        by_type = {s.signal_type: s for s in signals}
+        assert by_type[SignalType.MCP_UNUSED_SERVER].detail["server_name"] == "slack"
+        assert by_type[SignalType.MCP_MISSING_SERVER].detail["server_name"] == "unknown"
+
+    def test_sessions_analyzed_is_propagated_to_signal_detail(self) -> None:
+        # Detail field lets the user judge confidence of the finding.
+        signals = audit_mcp_servers(
+            usage_by_server={},
+            configured=[_server("slack")],
+            sessions_analyzed=42,
+        )
+        assert signals[0].detail["sessions_analyzed"] == 42

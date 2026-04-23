@@ -35,11 +35,14 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
 
+from agentfluent.config.models import Severity
 from agentfluent.core.session import index_tool_results_by_id
+from agentfluent.diagnostics.models import DiagnosticSignal, SignalType
 from agentfluent.diagnostics.signals import ERROR_REGEX
 
 if TYPE_CHECKING:
     from agentfluent.agents.models import AgentInvocation
+    from agentfluent.config.models import McpServerConfig
     from agentfluent.core.session import SessionMessage
 
 
@@ -224,3 +227,104 @@ def extract_mcp_usage(
         )
 
     return {server: a.build(server) for server, a in agg.items()}
+
+
+def audit_mcp_servers(
+    usage_by_server: dict[str, McpServerUsage],
+    configured: list[McpServerConfig],
+    *,
+    sessions_analyzed: int,
+) -> list[DiagnosticSignal]:
+    """Compare observed MCP usage against configured servers.
+
+    Emits two signal types:
+
+    - ``MCP_UNUSED_SERVER`` (INFO) — a configured, enabled server with
+      zero observed calls. Advisory: user may want to remove it. Does
+      NOT fire on disabled servers (the user intentionally turned
+      them off).
+    - ``MCP_MISSING_SERVER`` (WARNING) — observed calls reference a
+      server name not in the configured set, AND at least one of
+      those calls failed. The error gate reduces noise: a mystery
+      server whose calls all succeed is unactionable.
+
+    ``sessions_analyzed`` is surfaced in signal detail to help users
+    judge confidence ("0 calls across 50 sessions" is stronger
+    evidence than "0 calls across 2 sessions").
+    """
+    signals: list[DiagnosticSignal] = []
+    signals.extend(_detect_unused_servers(usage_by_server, configured, sessions_analyzed))
+    signals.extend(_detect_missing_servers(usage_by_server, configured, sessions_analyzed))
+    return signals
+
+
+def _detect_unused_servers(
+    usage_by_server: dict[str, McpServerUsage],
+    configured: list[McpServerConfig],
+    sessions_analyzed: int,
+) -> list[DiagnosticSignal]:
+    """Emit MCP_UNUSED_SERVER for configured+enabled servers with 0 calls."""
+    signals: list[DiagnosticSignal] = []
+    for server in configured:
+        if not server.enabled:
+            continue
+        usage = usage_by_server.get(server.server_name)
+        if usage is not None and usage.total_calls > 0:
+            continue
+        signals.append(
+            DiagnosticSignal(
+                signal_type=SignalType.MCP_UNUSED_SERVER,
+                severity=Severity.INFO,
+                agent_type="",
+                message=(
+                    f"MCP server '{server.server_name}' is configured in "
+                    f"{server.source_file} but has 0 tool calls across "
+                    f"{sessions_analyzed} analyzed sessions. "
+                    "Consider removing from mcpServers or marking as disabled."
+                ),
+                detail={
+                    "server_name": server.server_name,
+                    "source_file": str(server.source_file),
+                    "configured_tools": server.configured_tools,
+                    "sessions_analyzed": sessions_analyzed,
+                },
+            ),
+        )
+    return signals
+
+
+def _detect_missing_servers(
+    usage_by_server: dict[str, McpServerUsage],
+    configured: list[McpServerConfig],
+    sessions_analyzed: int,
+) -> list[DiagnosticSignal]:
+    """Emit MCP_MISSING_SERVER for observed+failing servers not in config."""
+    configured_names = {s.server_name for s in configured}
+    signals: list[DiagnosticSignal] = []
+    for name, usage in usage_by_server.items():
+        if name in configured_names:
+            continue
+        if usage.error_count == 0:
+            # All calls succeeded — mystery server but not broken.
+            continue
+        signals.append(
+            DiagnosticSignal(
+                signal_type=SignalType.MCP_MISSING_SERVER,
+                severity=Severity.WARNING,
+                agent_type="",
+                message=(
+                    f"{usage.error_count} failed calls to "
+                    f"mcp__{name}__* across {sessions_analyzed} sessions, "
+                    f"but no '{name}' server configured. "
+                    "Add to .mcp.json or ~/.claude.json."
+                ),
+                detail={
+                    "server_name": name,
+                    "total_calls": usage.total_calls,
+                    "error_count": usage.error_count,
+                    "unique_tools": usage.unique_tools,
+                    "sessions_analyzed": sessions_analyzed,
+                },
+            ),
+        )
+    return signals
