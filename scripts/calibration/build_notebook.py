@@ -518,30 +518,43 @@ print(f"  Recommendations: {len(baseline.recommendations)}")"""))
 
 **Single-dataset caveat applies to everything below.** The
 observations come from one contributor's `~/.claude/projects/` data —
-7 projects, ~94 invocations, heavy toward substantive feature work.
+7 projects, ~255 invocations, heavy toward substantive feature work.
 A broader cross-contributor dataset would likely shift the picture.
+
+**Data quality note:** this notebook was initially run against a
+dataset silently truncated by parser bug #153 that dropped ~72% of
+content blocks. Post-fix the dataset is ~2.6× larger and qualitatively
+different — cluster counts, cohesion distributions, and signal rates
+all changed substantially. Results below reflect the corrected state.
 
 ### Threshold-by-threshold observations
 
 | Constant | Default | Decision | Notes |
 |---|---|---|---|
-| `MIN_TEXT_TOKENS` | 20 | **keep** | 100% of my general-purpose corpus clears 30+ tokens. Filter is inactive on this data; insufficient signal to lower. |
-| `LSA_COMPONENTS` | 50 | **keep** | Auto-clipped to `min(50, n-1)` in practice. On n=18 corpus, effective value is 17; 10 already captures 78% variance. Default is overkill-but-harmless for small n and kicks in meaningfully at larger n. |
-| `DEFAULT_MIN_CLUSTER_SIZE` | 5 | **keep** | Emits 2 clusters on my data; inflection point around 7–8 where cluster count drops to 1. Default is at the soft lower bound — raising it on this dataset would suppress real output. |
-| `DEFAULT_MIN_SIMILARITY` | 0.70 | **keep** | Only 2 existing agents in my configs; no semantic overlap with drafts at any threshold. Dataset too small to calibrate. |
-| `_SILHOUETTE_K_MAX` | 10 | **keep** | On n=18 the binding cap is `n // 5 = 3`; cap of 10 never engages. Correct default for larger datasets. |
-| `_CONFIDENCE_HIGH_SIZE=10, HIGH_COHESION=0.8, MEDIUM_COHESION=0.6` | — | **flag for future review** | Observed cohesion on real clusters is 0.17–0.25 — far below the 0.6/0.8 thresholds. Every cluster on my data classifies as "low" confidence. Either (a) thresholds are calibrated for a higher-cohesion expectation or (b) real TF-IDF clusters on agent delegations genuinely run lower-cohesion. With only 2 clusters to judge, insufficient data to lower safely. |
-| `_MIN_INVOCATIONS_FOR_ANALYSIS` | 3 | **keep** | 6 of 7 agent types on my data clear this threshold. Appropriate. |
-| `_SIMPLE_MAX_TOOL_CALLS=5, _SIMPLE_MAX_TOKENS=2000` | — | **flag for future review** | Zero agent types on my data classify as "simple" — all 7 land on "complex" via tool-calls or tokens or writes. The thresholds may be calibrated to a lighter workload than I generate. |
-| `_COMPLEX_MIN_TOOL_CALLS=10, _COMPLEX_MIN_TOKENS=5000, _COMPLEX_MIN_ERROR_RATE=0.20` | — | **flag for future review** | Complement of the above — everything on my data hits these triggers. Whether that reflects a genuinely complex workload or thresholds set too low is impossible to tell from a single contributor. |
+| `MIN_TEXT_TOKENS` | 20 | **keep** | 100% of the general-purpose corpus clears 30+ tokens. Filter inactive on this data; histogram suggests 50 would also work. |
+| `LSA_COMPONENTS` | 50 | **keep** | Auto-clipped to `min(50, n-1)` when n is small. On n=44 corpus, effective value is 43; default is overkill-but-harmless for small n and kicks in at larger n. |
+| `DEFAULT_MIN_CLUSTER_SIZE` | 5 | **keep** | Emits 5 clusters on my data at the default. Sweep goes 8→8→7→5→4→2→0 as threshold climbs from 2 to 10 — smooth curve, no sharp elbow. Default balances meaningful output vs noise. |
+| `DEFAULT_MIN_SIMILARITY` | 0.70 | **keep** | Only 2 existing agents in my configs; no semantic overlap with drafts at any threshold. Dataset too small to calibrate dedup — requires configs with broader agent coverage. |
+| `_SILHOUETTE_K_MAX` | 10 | **keep** | On n=44 the binding cap is `n // 5 = 8`; cap of 10 never engages. Correct default for larger datasets. |
+| `_CONFIDENCE_HIGH_SIZE=10, HIGH_COHESION=0.8, MEDIUM_COHESION=0.6` | — | **flag for future lowering** | Observed cohesion on my clusters runs 0.19–0.79, mostly 0.33–0.47. Only 1 of 8 clusters (12.5%) reaches `MEDIUM_COHESION=0.6`; none reach `HIGH_COHESION=0.8`. Semantic review confirms the clusters ARE coherent (e.g., "hooks/claude", "tests/agentfluent/parser", "src/cli") — thresholds are calibrated above what real TF-IDF on agent delegations yields. Lowering to 0.3 medium / 0.5 high would reflect the actual signal but still needs multi-contributor validation. |
+| `_MIN_INVOCATIONS_FOR_ANALYSIS` | 3 | **keep** | All 7 agent types on my data clear this threshold. Appropriate. |
+| `_SIMPLE_MAX_TOOL_CALLS=5, _SIMPLE_MAX_TOKENS=2000` | — | **flag for future review** | Zero agent types on my data classify as "simple" — all 7 land on "complex" via tool-calls (6.7–21.0 mean, threshold=10), tokens (25K–55K mean, threshold=5K), or write tools. Thresholds may be set for a lighter workload than mine, or my workload is genuinely heavy. One dataset can't tell. |
+| `_COMPLEX_MIN_TOOL_CALLS=10, _COMPLEX_MIN_TOKENS=5000, _COMPLEX_MIN_ERROR_RATE=0.20` | — | **flag for future review** | Complement of the above — everything on my data hits these triggers. The 5,000-token threshold especially looks low: 5K is medium-effort on my workload, not complex-outlier. |
 
 ### Summary: no constant changes in this PR
 
-The conservative read of a single-dataset calibration: **if the
-data doesn't clearly say the default is wrong across realistic
-variance, leave it alone**. My data lights up three amber warnings
-(cohesion tiers, simple/complex splits) that are best addressed
-when a multi-contributor dataset can confirm or refute them.
+Two meaningful amber warnings:
+- **Confidence thresholds (0.6/0.8)** appear too high given observed
+  TF-IDF cohesion distributions. Lowering to ~0.3/0.5 would activate
+  the medium/high tiers that currently never fire. Defer until a
+  second contributor dataset confirms this isn't a my-data artifact.
+- **Simple/complex boundaries** put everything on my workload in
+  "complex." Either the defaults are calibrated for a lighter
+  workload, or mine is genuinely heavy-all-the-time. Indistinguishable
+  from one contributor.
+
+Both findings are safer to track as candidates for the next
+calibration pass than to act on now.
 
 ### Re-running this notebook
 
