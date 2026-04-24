@@ -88,6 +88,14 @@ class DiagnosticRecommendation(BaseModel):
     signal_types: list[SignalType] = Field(default_factory=list)
     """Which signal types contributed to this recommendation."""
 
+    is_builtin: bool = False
+    """True when the agent is one of Claude Code's built-in types
+    (Explore, general-purpose, Plan, etc. — see
+    ``agents.models.BUILTIN_AGENT_TYPES``). Built-in agents have no
+    user-editable prompt/tool/model config, so their recommendations
+    use a different action template. Denormalized onto the model so
+    JSON consumers don't need to re-derive via ``is_builtin_agent()``."""
+
 
 class AggregatedRecommendation(BaseModel):
     """Aggregate of one or more ``DiagnosticRecommendation`` instances that
@@ -116,6 +124,12 @@ class AggregatedRecommendation(BaseModel):
     representative_message: str
     """Aggregated message shown in the default table. For ``count == 1``
     this is the original recommendation text verbatim."""
+
+    is_builtin: bool = False
+    """Mirrors ``DiagnosticRecommendation.is_builtin`` — built-in and
+    custom agents never aggregate together because ``agent_type`` is in
+    the grouping key, so this is constant across
+    ``contributing_recommendations``."""
 
     contributing_recommendations: list[DiagnosticRecommendation] = Field(
         default_factory=list,

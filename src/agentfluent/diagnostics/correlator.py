@@ -9,7 +9,12 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from agentfluent.agents.models import is_builtin_agent
 from agentfluent.config.models import AgentConfig, Severity
+from agentfluent.diagnostics.builtin_actions import (
+    BuiltinConcern,
+    builtin_recommendation,
+)
 from agentfluent.diagnostics.models import (
     DiagnosticRecommendation,
     DiagnosticSignal,
@@ -27,10 +32,39 @@ class CorrelationRule(Protocol):
     ) -> DiagnosticRecommendation: ...
 
 
+class _BuiltinBranchingRule(Protocol):
+    """Extension protocol for rules that participate in built-in-agent
+    branching. Rules that target agent-level config (prompt, tools,
+    model) declare ``_builtin_target`` + ``_builtin_concern`` as class
+    attributes; rules with no agent-level counterpart (e.g.,
+    ``McpAuditRule``) do not."""
+
+    _builtin_target: str
+    _builtin_concern: BuiltinConcern
+
+
+def _check_builtin(
+    rule: _BuiltinBranchingRule, signal: DiagnosticSignal, reason: str,
+) -> DiagnosticRecommendation | None:
+    """Return a built-in recommendation when the signal's agent is a
+    built-in, else ``None`` so the caller falls through to the custom
+    path."""
+    if not is_builtin_agent(signal.agent_type):
+        return None
+    return builtin_recommendation(
+        signal,
+        target=rule._builtin_target,
+        concern=rule._builtin_concern,
+        reason=reason,
+    )
+
+
 class AccessErrorRule:
     """Error pattern "blocked"/"permission denied" -> check tool access."""
 
     _KEYWORDS = {"blocked", "permission denied", "don't have access"}
+    _builtin_target = "tools"
+    _builtin_concern: BuiltinConcern = "tools"
 
     def matches(self, signal: DiagnosticSignal, config: AgentConfig | None) -> bool:
         if signal.signal_type != SignalType.ERROR_PATTERN:
@@ -43,6 +77,9 @@ class AccessErrorRule:
     ) -> DiagnosticRecommendation:
         observation = signal.message
         reason = "This indicates the agent lacks access to required tools."
+
+        if rec := _check_builtin(self, signal, reason):
+            return rec
 
         if config and not config.tools and not config.disallowed_tools:
             action = (
@@ -77,6 +114,8 @@ class ErrorHandlingRule:
     """Error pattern "failed"/"error"/"retry" -> check prompt for error guidance."""
 
     _KEYWORDS = {"failed", "error", "retry", "unable to", "not found", "timed out"}
+    _builtin_target = "prompt"
+    _builtin_concern: BuiltinConcern = "recovery"
 
     def matches(self, signal: DiagnosticSignal, config: AgentConfig | None) -> bool:
         if signal.signal_type != SignalType.ERROR_PATTERN:
@@ -89,6 +128,9 @@ class ErrorHandlingRule:
     ) -> DiagnosticRecommendation:
         observation = signal.message
         reason = "Repeated errors suggest the agent lacks error handling guidance."
+
+        if rec := _check_builtin(self, signal, reason):
+            return rec
 
         if config and config.prompt_body:
             body_lower = config.prompt_body.lower()
@@ -127,6 +169,9 @@ class ErrorHandlingRule:
 class TokenOutlierRule:
     """Token outlier -> recommend more focused instructions or tool restriction."""
 
+    _builtin_target = "prompt"
+    _builtin_concern: BuiltinConcern = "scope"
+
     def matches(self, signal: DiagnosticSignal, config: AgentConfig | None) -> bool:
         return signal.signal_type == SignalType.TOKEN_OUTLIER
 
@@ -135,6 +180,9 @@ class TokenOutlierRule:
     ) -> DiagnosticRecommendation:
         observation = signal.message
         reason = "High token usage suggests the agent is exploring broadly."
+
+        if rec := _check_builtin(self, signal, reason):
+            return rec
 
         if config and len(config.tools) > 8:
             action = (
@@ -171,6 +219,9 @@ class TokenOutlierRule:
 class DurationOutlierRule:
     """Duration outlier -> check model selection or task scoping."""
 
+    _builtin_target = "prompt"
+    _builtin_concern: BuiltinConcern = "scope"
+
     def matches(self, signal: DiagnosticSignal, config: AgentConfig | None) -> bool:
         return signal.signal_type == SignalType.DURATION_OUTLIER
 
@@ -179,6 +230,9 @@ class DurationOutlierRule:
     ) -> DiagnosticRecommendation:
         observation = signal.message
         reason = "Slow invocations may indicate an overqualified model or unclear task scope."
+
+        if rec := _check_builtin(self, signal, reason):
+            return rec
 
         if config and config.model and "opus" in config.model.lower():
             action = (
@@ -215,6 +269,9 @@ class DurationOutlierRule:
 class PermissionFailureRule:
     """PERMISSION_FAILURE -> recommend adding the denied tool to `tools`."""
 
+    _builtin_target = "tools"
+    _builtin_concern: BuiltinConcern = "tools"
+
     def matches(self, signal: DiagnosticSignal, config: AgentConfig | None) -> bool:
         return signal.signal_type == SignalType.PERMISSION_FAILURE
 
@@ -224,6 +281,9 @@ class PermissionFailureRule:
         tool_name = str(signal.detail.get("tool_name", ""))
         observation = signal.message
         reason = "The subagent was denied access to a tool it attempted to call."
+
+        if rec := _check_builtin(self, signal, reason):
+            return rec
 
         if config and tool_name and tool_name not in config.tools:
             action = (
@@ -260,6 +320,9 @@ class PermissionFailureRule:
 class RetryLoopRule:
     """RETRY_LOOP -> recommend error-recovery guidance in the prompt."""
 
+    _builtin_target = "prompt"
+    _builtin_concern: BuiltinConcern = "recovery"
+
     def matches(self, signal: DiagnosticSignal, config: AgentConfig | None) -> bool:
         return signal.signal_type == SignalType.RETRY_LOOP
 
@@ -271,6 +334,9 @@ class RetryLoopRule:
             "Repeated retries on the same tool indicate the agent lacks "
             "recovery guidance for failures."
         )
+
+        if rec := _check_builtin(self, signal, reason):
+            return rec
 
         if config and config.prompt_body:
             body_lower = config.prompt_body.lower()
@@ -310,6 +376,9 @@ class RetryLoopRule:
 class StuckPatternRule:
     """STUCK_PATTERN -> recommend adding exit conditions to the prompt."""
 
+    _builtin_target = "prompt"
+    _builtin_concern: BuiltinConcern = "recovery"
+
     def matches(self, signal: DiagnosticSignal, config: AgentConfig | None) -> bool:
         return signal.signal_type == SignalType.STUCK_PATTERN
 
@@ -322,6 +391,9 @@ class StuckPatternRule:
             f"The agent repeated an identical call {count} times without "
             "progress, indicating no exit condition."
         )
+
+        if rec := _check_builtin(self, signal, reason):
+            return rec
 
         if config:
             action = (
@@ -351,6 +423,9 @@ class StuckPatternRule:
 class ErrorSequenceRule:
     """TOOL_ERROR_SEQUENCE -> recommend fallback instructions or tool review."""
 
+    _builtin_target = "prompt"
+    _builtin_concern: BuiltinConcern = "scope"
+
     def matches(self, signal: DiagnosticSignal, config: AgentConfig | None) -> bool:
         return signal.signal_type == SignalType.TOOL_ERROR_SEQUENCE
 
@@ -362,6 +437,9 @@ class ErrorSequenceRule:
             "Multiple consecutive tool errors suggest the agent lacks "
             "fallback instructions for when a tool call fails."
         )
+
+        if rec := _check_builtin(self, signal, reason):
+            return rec
 
         if config and len(config.tools) > 8:
             action = (
@@ -405,6 +483,9 @@ class ModelRoutingRule:
     more, but the tradeoff is quality).
     """
 
+    _builtin_target = "model"
+    _builtin_concern: BuiltinConcern = "model"
+
     def matches(self, signal: DiagnosticSignal, config: AgentConfig | None) -> bool:
         return signal.signal_type == SignalType.MODEL_MISMATCH
 
@@ -424,6 +505,9 @@ class ModelRoutingRule:
             f"Observed complexity tier is '{complexity}' but the agent is "
             f"configured with {current_model}."
         )
+
+        if rec := _check_builtin(self, signal, reason):
+            return rec
 
         action_parts = [f"Switch to {recommended_model}"]
         if mismatch_type == "overspec" and isinstance(savings, int | float):

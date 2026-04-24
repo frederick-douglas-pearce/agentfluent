@@ -222,6 +222,22 @@ class TestEvidencePreservation:
         assert aggregate_recommendations([]) == []
 
 
+class TestBuiltinPropagation:
+    def test_is_builtin_propagates_from_contributing_recommendations(self) -> None:
+        sig, rec = _token_outlier_pair("explore", 4.9)
+        rec = rec.model_copy(update={"is_builtin": True})
+        aggregated = aggregate_recommendations([(sig, rec)])
+        assert aggregated[0].is_builtin is True
+
+    def test_custom_agents_aggregate_with_is_builtin_false(self) -> None:
+        pairs = [
+            _token_outlier_pair("pm", 2.4),
+            _token_outlier_pair("pm", 3.1),
+        ]
+        aggregated = aggregate_recommendations(pairs)
+        assert aggregated[0].is_builtin is False
+
+
 class TestAggregationModel:
     def test_aggregated_recommendation_is_pydantic_serializable(self) -> None:
         pairs = [_token_outlier_pair("pm", 3.4)]
