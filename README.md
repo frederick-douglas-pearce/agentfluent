@@ -55,20 +55,22 @@ If you write your own prompts each session, use CodeFluent. If your prompts live
 ## Screenshots
 
 <table>
-<tr><th>Project Discovery</th><th>Execution Analytics</th></tr>
+<tr><th>Execution Analytics</th><th>Behavior Diagnostics</th></tr>
 <tr valign="top">
-  <td><img src="images/demo-list.png" alt="agentfluent list"></td>
-  <td><img src="images/demo-analyze.png" alt="agentfluent analyze"></td>
+  <td><img src="images/demo-analyze.svg" alt="agentfluent analyze — token, cost, tool, and agent tables"></td>
+  <td><img src="images/demo-diagnostics.svg" alt="agentfluent analyze --diagnostics — aggregated recommendations with built-in-aware action text"></td>
 </tr>
 </table>
 
 <table>
-<tr><th>Behavior Diagnostics</th><th>Config Assessment</th></tr>
+<tr><th>Suggested Subagents (YAML draft)</th><th>Config Assessment</th></tr>
 <tr valign="top">
-  <td><img src="images/demo-diagnostics.png" alt="agentfluent analyze --diagnostics"></td>
-  <td><img src="images/demo-config-check.png" alt="agentfluent config-check"></td>
+  <td><img src="images/demo-subagents.svg" alt="agentfluent analyze --diagnostics --verbose — Suggested Subagents table plus copy-paste-ready YAML draft"></td>
+  <td><img src="images/demo-config-check.svg" alt="agentfluent config-check — per-agent scoring and recommendations"></td>
 </tr>
 </table>
+
+<sub>Screenshots regenerated from real session data via <code>scripts/generate_readme_screenshots.py</code>.</sub>
 
 ## Getting Started
 
