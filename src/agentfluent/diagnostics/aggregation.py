@@ -97,15 +97,21 @@ def _representative_message(
 
     For ``count == 1`` the original message is returned verbatim so
     single-invocation findings read identically to the raw table. For
-    ``count > 1`` the message is rebuilt as ``"N invocations[ (range)].
-    <action>"`` using the representative recommendation's ``action`` text
-    (which is constant across duplicates in the same aggregation group).
+    ``count > 1`` the message is rebuilt as ``"N <signal_type>
+    invocations[ (range)]. <action>"``. Naming the signal type in the
+    prefix distinguishes rows that share the same ``(agent, target)``
+    but fire on different signals — especially for built-in agents,
+    where multiple signal types route to the same concern template and
+    would otherwise produce near-identical aggregated rows (#181).
     """
     rep = recs[0]
     if count == 1:
         return rep.message
 
-    prefix = f"{count} invocations"
+    if rep.signal_types:
+        prefix = f"{count} {rep.signal_types[0].value} invocations"
+    else:
+        prefix = f"{count} invocations"
     if metric_range:
         prefix = f"{prefix} ({metric_range})"
 
