@@ -270,3 +270,30 @@ class TestExtractFromConstructedMessages:
         assert inv.duration_ms == 122963
         assert inv.agent_id == "uuid-real"
         assert inv.output_text == "Agent finished successfully."
+
+    def test_missing_subagent_type_defaults_to_general_purpose(self) -> None:
+        # Some caller-side skills and older Claude Code versions invoke
+        # Agent without ``subagent_type``; the tool defaults to
+        # general-purpose under the hood but the logged tool_use block
+        # omits the field. Extractor must match the tool's default
+        # behavior instead of labeling these "unknown" (#169).
+        messages = [
+            SessionMessage(
+                type="assistant",
+                content_blocks=[
+                    ContentBlock(
+                        type="tool_use",
+                        id="toolu_no_subtype",
+                        name="Agent",
+                        input={
+                            "description": "Code reuse review",
+                            "prompt": "Review the diff at /tmp/simplify.diff.",
+                        },
+                    ),
+                ],
+            ),
+        ]
+        invocations = extract_agent_invocations(messages)
+        assert len(invocations) == 1
+        assert invocations[0].agent_type == "general-purpose"
+        assert invocations[0].is_builtin is True
