@@ -23,6 +23,7 @@ from agentfluent.cli.formatters.helpers import (
     format_size,
     format_tokens,
     score_color,
+    severity_cell,
     truncate,
 )
 
@@ -258,11 +259,10 @@ def _format_diagnostics_table(
         sig_table.add_column("Message")
 
         for sig in diag.signals:
-            color = SEVERITY_COLORS.get(sig.severity, "white")
             sig_table.add_row(
                 escape(sig.agent_type),
                 escape(sig.signal_type.value),
-                f"[{color}]{sig.severity.value}[/{color}]",
+                severity_cell(sig.severity),
                 escape(sig.message),
             )
         console.print(sig_table)
@@ -276,11 +276,10 @@ def _format_diagnostics_table(
         rec_table.add_column("Action")
 
         for rec in diag.recommendations:
-            color = SEVERITY_COLORS.get(rec.severity, "white")
             rec_table.add_row(
                 escape(rec.agent_type),
                 escape(rec.target),
-                f"[{color}]{rec.severity.value}[/{color}]",
+                severity_cell(rec.severity),
                 escape(rec.observation),
                 escape(rec.action),
             )
@@ -294,11 +293,10 @@ def _format_diagnostics_table(
         rec_table.add_column("Recommendation")
 
         for agg in diag.aggregated_recommendations:
-            color = SEVERITY_COLORS.get(agg.severity, "white")
             rec_table.add_row(
                 escape(agg.agent_type),
                 escape(agg.target),
-                f"[{color}]{agg.severity.value}[/{color}]",
+                severity_cell(agg.severity),
                 str(agg.count),
                 escape(agg.representative_message),
             )
@@ -484,10 +482,9 @@ def format_config_check_table(
             rec_table.add_column("Action")
 
         for agent_name, rec in all_recs:
-            color = SEVERITY_COLORS.get(rec.severity, "white")
             row = [
                 agent_name,
-                f"[{color}]{rec.severity.value}[/{color}]",
+                severity_cell(rec.severity),
                 rec.message,
             ]
             if verbose:
