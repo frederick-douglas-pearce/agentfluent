@@ -524,7 +524,7 @@ RULES: list[CorrelationRule] = [
 def correlate(
     signals: list[DiagnosticSignal],
     configs: dict[str, AgentConfig] | None = None,
-) -> list[DiagnosticRecommendation]:
+) -> list[tuple[DiagnosticSignal, DiagnosticRecommendation]]:
     """Map signals to config surfaces and produce recommendations.
 
     Args:
@@ -533,16 +533,20 @@ def correlate(
             When available, recommendations reference specific config files.
 
     Returns:
-        List of actionable recommendations.
+        Paired ``(signal, recommendation)`` tuples — one per matched
+        signal. The pairing is explicit (rather than positional across
+        two lists) so downstream consumers like
+        ``aggregate_recommendations`` can attribute evidence back to the
+        source signal without relying on list-ordering invariants.
     """
-    recommendations: list[DiagnosticRecommendation] = []
+    pairs: list[tuple[DiagnosticSignal, DiagnosticRecommendation]] = []
 
     for signal in signals:
         config = configs.get(signal.agent_type.lower()) if configs else None
 
         for rule in RULES:
             if rule.matches(signal, config):
-                recommendations.append(rule.recommend(signal, config))
+                pairs.append((signal, rule.recommend(signal, config)))
                 break
 
-    return recommendations
+    return pairs

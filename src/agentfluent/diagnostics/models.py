@@ -89,6 +89,45 @@ class DiagnosticRecommendation(BaseModel):
     """Which signal types contributed to this recommendation."""
 
 
+class AggregatedRecommendation(BaseModel):
+    """Aggregate of one or more ``DiagnosticRecommendation`` instances that
+    share the same ``(agent_type, target, signal_types)`` shape.
+
+    Produced by ``diagnostics.aggregation.aggregate_recommendations`` so the
+    default Recommendations table can show distinct findings (with an
+    occurrence count and metric range) instead of N near-identical rows.
+    The raw per-invocation recommendations remain available on
+    ``contributing_recommendations`` for ``--verbose`` and JSON output.
+    """
+
+    agent_type: str
+    target: str
+    severity: Severity
+    signal_types: list[SignalType] = Field(default_factory=list)
+
+    count: int = 1
+    """Number of per-invocation recommendations merged into this row."""
+
+    metric_range: str | None = None
+    """Human-readable metric range for signal types that carry ratio data
+    (TOKEN_OUTLIER, DURATION_OUTLIER). ``None`` for signal types that do
+    not expose a comparable scalar (retry counts, permission failures)."""
+
+    representative_message: str
+    """Aggregated message shown in the default table. For ``count == 1``
+    this is the original recommendation text verbatim."""
+
+    contributing_recommendations: list[DiagnosticRecommendation] = Field(
+        default_factory=list,
+    )
+    """Raw per-invocation recommendations so ``--verbose`` can re-render
+    the unaggregated view without re-running the pipeline. Carries the
+    full observation/reason/action text and source ``signal_types`` for
+    each member of the group — those fields are not denormalized onto
+    this model since ``contributing_recommendations[0]`` is the source
+    of truth."""
+
+
 class DelegationSuggestion(BaseModel):
     """A draft subagent definition derived from a cluster of recurring
     ``general-purpose`` delegations.
@@ -147,6 +186,17 @@ class DiagnosticsResult(BaseModel):
 
     signals: list[DiagnosticSignal] = Field(default_factory=list)
     recommendations: list[DiagnosticRecommendation] = Field(default_factory=list)
+    """Raw per-invocation recommendations. One entry per matched signal.
+    Retained alongside ``aggregated_recommendations`` so ``--verbose`` and
+    JSON consumers can drill into unaggregated evidence."""
+
+    aggregated_recommendations: list[AggregatedRecommendation] = Field(
+        default_factory=list,
+    )
+    """Recommendations aggregated by ``(agent_type, target, signal_types)``
+    with occurrence counts and metric ranges. This is the default surface
+    shown in the table formatter."""
+
     subagent_trace_count: int = 0
     """Number of subagent traces that successfully parsed and linked."""
 

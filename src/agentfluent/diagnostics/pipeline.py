@@ -22,6 +22,7 @@ from agentfluent.agents.models import AgentInvocation
 from agentfluent.config.mcp_discovery import discover_mcp_servers
 from agentfluent.config.models import AgentConfig
 from agentfluent.config.scanner import scan_agents
+from agentfluent.diagnostics.aggregation import aggregate_recommendations
 from agentfluent.diagnostics.correlator import correlate
 from agentfluent.diagnostics.delegation import (
     DEFAULT_MIN_CLUSTER_SIZE,
@@ -234,7 +235,9 @@ def run_diagnostics(
                 ),
             )
 
-    recommendations = correlate(signals, configs_by_name)
+    correlated_pairs = correlate(signals, configs_by_name)
+    recommendations = [rec for _, rec in correlated_pairs]
+    aggregated = aggregate_recommendations(correlated_pairs)
 
     subagent_trace_count = sum(1 for inv in invocations if inv.trace is not None)
 
@@ -256,6 +259,7 @@ def run_diagnostics(
     return DiagnosticsResult(
         signals=signals,
         recommendations=recommendations,
+        aggregated_recommendations=aggregated,
         subagent_trace_count=subagent_trace_count,
         delegation_suggestions=delegation_suggestions,
     )

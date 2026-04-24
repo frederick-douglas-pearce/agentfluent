@@ -3,8 +3,22 @@
 from pathlib import Path
 
 from agentfluent.config.models import AgentConfig, Scope, Severity
-from agentfluent.diagnostics.correlator import correlate
-from agentfluent.diagnostics.models import DiagnosticSignal, SignalType
+from agentfluent.diagnostics.correlator import correlate as _correlate_pairs
+from agentfluent.diagnostics.models import (
+    DiagnosticRecommendation,
+    DiagnosticSignal,
+    SignalType,
+)
+
+
+def correlate(
+    signals: list[DiagnosticSignal],
+    configs: dict[str, AgentConfig] | None = None,
+) -> list[DiagnosticRecommendation]:
+    """Test wrapper: drops the signal side of ``correlate``'s paired return
+    so per-rule assertions can stay focused on recommendation content.
+    Pairing semantics are exercised by the aggregation tests."""
+    return [rec for _, rec in _correlate_pairs(signals, configs)]
 
 
 def _signal(
