@@ -23,6 +23,12 @@ CONFIDENCE_COLORS: dict[str, str] = {
 }
 
 
+def severity_cell(severity: Severity) -> str:
+    """Rich-markup cell for a ``Severity`` value."""
+    color = SEVERITY_COLORS[severity]
+    return f"[{color}]{severity.value}[/{color}]"
+
+
 def format_cost(cost: float) -> str:
     """Format a dollar cost for display."""
     if cost < 0.01:
