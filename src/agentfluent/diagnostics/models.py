@@ -117,19 +117,15 @@ class AggregatedRecommendation(BaseModel):
     """Aggregated message shown in the default table. For ``count == 1``
     this is the original recommendation text verbatim."""
 
-    observation: str = ""
-    reason: str = ""
-    action: str = ""
-
-    contributing_signals: list[DiagnosticSignal] = Field(default_factory=list)
-    """Source signals, preserved for verbose drill-down and future
-    consumers (e.g., priority scoring in #172)."""
-
     contributing_recommendations: list[DiagnosticRecommendation] = Field(
         default_factory=list,
     )
     """Raw per-invocation recommendations so ``--verbose`` can re-render
-    the unaggregated view without re-running the pipeline."""
+    the unaggregated view without re-running the pipeline. Carries the
+    full observation/reason/action text and source ``signal_types`` for
+    each member of the group — those fields are not denormalized onto
+    this model since ``contributing_recommendations[0]`` is the source
+    of truth."""
 
 
 class DelegationSuggestion(BaseModel):

@@ -207,16 +207,16 @@ class TestSortOrder:
 
 
 class TestEvidencePreservation:
-    def test_contributing_signals_and_recs_are_attached(self) -> None:
+    def test_contributing_recommendations_are_attached(self) -> None:
         pairs = [
             _token_outlier_pair("Explore", 4.9),
             _token_outlier_pair("Explore", 8.0),
         ]
         aggregated = aggregate_recommendations(pairs)
         agg = aggregated[0]
-        assert len(agg.contributing_signals) == 2
         assert len(agg.contributing_recommendations) == 2
-        assert {s.detail["ratio"] for s in agg.contributing_signals} == {4.9, 8.0}
+        observations = {r.observation for r in agg.contributing_recommendations}
+        assert len(observations) == 2
 
     def test_empty_input_yields_empty_output(self) -> None:
         assert aggregate_recommendations([]) == []

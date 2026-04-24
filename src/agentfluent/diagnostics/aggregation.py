@@ -11,13 +11,6 @@ Aggregation happens in the pipeline, after ``correlate``, so every
 output format benefits — not just the table formatter. The raw
 per-invocation list is preserved alongside the aggregated list on
 ``DiagnosticsResult`` so ``--verbose`` and JSON consumers can drill in.
-
-NOTE for #166 (built-in vs custom agent differentiation): if that issue
-forks recommendation text within the same ``(agent_type, target,
-signal_type)`` tuple, extend the aggregation key to include whatever
-field carries the fork (e.g., ``config_file`` or a new ``is_builtin``
-flag). Today the 10 existing rules don't fork within the same tuple, so
-the key below is correct.
 """
 
 from __future__ import annotations
@@ -64,13 +57,11 @@ def _compute_metric_range(signals: list[DiagnosticSignal]) -> str | None:
     counts, permission failures) so the aggregated row falls back to a
     count-only message.
     """
-    scalar_signals = [s for s in signals if s.signal_type in _SCALAR_METRIC_SIGNALS]
-    if not scalar_signals:
-        return None
-
     ratios: list[float] = []
     means: list[float] = []
-    for sig in scalar_signals:
+    for sig in signals:
+        if sig.signal_type not in _SCALAR_METRIC_SIGNALS:
+            continue
         ratio = sig.detail.get("ratio")
         mean = sig.detail.get("mean_value")
         if isinstance(ratio, (int, float)):
@@ -145,7 +136,6 @@ def aggregate_recommendations(
         count = len(members)
         severity = _max_severity(recs)
         metric_range = _compute_metric_range(signals)
-        rep = recs[0]
 
         aggregated.append(
             AggregatedRecommendation(
@@ -158,10 +148,6 @@ def aggregate_recommendations(
                 representative_message=_representative_message(
                     recs, count, metric_range,
                 ),
-                observation=rep.observation,
-                reason=rep.reason,
-                action=rep.action,
-                contributing_signals=signals,
                 contributing_recommendations=recs,
             ),
         )
