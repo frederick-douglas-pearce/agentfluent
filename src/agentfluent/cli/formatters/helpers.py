@@ -24,13 +24,8 @@ CONFIDENCE_COLORS: dict[str, str] = {
 
 
 def severity_cell(severity: Severity) -> str:
-    """Rich-markup cell for a ``Severity`` value.
-
-    Single-sources the color lookup and markup wrapping that every
-    severity-colored table cell in the CLI needs, so callers don't
-    reinvent ``[red]critical[/red]`` inline.
-    """
-    color = SEVERITY_COLORS.get(severity, "white")
+    """Rich-markup cell for a ``Severity`` value."""
+    color = SEVERITY_COLORS[severity]
     return f"[{color}]{severity.value}[/{color}]"
 
 

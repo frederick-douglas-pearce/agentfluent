@@ -344,7 +344,7 @@ def _render_trace_signal_evidence(console: Console, sig: DiagnosticSignal) -> No
     dict field) are escaped before being passed to Rich — trace content
     is untrusted and could otherwise smuggle markup like `[link=…]`.
     """
-    color = SEVERITY_COLORS.get(sig.severity, "white")
+    color = SEVERITY_COLORS[sig.severity]
     header = (
         f"\n[{color}]{escape(sig.signal_type.value)}[/{color}] "
         f"[cyan]{escape(sig.agent_type)}[/cyan] — {escape(sig.message)}"
