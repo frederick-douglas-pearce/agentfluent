@@ -22,7 +22,15 @@ def extract_agent_invocations(messages: list[SessionMessage]) -> list[AgentInvoc
             if tool_use.name != "Agent":
                 continue
 
-            agent_type = tool_use.input.get("subagent_type", "unknown")
+            # Claude Code's Agent tool defaults to ``general-purpose`` when
+            # ``subagent_type`` is omitted. Some older Claude Code versions
+            # and some caller-side skills invoked Agent without specifying
+            # the field; the resulting tool_use blocks have no
+            # ``subagent_type`` key even though the invocation ran as
+            # general-purpose. Match the tool's own default rather than
+            # labeling those invocations "unknown" and excluding them from
+            # the general-purpose delegation bucket (#169).
+            agent_type = tool_use.input.get("subagent_type", "general-purpose")
             description = tool_use.input.get("description", "")
             prompt = tool_use.input.get("prompt", "")
 
