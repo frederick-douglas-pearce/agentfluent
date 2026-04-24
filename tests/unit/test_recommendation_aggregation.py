@@ -162,7 +162,7 @@ class TestRepresentativeMessage:
         aggregated = aggregate_recommendations([(_, rec)])
         assert aggregated[0].representative_message == rec.message
 
-    def test_multi_invocation_includes_count_and_range(self) -> None:
+    def test_multi_invocation_includes_signal_type_count_and_range(self) -> None:
         pairs = [
             _token_outlier_pair("Explore", 4.9),
             _token_outlier_pair("Explore", 6.7),
@@ -170,17 +170,36 @@ class TestRepresentativeMessage:
         ]
         aggregated = aggregate_recommendations(pairs)
         msg = aggregated[0].representative_message
-        assert msg.startswith("3 invocations (4.9x–8.0x above 5,064 mean).")
+        assert msg.startswith(
+            "3 token_outlier invocations (4.9x–8.0x above 5,064 mean).",
+        )
         assert "Add more specific instructions" in msg
 
-    def test_multi_invocation_non_scalar_uses_count_only(self) -> None:
+    def test_multi_invocation_non_scalar_names_signal_type(self) -> None:
         pairs = [
             _retry_loop_pair("architect", "Read", 3),
             _retry_loop_pair("architect", "Read", 7),
         ]
         aggregated = aggregate_recommendations(pairs)
         msg = aggregated[0].representative_message
-        assert msg.startswith("2 invocations.")
+        assert msg.startswith("2 retry_loop invocations.")
+
+    def test_same_agent_target_different_signals_distinguishable(self) -> None:
+        # Anchor the #181 fix: when two aggregated rows share the same
+        # (agent, target) but differ in signal type — common for built-in
+        # agents where multiple signals route to the same concern template
+        # — their representative messages must name the triggering signal
+        # so users can tell the rows apart.
+        pairs = [
+            _token_outlier_pair("Explore", 4.9),
+            _token_outlier_pair("Explore", 8.0),
+            _retry_loop_pair("Explore", "Read", 3),
+            _retry_loop_pair("Explore", "Read", 5),
+        ]
+        aggregated = aggregate_recommendations(pairs)
+        messages = {a.representative_message for a in aggregated}
+        assert any("token_outlier" in m for m in messages)
+        assert any("retry_loop" in m for m in messages)
 
 
 class TestSortOrder:
