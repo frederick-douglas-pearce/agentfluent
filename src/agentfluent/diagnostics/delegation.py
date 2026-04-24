@@ -72,16 +72,18 @@ _SMALL_N_THRESHOLD = 10       # below this, force k=2 without silhouette
 _FORCED_SMALL_K = 2
 _KMEANS_RANDOM_STATE = 42     # default seed for reproducible clustering
 _KMEANS_N_INIT = 10           # KMeans restarts; higher resists bad local minima
-# Confidence tier boundaries: #140's calibration (post-#153 parser
-# fix) observed cluster cohesion on real data runs 0.19–0.79, mostly
-# 0.33–0.47. Only ~12% of clusters reach MEDIUM (0.6); none reach
-# HIGH (0.8). Semantic review confirmed the clusters ARE coherent
-# patterns — these thresholds are simply calibrated above what real
-# TF-IDF on agent delegations yields. Candidate for lowering to
-# ~0.3 medium / ~0.5 high once multi-contributor data confirms.
+# Confidence tier boundaries: calibrated against two real-world
+# datasets (agentfluent: 5 clusters, cohesion 0.26–0.46; codefluent:
+# 2 clusters, cohesion 0.16–0.31) in the #167 investigation. Clusters
+# are genuinely finding task families, but free-text delegation
+# prompts have enough variance that real-world cohesion rarely
+# exceeds 0.5 even for coherent groupings. Semantic review:
+# cohesion ≥ 0.35 reliably surfaces recognizable patterns (PR reviews,
+# mode flags); below that lives loose thematic grouping that still
+# warrants a REVIEW BEFORE USE caveat (#168's YAML draft warning).
 _CONFIDENCE_HIGH_SIZE = 10
-_CONFIDENCE_HIGH_COHESION = 0.8
-_CONFIDENCE_MEDIUM_COHESION = 0.6
+_CONFIDENCE_HIGH_COHESION = 0.50
+_CONFIDENCE_MEDIUM_COHESION = 0.35
 _TOOL_READ_ONLY = frozenset(
     {"Read", "Grep", "Glob", "WebFetch", "WebSearch", "LS"},
 )
