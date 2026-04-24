@@ -267,34 +267,41 @@ def _format_diagnostics_table(
             )
         console.print(sig_table)
 
-    if diag.recommendations:
+    if verbose and diag.recommendations:
         rec_table = Table(title="Recommendations", show_header=True)
         rec_table.add_column("Agent", style="cyan")
         rec_table.add_column("Target")
         rec_table.add_column("Severity")
-        if verbose:
-            rec_table.add_column("Observation")
-            rec_table.add_column("Action")
-        else:
-            rec_table.add_column("Recommendation")
+        rec_table.add_column("Observation")
+        rec_table.add_column("Action")
 
         for rec in diag.recommendations:
             color = SEVERITY_COLORS.get(rec.severity, "white")
-            if verbose:
-                rec_table.add_row(
-                    escape(rec.agent_type),
-                    escape(rec.target),
-                    f"[{color}]{rec.severity.value}[/{color}]",
-                    escape(rec.observation),
-                    escape(rec.action),
-                )
-            else:
-                rec_table.add_row(
-                    escape(rec.agent_type),
-                    escape(rec.target),
-                    f"[{color}]{rec.severity.value}[/{color}]",
-                    escape(rec.message),
-                )
+            rec_table.add_row(
+                escape(rec.agent_type),
+                escape(rec.target),
+                f"[{color}]{rec.severity.value}[/{color}]",
+                escape(rec.observation),
+                escape(rec.action),
+            )
+        console.print(rec_table)
+    elif diag.aggregated_recommendations:
+        rec_table = Table(title="Recommendations", show_header=True)
+        rec_table.add_column("Agent", style="cyan")
+        rec_table.add_column("Target")
+        rec_table.add_column("Severity")
+        rec_table.add_column("Count", justify="right")
+        rec_table.add_column("Recommendation")
+
+        for agg in diag.aggregated_recommendations:
+            color = SEVERITY_COLORS.get(agg.severity, "white")
+            rec_table.add_row(
+                escape(agg.agent_type),
+                escape(agg.target),
+                f"[{color}]{agg.severity.value}[/{color}]",
+                str(agg.count),
+                escape(agg.representative_message),
+            )
         console.print(rec_table)
 
     _format_deep_diagnostics(console, diag, verbose=verbose)
