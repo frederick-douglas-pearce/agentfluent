@@ -148,6 +148,7 @@ def aggregate_recommendations(
                 representative_message=_representative_message(
                     recs, count, metric_range,
                 ),
+                is_builtin=recs[0].is_builtin,
                 contributing_recommendations=recs,
             ),
         )

@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from agentfluent.config.models import AgentConfig, Scope, Severity
 from agentfluent.diagnostics.correlator import correlate as _correlate_pairs
 from agentfluent.diagnostics.models import (
@@ -462,3 +464,110 @@ class TestMcpAuditCorrelation:
         recs = correlate([_signal(keyword="error")])
         # At least one recommendation; target is NOT "mcp".
         assert all(r.target != "mcp" for r in recs)
+
+
+def _builtin_signal(signal_type: SignalType, agent_type: str = "explore") -> DiagnosticSignal:
+    """Build a minimal signal keyed to a built-in agent, supplying detail
+    fields required by specific rules so each rule's ``recommend`` path
+    exits through the built-in branch cleanly."""
+    detail: dict[str, object] = {}
+    if signal_type == SignalType.ERROR_PATTERN:
+        detail = {"keyword": "failed"}
+    elif signal_type == SignalType.PERMISSION_FAILURE:
+        detail = {"tool_name": "Write", "tool_calls": []}
+    elif signal_type == SignalType.RETRY_LOOP:
+        detail = {"tool_name": "Read", "retry_count": 3, "tool_calls": []}
+    elif signal_type == SignalType.STUCK_PATTERN:
+        detail = {"tool_name": "Read", "stuck_count": 4, "tool_calls": []}
+    elif signal_type == SignalType.TOOL_ERROR_SEQUENCE:
+        detail = {"error_count": 2, "start_index": 0, "end_index": 1, "tool_calls": []}
+    elif signal_type == SignalType.MODEL_MISMATCH:
+        detail = {
+            "mismatch_type": "overspec",
+            "current_model": "claude-opus-4-7",
+            "recommended_model": "claude-haiku-4-5",
+            "complexity_tier": "simple",
+            "invocation_count": 5,
+        }
+    return DiagnosticSignal(
+        signal_type=signal_type,
+        severity=Severity.WARNING,
+        agent_type=agent_type,
+        message=f"Agent '{agent_type}' triggered {signal_type.value}.",
+        detail=detail,
+    )
+
+
+class TestBuiltinAgentBranching:
+    """Rules must emit built-in-specific action text (not "edit the prompt
+    in ~/.claude/agents/<name>.md") when ``signal.agent_type`` names a
+    built-in like Explore, general-purpose, or Plan — those agents have
+    no user-editable config files. Issue #166."""
+
+    @pytest.mark.parametrize(
+        ("signal_type", "expected_phrase", "expected_target"),
+        [
+            (SignalType.TOKEN_OUTLIER, "prompt is not user-editable", "prompt"),
+            (SignalType.DURATION_OUTLIER, "prompt is not user-editable", "prompt"),
+            (SignalType.TOOL_ERROR_SEQUENCE, "prompt is not user-editable", "prompt"),
+            (SignalType.RETRY_LOOP, "prompt is not user-editable", "prompt"),
+            (SignalType.STUCK_PATTERN, "prompt is not user-editable", "prompt"),
+            (SignalType.PERMISSION_FAILURE, "tool list is not user-editable", "tools"),
+            (SignalType.MODEL_MISMATCH, "model is not user-configurable", "model"),
+        ],
+    )
+    def test_builtin_agent_gets_non_editable_action_text(
+        self,
+        signal_type: SignalType,
+        expected_phrase: str,
+        expected_target: str,
+    ) -> None:
+        recs = correlate([_builtin_signal(signal_type)])
+        assert len(recs) == 1
+        rec = recs[0]
+        assert rec.is_builtin is True
+        assert rec.config_file == ""
+        assert rec.target == expected_target
+        assert expected_phrase in rec.action
+
+    def test_error_pattern_blocked_keyword_uses_tools_concern(self) -> None:
+        # AccessErrorRule fires on "blocked"; built-ins get tools-concern text.
+        signals = [_signal(keyword="blocked", agent_type="explore")]
+        recs = correlate(signals)
+        assert recs[0].is_builtin is True
+        assert recs[0].target == "tools"
+        assert "tool list is not user-editable" in recs[0].action
+
+    def test_error_pattern_failed_keyword_uses_recovery_concern(self) -> None:
+        # ErrorHandlingRule fires on "failed"; built-ins get recovery text.
+        signals = [_signal(keyword="failed", agent_type="explore")]
+        recs = correlate(signals)
+        assert recs[0].is_builtin is True
+        assert recs[0].target == "prompt"
+        assert "prompt is not user-editable" in recs[0].action
+
+    def test_custom_agent_unchanged_by_builtin_branching(self) -> None:
+        # Regression: a custom agent (agent_type="pm") still routes
+        # through the original config-or-fallback path.
+        signals = [_builtin_signal(SignalType.TOKEN_OUTLIER, agent_type="pm")]
+        recs = correlate(signals, {"pm": _config()})
+        assert len(recs) == 1
+        assert recs[0].is_builtin is False
+        assert "pm.md" in recs[0].config_file
+        assert "not user-editable" not in recs[0].action
+
+    def test_builtin_detection_is_case_insensitive(self) -> None:
+        # agent_type "Explore" (capital E) should still be detected as builtin.
+        signals = [_builtin_signal(SignalType.TOKEN_OUTLIER, agent_type="Explore")]
+        recs = correlate(signals)
+        assert recs[0].is_builtin is True
+
+    def test_all_four_concern_templates_distinct(self) -> None:
+        # Sanity check: the four concern templates produce recognizably
+        # different action text so JSON consumers can tell them apart.
+        token_rec = correlate([_builtin_signal(SignalType.TOKEN_OUTLIER)])[0]
+        retry_rec = correlate([_builtin_signal(SignalType.RETRY_LOOP)])[0]
+        perm_rec = correlate([_builtin_signal(SignalType.PERMISSION_FAILURE)])[0]
+        model_rec = correlate([_builtin_signal(SignalType.MODEL_MISMATCH)])[0]
+        actions = {token_rec.action, retry_rec.action, perm_rec.action, model_rec.action}
+        assert len(actions) == 4

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from agentfluent.agents.models import is_builtin_agent
 from agentfluent.config.models import AgentConfig, Severity
+from agentfluent.diagnostics.builtin_actions import builtin_recommendation
 from agentfluent.diagnostics.models import (
     DiagnosticRecommendation,
     DiagnosticSignal,
@@ -43,6 +45,12 @@ class AccessErrorRule:
     ) -> DiagnosticRecommendation:
         observation = signal.message
         reason = "This indicates the agent lacks access to required tools."
+
+        if is_builtin_agent(signal.agent_type):
+            return builtin_recommendation(
+                signal, target="tools", concern="tools",
+                observation=observation, reason=reason,
+            )
 
         if config and not config.tools and not config.disallowed_tools:
             action = (
@@ -90,6 +98,12 @@ class ErrorHandlingRule:
         observation = signal.message
         reason = "Repeated errors suggest the agent lacks error handling guidance."
 
+        if is_builtin_agent(signal.agent_type):
+            return builtin_recommendation(
+                signal, target="prompt", concern="recovery",
+                observation=observation, reason=reason,
+            )
+
         if config and config.prompt_body:
             body_lower = config.prompt_body.lower()
             has_error_guidance = any(
@@ -136,6 +150,12 @@ class TokenOutlierRule:
         observation = signal.message
         reason = "High token usage suggests the agent is exploring broadly."
 
+        if is_builtin_agent(signal.agent_type):
+            return builtin_recommendation(
+                signal, target="prompt", concern="scope",
+                observation=observation, reason=reason,
+            )
+
         if config and len(config.tools) > 8:
             action = (
                 f"Consider restricting the tools list in {config.file_path} "
@@ -179,6 +199,12 @@ class DurationOutlierRule:
     ) -> DiagnosticRecommendation:
         observation = signal.message
         reason = "Slow invocations may indicate an overqualified model or unclear task scope."
+
+        if is_builtin_agent(signal.agent_type):
+            return builtin_recommendation(
+                signal, target="prompt", concern="scope",
+                observation=observation, reason=reason,
+            )
 
         if config and config.model and "opus" in config.model.lower():
             action = (
@@ -224,6 +250,12 @@ class PermissionFailureRule:
         tool_name = str(signal.detail.get("tool_name", ""))
         observation = signal.message
         reason = "The subagent was denied access to a tool it attempted to call."
+
+        if is_builtin_agent(signal.agent_type):
+            return builtin_recommendation(
+                signal, target="tools", concern="tools",
+                observation=observation, reason=reason,
+            )
 
         if config and tool_name and tool_name not in config.tools:
             action = (
@@ -271,6 +303,12 @@ class RetryLoopRule:
             "Repeated retries on the same tool indicate the agent lacks "
             "recovery guidance for failures."
         )
+
+        if is_builtin_agent(signal.agent_type):
+            return builtin_recommendation(
+                signal, target="prompt", concern="recovery",
+                observation=observation, reason=reason,
+            )
 
         if config and config.prompt_body:
             body_lower = config.prompt_body.lower()
@@ -323,6 +361,12 @@ class StuckPatternRule:
             "progress, indicating no exit condition."
         )
 
+        if is_builtin_agent(signal.agent_type):
+            return builtin_recommendation(
+                signal, target="prompt", concern="recovery",
+                observation=observation, reason=reason,
+            )
+
         if config:
             action = (
                 f"Add an explicit exit condition or progress check to the "
@@ -362,6 +406,12 @@ class ErrorSequenceRule:
             "Multiple consecutive tool errors suggest the agent lacks "
             "fallback instructions for when a tool call fails."
         )
+
+        if is_builtin_agent(signal.agent_type):
+            return builtin_recommendation(
+                signal, target="prompt", concern="scope",
+                observation=observation, reason=reason,
+            )
 
         if config and len(config.tools) > 8:
             action = (
@@ -424,6 +474,12 @@ class ModelRoutingRule:
             f"Observed complexity tier is '{complexity}' but the agent is "
             f"configured with {current_model}."
         )
+
+        if is_builtin_agent(signal.agent_type):
+            return builtin_recommendation(
+                signal, target="model", concern="model",
+                observation=observation, reason=reason,
+            )
 
         action_parts = [f"Switch to {recommended_model}"]
         if mismatch_type == "overspec" and isinstance(savings, int | float):
