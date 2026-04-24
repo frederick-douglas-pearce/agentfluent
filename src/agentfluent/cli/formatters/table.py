@@ -423,14 +423,8 @@ def _format_delegation_suggestions(
 
     if verbose:
         for sug in suggestions:
-            top_terms = ", ".join(sug.top_terms) if sug.top_terms else "—"
-            console.print(
-                f"\n[cyan]{escape(sug.name)}[/cyan]  "
-                f"[dim](cohesion {sug.cohesion_score:.2f}, "
-                f"top terms: {escape(top_terms)})[/dim]",
-            )
-            console.print(f"  {escape(sug.description)}")
-            console.print(f"  [dim]prompt draft:[/dim] {escape(sug.prompt_template)}")
+            console.print()
+            console.print(escape(sug.yaml_draft))
 
 
 def _format_diagnostics_summary(console: Console, diag: DiagnosticsResult) -> None:
