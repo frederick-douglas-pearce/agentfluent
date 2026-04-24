@@ -289,17 +289,35 @@ class TestGenerateDraft:
 
     def test_confidence_high(self) -> None:
         members = [_inv()] * 12
-        draft = generate_draft(self._cluster(members=members, cohesion=0.85))
+        draft = generate_draft(self._cluster(members=members, cohesion=0.55))
         assert draft.confidence == "high"
 
     def test_confidence_medium(self) -> None:
         members = [_inv()] * 6
-        draft = generate_draft(self._cluster(members=members, cohesion=0.65))
+        draft = generate_draft(self._cluster(members=members, cohesion=0.40))
         assert draft.confidence == "medium"
 
     def test_confidence_low(self) -> None:
         members = [_inv()] * 5
-        draft = generate_draft(self._cluster(members=members, cohesion=0.4))
+        draft = generate_draft(self._cluster(members=members, cohesion=0.25))
+        assert draft.confidence == "low"
+
+    def test_realistic_cohesion_045_is_medium(self) -> None:
+        # Anchors the #167 calibration: a well-formed agentfluent-style
+        # cluster (cohesion 0.46, size 5 — quiet/json/verbose mode
+        # reviews) must land in MEDIUM, not LOW, under the updated
+        # thresholds. Regression guard against silently reverting the
+        # calibration.
+        members = [_inv()] * 5
+        draft = generate_draft(self._cluster(members=members, cohesion=0.46))
+        assert draft.confidence == "medium"
+
+    def test_realistic_cohesion_028_stays_low(self) -> None:
+        # The flip side: loose thematic groupings (cohesion 0.28, like
+        # the agentfluent "simplify-reviews" cluster) stay LOW so the
+        # YAML draft's REVIEW BEFORE USE warning still fires.
+        members = [_inv()] * 6
+        draft = generate_draft(self._cluster(members=members, cohesion=0.28))
         assert draft.confidence == "low"
 
 
