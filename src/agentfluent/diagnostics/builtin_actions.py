@@ -1,17 +1,10 @@
 """Recommendation text for built-in agents (#166).
 
-Built-in agents (``Explore``, ``general-purpose``, ``Plan``, ``code-reviewer``,
-``statusline-setup``, ``claude-code-guide`` — see
-``agentfluent.agents.models.BUILTIN_AGENT_TYPES``) have no user-editable
-prompt file, no tool-list config, and no model selector. The generic
-rule templates that tell the user to "edit the agent's prompt in
-~/.claude/agents/<name>.md" are therefore un-actionable for these
-agents.
-
-This module owns the built-in-specific action text and the helper that
-each correlation rule calls when ``is_builtin_agent(signal.agent_type)``
-is true. Kept separate from ``correlator.py`` to keep that file under
-the per-module size convention as the rule count grows.
+Built-in agents have no user-editable prompt file, tool list, or model
+selector, so generic "edit ~/.claude/agents/<name>.md" templates are
+un-actionable. This module owns the concern-keyed action text each
+correlation rule uses when ``is_builtin_agent(signal.agent_type)`` is
+true.
 """
 
 from __future__ import annotations
@@ -57,19 +50,18 @@ def builtin_recommendation(
     *,
     target: str,
     concern: BuiltinConcern,
-    observation: str,
     reason: str,
 ) -> DiagnosticRecommendation:
     """Build a recommendation for a signal whose agent is a built-in.
 
-    Callers (correlation rules) supply the rule-specific ``observation``
-    and ``reason`` text so each recommendation still reads like it came
-    from the source rule; only the ``action`` differs from the custom-
-    agent path. ``is_builtin=True`` is stamped so downstream consumers
-    (JSON output, priority scoring in #172) can distinguish these rows
-    without re-deriving.
+    Callers supply the rule-specific ``reason`` so each recommendation
+    still reads like it came from the source rule; only the ``action``
+    differs from the custom-agent path. ``is_builtin=True`` is stamped
+    so downstream consumers (JSON output, priority scoring in #172) can
+    distinguish these rows without re-deriving.
     """
     action = _BUILTIN_ACTIONS[concern]
+    observation = signal.message
     return DiagnosticRecommendation(
         target=target,
         severity=signal.severity,

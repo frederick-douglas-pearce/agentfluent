@@ -467,9 +467,6 @@ class TestMcpAuditCorrelation:
 
 
 def _builtin_signal(signal_type: SignalType, agent_type: str = "explore") -> DiagnosticSignal:
-    """Build a minimal signal keyed to a built-in agent, supplying detail
-    fields required by specific rules so each rule's ``recommend`` path
-    exits through the built-in branch cleanly."""
     detail: dict[str, object] = {}
     if signal_type == SignalType.ERROR_PATTERN:
         detail = {"keyword": "failed"}
@@ -531,7 +528,6 @@ class TestBuiltinAgentBranching:
         assert expected_phrase in rec.action
 
     def test_error_pattern_blocked_keyword_uses_tools_concern(self) -> None:
-        # AccessErrorRule fires on "blocked"; built-ins get tools-concern text.
         signals = [_signal(keyword="blocked", agent_type="explore")]
         recs = correlate(signals)
         assert recs[0].is_builtin is True
@@ -539,7 +535,6 @@ class TestBuiltinAgentBranching:
         assert "tool list is not user-editable" in recs[0].action
 
     def test_error_pattern_failed_keyword_uses_recovery_concern(self) -> None:
-        # ErrorHandlingRule fires on "failed"; built-ins get recovery text.
         signals = [_signal(keyword="failed", agent_type="explore")]
         recs = correlate(signals)
         assert recs[0].is_builtin is True
@@ -547,8 +542,6 @@ class TestBuiltinAgentBranching:
         assert "prompt is not user-editable" in recs[0].action
 
     def test_custom_agent_unchanged_by_builtin_branching(self) -> None:
-        # Regression: a custom agent (agent_type="pm") still routes
-        # through the original config-or-fallback path.
         signals = [_builtin_signal(SignalType.TOKEN_OUTLIER, agent_type="pm")]
         recs = correlate(signals, {"pm": _config()})
         assert len(recs) == 1
@@ -557,14 +550,11 @@ class TestBuiltinAgentBranching:
         assert "not user-editable" not in recs[0].action
 
     def test_builtin_detection_is_case_insensitive(self) -> None:
-        # agent_type "Explore" (capital E) should still be detected as builtin.
         signals = [_builtin_signal(SignalType.TOKEN_OUTLIER, agent_type="Explore")]
         recs = correlate(signals)
         assert recs[0].is_builtin is True
 
     def test_all_four_concern_templates_distinct(self) -> None:
-        # Sanity check: the four concern templates produce recognizably
-        # different action text so JSON consumers can tell them apart.
         token_rec = correlate([_builtin_signal(SignalType.TOKEN_OUTLIER)])[0]
         retry_rec = correlate([_builtin_signal(SignalType.RETRY_LOOP)])[0]
         perm_rec = correlate([_builtin_signal(SignalType.PERMISSION_FAILURE)])[0]
