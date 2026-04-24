@@ -218,12 +218,36 @@ class TestDelegationSuggestionsSection:
         assert "test-runner" in out
         assert "claude-sonnet-4-6" in out
 
-    def test_verbose_adds_prompt_draft_block(self) -> None:
+    def test_verbose_emits_yaml_subagent_draft(self) -> None:
         out = _render_suggestions(
             _result_with_suggestions([_suggestion()]), verbose=True,
         )
-        assert "prompt draft" in out
-        assert "pytest" in out  # top terms surface
+        # Copy-paste-ready YAML frontmatter structure.
+        assert "# Suggested agent: test-runner" in out
+        assert "# Confidence: high" in out
+        assert "description:" in out
+        assert "model: claude-sonnet-4-6" in out
+        assert "tools:" in out
+        assert "- Read" in out
+        assert "---" in out
+        # Prompt body + top terms preserved.
+        assert "You run pytest tests" in out
+        assert "pytest" in out
+
+    def test_verbose_low_confidence_includes_review_warning(self) -> None:
+        out = _render_suggestions(
+            _result_with_suggestions([_suggestion(confidence="low")]), verbose=True,
+        )
+        assert "REVIEW BEFORE USE" in out
+        assert "# Confidence: low" in out
+
+    def test_verbose_empty_tools_notes_reason(self) -> None:
+        sug = _suggestion(tools=[], tools_note="no subagent traces linked")
+        out = _render_suggestions(
+            _result_with_suggestions([sug]), verbose=True,
+        )
+        assert "tools: []" in out
+        assert "no subagent traces linked" in out
 
     def test_dedup_note_rendered(self) -> None:
         sug = _suggestion(dedup_note="suppressed — already covered by 'pm' (similarity 0.85)")

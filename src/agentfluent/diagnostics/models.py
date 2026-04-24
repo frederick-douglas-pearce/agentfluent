@@ -11,7 +11,8 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+import yaml
+from pydantic import BaseModel, Field, computed_field
 
 from agentfluent.config.models import Severity
 
@@ -193,6 +194,52 @@ class DelegationSuggestion(BaseModel):
     """Name of the existing agent that deduped this draft (empty when
     not deduped). Exposed as a first-class field so cross-reference
     logic can look up the matched agent without parsing ``dedup_note``."""
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def yaml_draft(self) -> str:
+        """Copy-paste-ready subagent definition block.
+
+        Matches the shape a user would save to
+        ``~/.claude/agents/<name>.md``: comment preamble with confidence
+        + cluster context, YAML frontmatter (description, model, tools),
+        ``---`` separator, prompt body. Low-confidence clusters get a
+        REVIEW warning in the preamble so the caller doesn't paste them
+        into production without vetting.
+        """
+        preamble: list[str] = [f"# Suggested agent: {self.name}"]
+        if self.confidence == "low":
+            preamble.append("# REVIEW BEFORE USE — low confidence cluster")
+        preamble.append(
+            f"# Confidence: {self.confidence} "
+            f"({self.cluster_size} invocations, {self.cohesion_score:.2f} cohesion)",
+        )
+        if self.top_terms:
+            preamble.append(f"# Top terms: {', '.join(self.top_terms)}")
+        if self.dedup_note:
+            preamble.append(f"# Note: {self.dedup_note}")
+
+        frontmatter_data: dict[str, object] = {
+            "description": self.description,
+            "model": self.model,
+            "tools": self.tools,
+        }
+        frontmatter = yaml.safe_dump(
+            frontmatter_data, sort_keys=False, default_flow_style=False,
+        ).rstrip()
+
+        tools_comment = ""
+        if not self.tools and self.tools_note:
+            tools_comment = f"\n# tools: {self.tools_note}"
+
+        return (
+            "\n".join(preamble)
+            + "\n---\n"
+            + frontmatter
+            + tools_comment
+            + "\n---\n\n"
+            + self.prompt_template
+        )
 
 
 class DiagnosticsResult(BaseModel):
