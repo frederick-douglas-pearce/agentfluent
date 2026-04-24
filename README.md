@@ -54,23 +54,23 @@ If you write your own prompts each session, use CodeFluent. If your prompts live
 
 ## Screenshots
 
-<table>
-<tr><th>Execution Analytics</th><th>Behavior Diagnostics</th></tr>
-<tr valign="top">
-  <td><img src="images/demo-analyze.svg" alt="agentfluent analyze — token, cost, tool, and agent tables"></td>
-  <td><img src="images/demo-diagnostics.svg" alt="agentfluent analyze --diagnostics — aggregated recommendations with built-in-aware action text"></td>
-</tr>
-</table>
+**Execution Analytics** — `agentfluent analyze --project <name>`
 
-<table>
-<tr><th>Suggested Subagents (YAML draft)</th><th>Config Assessment</th></tr>
-<tr valign="top">
-  <td><img src="images/demo-subagents.svg" alt="agentfluent analyze --diagnostics --verbose — Suggested Subagents table plus copy-paste-ready YAML draft"></td>
-  <td><img src="images/demo-config-check.svg" alt="agentfluent config-check — per-agent scoring and recommendations"></td>
-</tr>
-</table>
+![Execution Analytics: token usage, per-model cost, tool frequency, and Agent Invocations tables](images/demo-analyze.svg)
 
-<sub>Screenshots regenerated from real session data via <code>scripts/generate_readme_screenshots.py</code>.</sub>
+**Behavior Diagnostics** — `agentfluent analyze --project <name> --diagnostics`
+
+![Behavior Diagnostics: aggregated Recommendations table with Count column and built-in-aware action text](images/demo-diagnostics.svg)
+
+**Suggested Subagents with copy-paste-ready YAML draft** — `agentfluent analyze --project <name> --diagnostics --verbose`
+
+![Suggested Subagents: medium-confidence cluster + YAML subagent definition ready to save as ~/.claude/agents/<name>.md](images/demo-subagents.svg)
+
+**Config Assessment** — `agentfluent config-check`
+
+![Config Assessment: per-agent 0-100 scoring across description, tools, model, prompt dimensions with recommendations](images/demo-config-check.svg)
+
+<sub>Screenshots are regenerated from real session data via <code>scripts/generate_readme_screenshots.py</code>.</sub>
 
 ## Getting Started
 

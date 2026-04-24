@@ -38,7 +38,11 @@ from agentfluent.diagnostics.pipeline import run_diagnostics
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IMAGES_DIR = REPO_ROOT / "images"
-WIDTH = 120
+# Terminal width matters for how readable the SVG is when GitHub renders
+# it in a README column. 100 cols puts the resulting viewBox around 1235px;
+# when GitHub scales that to the ~720px main-column width, the 20px Rich
+# font lands around 11–12px rendered — legible without horizontal scroll.
+WIDTH = 100
 PROJECT_NAME = "agentfluent"
 
 # Cropping knobs — signals/recs are truncated to keep screenshots within a
