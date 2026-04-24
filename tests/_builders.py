@@ -171,3 +171,38 @@ def write_project_layout(
                 "\n".join(json.dumps(m) for m in messages) + "\n",
             )
     return tmp_path
+
+
+# ---------------------------------------------------------------------------
+# Model factories.
+# ---------------------------------------------------------------------------
+
+from typing import Literal  # noqa: E402
+
+from agentfluent.diagnostics.models import DelegationSuggestion  # noqa: E402
+
+
+def delegation_suggestion(
+    name: str = "test-runner",
+    description: str = "Handles delegations related to: pytest, tests, run.",
+    tools: list[str] | None = None,
+    tools_note: str = "",
+    confidence: Literal["high", "medium", "low"] = "high",
+    dedup_note: str = "",
+    top_terms: list[str] | None = None,
+    cohesion_score: float = 0.85,
+) -> DelegationSuggestion:
+    """Build a ``DelegationSuggestion`` with project-consistent defaults."""
+    return DelegationSuggestion(
+        name=name,
+        description=description,
+        model="claude-sonnet-4-6",
+        tools=tools if tools is not None else ["Read", "Grep"],
+        tools_note=tools_note,
+        prompt_template="You run pytest tests and report results.",
+        confidence=confidence,
+        cluster_size=10,
+        cohesion_score=cohesion_score,
+        top_terms=top_terms if top_terms is not None else ["pytest", "tests", "run"],
+        dedup_note=dedup_note,
+    )

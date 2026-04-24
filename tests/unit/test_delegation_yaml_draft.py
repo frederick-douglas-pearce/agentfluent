@@ -7,32 +7,7 @@ has no sklearn dependency, so it must remain testable regardless.
 
 from __future__ import annotations
 
-from agentfluent.diagnostics.models import DelegationSuggestion
-
-
-def _suggestion(
-    name: str = "test-runner",
-    description: str = "Handles delegations related to: pytest, tests, run.",
-    tools: list[str] | None = None,
-    tools_note: str = "",
-    confidence: str = "high",
-    dedup_note: str = "",
-    top_terms: list[str] | None = None,
-    cohesion_score: float = 0.85,
-) -> DelegationSuggestion:
-    return DelegationSuggestion(
-        name=name,
-        description=description,
-        model="claude-sonnet-4-6",
-        tools=tools if tools is not None else ["Read", "Grep"],
-        tools_note=tools_note,
-        prompt_template="You run pytest tests and report results.",
-        confidence=confidence,  # type: ignore[arg-type]
-        cluster_size=10,
-        cohesion_score=cohesion_score,
-        top_terms=top_terms if top_terms is not None else ["pytest", "tests", "run"],
-        dedup_note=dedup_note,
-    )
+from tests._builders import delegation_suggestion as _suggestion
 
 
 class TestYamlDraftStructure:
@@ -94,8 +69,6 @@ class TestYamlDraftEdgeCases:
         assert "# Note: suppressed" in out
 
     def test_description_with_special_chars_is_yaml_quoted_safely(self) -> None:
-        # pyyaml's safe_dump handles special-char escaping; a description
-        # containing quotes and colons must not produce invalid YAML.
         out = _suggestion(
             description='Handles "tests" with: special chars',
         ).yaml_draft

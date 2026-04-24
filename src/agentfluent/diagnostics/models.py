@@ -195,6 +195,9 @@ class DelegationSuggestion(BaseModel):
     not deduped). Exposed as a first-class field so cross-reference
     logic can look up the matched agent without parsing ``dedup_note``."""
 
+    # ``# type: ignore[prop-decorator]`` is the documented workaround for
+    # mypy not reconciling ``@computed_field`` stacked on ``@property``
+    # (upstream: pydantic/pydantic#6709).
     @computed_field  # type: ignore[prop-decorator]
     @property
     def yaml_draft(self) -> str:

@@ -15,6 +15,7 @@ from agentfluent.diagnostics.models import (
     DiagnosticsResult,
     SignalType,
 )
+from tests._builders import delegation_suggestion as _suggestion
 
 
 def _trace_signal(
@@ -169,30 +170,6 @@ class TestJsonRoundTrip:
         assert restored["signals"][0]["detail"]["stuck_count"] == 5
 
 
-def _suggestion(
-    name: str = "test-runner",
-    description: str = "Handles delegations related to: pytest, tests, run.",
-    tools: list[str] | None = None,
-    tools_note: str = "",
-    confidence: str = "high",
-    dedup_note: str = "",
-    top_terms: list[str] | None = None,
-) -> DelegationSuggestion:
-    return DelegationSuggestion(
-        name=name,
-        description=description,
-        model="claude-sonnet-4-6",
-        tools=tools if tools is not None else ["Read", "Grep"],
-        tools_note=tools_note,
-        prompt_template="You run pytest tests and report results.",
-        confidence=confidence,  # type: ignore[arg-type]
-        cluster_size=10,
-        cohesion_score=0.85,
-        top_terms=top_terms if top_terms is not None else ["pytest", "tests", "run"],
-        dedup_note=dedup_note,
-    )
-
-
 def _result_with_suggestions(
     suggestions: list[DelegationSuggestion],
 ) -> DiagnosticsResult:
@@ -222,7 +199,6 @@ class TestDelegationSuggestionsSection:
         out = _render_suggestions(
             _result_with_suggestions([_suggestion()]), verbose=True,
         )
-        # Copy-paste-ready YAML frontmatter structure.
         assert "# Suggested agent: test-runner" in out
         assert "# Confidence: high" in out
         assert "description:" in out
@@ -230,7 +206,6 @@ class TestDelegationSuggestionsSection:
         assert "tools:" in out
         assert "- Read" in out
         assert "---" in out
-        # Prompt body + top terms preserved.
         assert "You run pytest tests" in out
         assert "pytest" in out
 
