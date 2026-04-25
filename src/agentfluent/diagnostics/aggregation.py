@@ -97,26 +97,24 @@ def _representative_message(
 
     For ``count == 1`` the original message is returned verbatim so
     single-invocation findings read identically to the raw table. For
-    ``count > 1`` the message is rebuilt as ``"N <signal_type>
-    invocations[ (range)]. <action>"``. Naming the signal type in the
-    prefix distinguishes rows that share the same ``(agent, target)``
-    but fire on different signals — especially for built-in agents,
-    where multiple signal types route to the same concern template and
-    would otherwise produce near-identical aggregated rows (#181).
+    ``count > 1`` the message is rebuilt as
+    ``"<signal_type>[ (range)]: <action>"``. The Count column already
+    surfaces the occurrence count, so repeating it in the prefix would
+    duplicate state the table is already showing; the signal type is
+    what actually differentiates same-(agent, target) aggregated rows.
     """
     rep = recs[0]
     if count == 1:
         return rep.message
 
-    if rep.signal_types:
-        prefix = f"{count} {rep.signal_types[0].value} invocations"
-    else:
-        prefix = f"{count} invocations"
+    prefix = rep.signal_types[0].value if rep.signal_types else ""
     if metric_range:
-        prefix = f"{prefix} ({metric_range})"
+        prefix = f"{prefix} ({metric_range})" if prefix else f"({metric_range})"
 
+    if not prefix:
+        return rep.action or rep.message
     if rep.action:
-        return f"{prefix}. {rep.action}"
+        return f"{prefix}: {rep.action}"
     return f"{prefix}."
 
 

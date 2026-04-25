@@ -54,21 +54,23 @@ If you write your own prompts each session, use CodeFluent. If your prompts live
 
 ## Screenshots
 
-<table>
-<tr><th>Project Discovery</th><th>Execution Analytics</th></tr>
-<tr valign="top">
-  <td><img src="images/demo-list.png" alt="agentfluent list"></td>
-  <td><img src="images/demo-analyze.png" alt="agentfluent analyze"></td>
-</tr>
-</table>
+**Execution Analytics** — `agentfluent analyze --project <name>`
 
-<table>
-<tr><th>Behavior Diagnostics</th><th>Config Assessment</th></tr>
-<tr valign="top">
-  <td><img src="images/demo-diagnostics.png" alt="agentfluent analyze --diagnostics"></td>
-  <td><img src="images/demo-config-check.png" alt="agentfluent config-check"></td>
-</tr>
-</table>
+![Execution Analytics: token usage, per-model cost, tool frequency, and Agent Invocations tables](images/demo-analyze.svg)
+
+**Behavior Diagnostics** — `agentfluent analyze --project <name> --diagnostics`
+
+![Behavior Diagnostics: aggregated Recommendations table with Count column and built-in-aware action text](images/demo-diagnostics.svg)
+
+**Suggested Subagents with copy-paste-ready YAML draft** — `agentfluent analyze --project <name> --diagnostics --verbose`
+
+![Suggested Subagents: medium-confidence cluster + YAML subagent definition ready to save as ~/.claude/agents/<name>.md](images/demo-subagents.svg)
+
+**Config Assessment** — `agentfluent config-check`
+
+![Config Assessment: per-agent 0-100 scoring across description, tools, model, prompt dimensions with recommendations](images/demo-config-check.svg)
+
+<sub>Screenshots are regenerated from real session data via <code>scripts/generate_readme_screenshots.py</code>.</sub>
 
 ## Getting Started
 
@@ -123,7 +125,13 @@ agentfluent analyze --project codefluent                    # Full project analy
 agentfluent analyze --project codefluent --agent pm         # Filter to one subagent
 agentfluent analyze --project codefluent --latest 5         # Last 5 sessions only
 agentfluent analyze --project codefluent --diagnostics      # Show behavior diagnostics
+agentfluent analyze --project codefluent --diagnostics -v   # + YAML subagent drafts
 agentfluent analyze --project codefluent --format json | jq '.data.token_metrics.total_cost'
+
+# Save the top-confidence cluster as a real subagent definition:
+agentfluent analyze --project codefluent --diagnostics --format json \
+  | jq -r '.data.diagnostics.delegation_suggestions[0].yaml_draft' \
+  > ~/.claude/agents/new-agent.md
 ```
 
 Produces a token-usage table, per-model cost breakdown (labeled as API rate — subscription plans differ), tool usage concentration, and an Agent Invocations table summarizing each subagent's token, duration, and tool-use count. `--diagnostics` surfaces the full v0.3 signal surface:
@@ -132,7 +140,7 @@ Produces a token-usage table, per-model cost breakdown (labeled as API rate — 
 - **Trace-level** (from `~/.claude/projects/<session>/subagents/`): retry loops, stuck patterns, permission failures, consecutive tool-error sequences — each with per-tool-call evidence.
 - **Aggregate**: model mismatch (complexity class wrong for declared/observed model), delegation clustering (recurring `general-purpose` patterns → proposed specialized subagents), MCP server audit (configured-but-unused, observed-but-missing).
 
-Each recommendation carries a specific config surface to change (prompt, tools, model, mcp) and a pointer to the file to edit.
+Near-duplicate recommendations are aggregated per `(agent, target, signal)` shape into one row with an occurrence `Count` and metric range (e.g. *"4 invocations (4.9x–8.0x above 5,064 mean). Consider adding more specific instructions..."*). Each recommendation carries a specific config surface to change (prompt, tools, model, mcp) and a pointer to the file to edit. Recommendations for built-in agents (Explore, general-purpose, Plan, etc.) use concern-specific action text — wrapper subagent for scope issues, retry bounds on the delegating agent for recovery issues, reroute for tools/model — since built-in agents have no user-editable prompt or tool config.
 
 Cost numbers reflect current per-token pricing; historical sessions are priced at today's rates until [#80](https://github.com/frederick-douglas-pearce/agentfluent/issues/80) (time-series pricing) lands.
 
@@ -163,7 +171,7 @@ AgentFluent's "configuration" is CLI flags — no config file, no environment va
 | `--min-similarity` | 0.7 | Delegation dedup: cosine-similarity threshold against existing agents |
 | `--claude-config-dir` | `~/.claude/` | Override the Claude config root (also honors `$CLAUDE_CONFIG_DIR`) |
 | `--format` | `table` | Output format: `table` (Rich) or `json` (envelope) |
-| `--verbose` | off | Extra detail (per-session breakdown, per-invocation detail) |
+| `--verbose` | off | Extra detail: per-session breakdown, per-invocation detail, raw (un-aggregated) recommendations, and YAML subagent drafts for suggested clusters |
 | `--quiet` | off | Suppress non-essential output (useful in CI) |
 
 ## Output formats
@@ -233,7 +241,7 @@ Step by step:
 6. **Score agent configurations** — `config/scanner.py` parses YAML frontmatter from each `.md` in `.claude/agents/` and `~/.claude/agents/`; `config/scoring.py` scores description, tools, model, and prompt on a 4-dimension rubric.
 7. **Discover MCP servers** — `config/mcp_discovery.py` reads `mcpServers` from `~/.claude.json` (user + project-local scopes) and `.mcp.json` (project-shared), honoring the `enabledMcpjsonServers` / `disabledMcpjsonServers` gating arrays. Used by the audit phase to compare against observed `mcp__*` tool usage.
 8. **Diagnose behavior** — `diagnostics/` extracts metadata signals (`signals.py`), trace-level signals (`trace_signals.py` — retry loops, stuck patterns, permission failures, error sequences), model-routing mismatches (`model_routing.py`), and MCP audit signals (`mcp_assessment.py`). `correlator.py` routes each signal to a config target (prompt/tools/model/mcp) and emits an actionable recommendation.
-9. **Propose new subagents** — `diagnostics/delegation.py` clusters recurring `general-purpose` invocations via TF-IDF + KMeans and drafts candidate subagent definitions with name, model, tool list, and prompt scaffold. Deduped against existing agents by cosine similarity.
+9. **Propose new subagents** — `diagnostics/delegation.py` clusters recurring `general-purpose` invocations via TF-IDF + KMeans and drafts candidate subagent definitions with name, model, tool list, and prompt scaffold. Under `--verbose`, each draft is emitted as a copy-paste-ready YAML frontmatter block. Deduped against existing agents by cosine similarity.
 10. **Render** — `cli/formatters/table.py` emits Rich tables; `cli/formatters/json.py` emits the stable JSON envelope. Format is selected by `--format`.
 
 Everything runs locally. No outbound network calls, ever. No API key needed.
@@ -244,8 +252,8 @@ Everything runs locally. No outbound network calls, ever. No API key needed.
 - **Execution Analytics** — Token usage, API-rate cost, cache efficiency, per-model breakdown, tool-call concentration, and per-agent invocation metrics (tokens, duration, tool-use count). Cache creation and cache read tokens are tracked separately so you can see where your prompt caching is working.
 - **Agent Config Assessment** — 4-dimension rubric (description, tools, model, prompt) applied to every `.md` file in `~/.claude/agents/` and `./.claude/agents/`. Produces a 0–100 score plus ranked, specific recommendations ("Prompt body doesn't mention error handling"). Catches agents that are technically valid but miss well-known best practices.
 - **Subagent Trace Parsing** — Parses the internal tool-call sequences Claude Code emits under `~/.claude/projects/<session>/subagents/agent-<agentId>.jsonl`, links them back to the delegating invocation, and detects retry sequences. Gives diagnostics per-call evidence (which tool, which attempt, which error) instead of just an invocation-level summary.
-- **Behavior Diagnostics** — `--diagnostics` emits signals across three layers. *Metadata*: tool-error keywords, token-per-tool-use outliers, duration outliers. *Trace-level*: retry loops, stuck patterns (same call repeated with no progress), permission failures, consecutive tool-error sequences. *Aggregate*: model mismatch (declared/observed model wrong for the workload's complexity), MCP server audit (configured-but-unused, observed-but-missing). Each signal routes to a `target` config surface — prompt, tools, model, or mcp — and the recommendation names the file to edit and the specific change to make.
-- **Delegation Clustering** — TF-IDF + KMeans on recurring `general-purpose` invocations surfaces patterns that would benefit from their own specialized subagent. Proposes a complete draft: name, description, recommended model (with cost reasoning), tool list derived from the cluster's trace data, and a prompt-body scaffold. Suppresses drafts that overlap existing agents and annotates the overlap. Requires the optional `agentfluent[clustering]` extra.
+- **Behavior Diagnostics** — `--diagnostics` emits signals across three layers. *Metadata*: tool-error keywords, token-per-tool-use outliers, duration outliers. *Trace-level*: retry loops, stuck patterns (same call repeated with no progress), permission failures, consecutive tool-error sequences. *Aggregate*: model mismatch (declared/observed model wrong for the workload's complexity), MCP server audit (configured-but-unused, observed-but-missing). Near-duplicate recommendations collapse into one row per `(agent, target, signal)` shape with an occurrence `Count` and metric range, sorted severity-desc then count-desc so the highest-impact findings surface first. Recommendations for built-in agents (Explore, general-purpose, Plan, code-reviewer, etc.) use concern-specific action text since built-ins have no user-editable config. Each signal routes to a `target` config surface — prompt, tools, model, or mcp — and the recommendation names the file to edit and the specific change to make.
+- **Delegation Clustering** — TF-IDF + KMeans on recurring `general-purpose` invocations surfaces patterns that would benefit from their own specialized subagent. Proposes a complete draft: name, description, recommended model (with cost reasoning), tool list derived from the cluster's trace data, and a prompt-body scaffold. Under `--verbose`, each cluster emits a copy-paste-ready **YAML subagent definition block** (frontmatter + prompt body) that can be saved directly as `~/.claude/agents/<name>.md`. Low-confidence clusters are kept but prefixed with a `REVIEW BEFORE USE` comment so loose groupings don't land in production blindly. Confidence tiers (high/medium/low) are calibrated against real-world cohesion distributions from multi-contributor datasets. Suppresses drafts that overlap existing agents and annotates the overlap. Requires the optional `agentfluent[clustering]` extra.
 - **Model-Routing Diagnostics** — Per-agent-type classification of observed complexity (tool-call counts, token footprint, error rate, write-tool presence) compared against the agent's declared model tier. Flags overspec (complex model on simple workload — cost savings estimate included) and underspec (simple model struggling). Consumes trace-based model inference when frontmatter is absent.
 - **MCP Server Assessment** — Reads configured MCP servers from `~/.claude.json` (user + project-local) and `.mcp.json` (project-shared), honoring per-user enable/disable gating. Compares against observed `mcp__<server>__*` tool usage from both parent sessions and subagent traces. Emits `MCP_UNUSED_SERVER` (INFO, configured but zero calls) and `MCP_MISSING_SERVER` (WARNING, failing calls to an unconfigured server) signals with actionable recommendations.
 - **JSON Output Envelope** — Stable `{version, command, data}` schema. No ANSI escapes. Intended as a programmatic contract for CI integration, PR gates, and regression tracking.
@@ -262,7 +270,7 @@ AgentFluent is designed so data stays on your machine. The attack surface is sma
 | Input validation | Pydantic models with strict type constraints | Malformed JSONL crashing the parser |
 | Safe YAML loading | `yaml.safe_load` only | Arbitrary code execution via frontmatter |
 | CI security review | Claude-powered review on every PR | New vulnerabilities |
-| Automated testing | 600+ unit tests incl. security-focused cases | Regressions |
+| Automated testing | 730+ unit tests incl. security-focused cases | Regressions |
 
 ### Secrets handling
 
@@ -283,7 +291,7 @@ See [`docs/SECURITY.md`](docs/SECURITY.md) for the full policy: leak vector, def
 - **[Typer](https://typer.tiangolo.com) + [Rich](https://rich.readthedocs.io)** — CLI framework and terminal formatting
 - **[Pydantic v2](https://docs.pydantic.dev)** — data models across module boundaries
 - **[PyYAML](https://pyyaml.org)** — agent definition frontmatter parsing (`safe_load` only)
-- **[pytest](https://pytest.org) + pytest-cov** — 600+ tests
+- **[pytest](https://pytest.org) + pytest-cov** — 730+ tests
 - **[mypy](https://mypy.readthedocs.io) strict mode** — full type coverage
 - **[ruff](https://docs.astral.sh/ruff/)** — linting and formatting
 - **[uv](https://docs.astral.sh/uv/)** — package and dependency management
@@ -316,7 +324,7 @@ uv run agentfluent --help
 ### Testing
 
 ```bash
-uv run pytest -m "not integration"            # 600+ unit tests (CI default)
+uv run pytest -m "not integration"            # 730+ unit tests (CI default)
 uv run pytest                                 # Full suite incl. integration tests against your real ~/.claude/projects/
 uv run pytest --cov=agentfluent               # With coverage
 ```
@@ -355,10 +363,19 @@ Five GitHub Actions workflows run automatically:
 - Delegation clustering ([#92](https://github.com/frederick-douglas-pearce/agentfluent/issues/92)) — TF-IDF + KMeans over recurring `general-purpose` invocations; proposes complete draft subagent definitions deduped against existing agents.
 - Model-routing diagnostics ([#95](https://github.com/frederick-douglas-pearce/agentfluent/issues/95)) — per-agent-type complexity classification vs. declared model; overspec/underspec flags with cost-savings estimates. Trace-based model inference when frontmatter is absent.
 - MCP server assessment ([#100](https://github.com/frederick-douglas-pearce/agentfluent/issues/100)) — configured-vs-observed audit with `MCP_UNUSED_SERVER` and `MCP_MISSING_SERVER` signals.
+- Recommendation aggregation ([#165](https://github.com/frederick-douglas-pearce/agentfluent/issues/165)) — near-duplicate rows collapse per `(agent, target, signal)` shape with occurrence count and metric range; raw list preserved for `--verbose` and JSON drill-down.
+- Built-in vs custom agent differentiation ([#166](https://github.com/frederick-douglas-pearce/agentfluent/issues/166)) — concern-specific action text (scope / recovery / tools / model) for built-in agents that have no user-editable config; nine of ten correlation rules updated.
+- YAML subagent draft in `--verbose` ([#168](https://github.com/frederick-douglas-pearce/agentfluent/issues/168)) — copy-paste-ready `~/.claude/agents/<name>.md` block for each cluster; exposed as `yaml_draft` field in `--format json` for jq-pipe workflows.
+- Cluster confidence re-calibration ([#167](https://github.com/frederick-douglas-pearce/agentfluent/issues/167)) — thresholds validated against two real datasets; MEDIUM now surfaces actionable candidates instead of everything landing in LOW.
+- Aggregated row signal-type clarity ([#181](https://github.com/frederick-douglas-pearce/agentfluent/issues/181)) — same-(agent, target) rows that fire on different signals now name the trigger in the prefix (e.g., `tool_error_sequence:` vs `retry_loop:`) instead of looking interchangeable.
+- Unknown-agent attribution fix ([#169](https://github.com/frederick-douglas-pearce/agentfluent/issues/169)) — invocations missing `subagent_type` (older skills, certain Claude Code versions) now correctly default to `general-purpose` instead of falling out of clustering as "unknown".
 - `--claude-config-dir` flag and `$CLAUDE_CONFIG_DIR` env var for non-default session paths ([#90](https://github.com/frederick-douglas-pearce/agentfluent/issues/90)).
 - Empirical threshold calibration via a committed Jupyter notebook ([#140](https://github.com/frederick-douglas-pearce/agentfluent/issues/140)).
 
 **v0.4+:**
+- Parent-thread offload analysis ([#189](https://github.com/frederick-douglas-pearce/agentfluent/issues/189)) — detect repeating tool-use patterns in the parent Claude Code thread and recommend subagent / skill candidates that move that work onto cheaper-tier models. The dominant cost lever for users who deploy agents at scale.
+- In-product glossary ([#190](https://github.com/frederick-douglas-pearce/agentfluent/issues/190), [#191](https://github.com/frederick-douglas-pearce/agentfluent/issues/191)) — definitions for token types, tool names, agent types, signal types, severity / confidence levels surfaced via static markdown (Phase 1) and `agentfluent explain <term>` CLI subcommand (Phase 2).
+- Outlier-detection distribution recalibration ([#186](https://github.com/frederick-douglas-pearce/agentfluent/issues/186)) — replace ratio-to-mean outlier signals with distribution-aware detection (z-score / IQR) backed by per-agent distribution analysis.
 - Time-series pricing data structure ([#80](https://github.com/frederick-douglas-pearce/agentfluent/issues/80)) + session-timestamp-aware cost calculation ([#81](https://github.com/frederick-douglas-pearce/agentfluent/issues/81)) + automated pricing updates ([#82](https://github.com/frederick-douglas-pearce/agentfluent/issues/82)).
 - Agent SDK main-session MCP + tool extraction ([#112](https://github.com/frederick-douglas-pearce/agentfluent/issues/112)).
 - Per-invocation token input/output split for more accurate cost estimates ([#143](https://github.com/frederick-douglas-pearce/agentfluent/issues/143)).
