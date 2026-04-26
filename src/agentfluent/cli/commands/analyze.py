@@ -114,7 +114,12 @@ def analyze(
         "table",
         "--format",
         "-f",
-        help="Output format: table or json.",
+        help="Output format: table or json. Shortcut: --json.",
+    ),
+    json_flag: bool = typer.Option(
+        False,
+        "--json",
+        help="Shortcut for --format json. Overrides --format when set.",
     ),
     min_cluster_size: Optional[int] = typer.Option(  # noqa: UP007, UP045
         None,
@@ -140,6 +145,9 @@ def analyze(
     """Analyze agent sessions for token usage, cost, and behavior diagnostics."""
     if verbose and quiet:
         raise typer.BadParameter("--verbose and --quiet are mutually exclusive")
+
+    if json_flag:
+        format = "json"
 
     # Fail fast if the user explicitly asked for clustering-tuning behavior
     # but the optional extra is not installed. When both flags are left at

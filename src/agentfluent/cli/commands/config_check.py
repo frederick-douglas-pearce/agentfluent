@@ -78,7 +78,12 @@ def config_check(
         "table",
         "--format",
         "-f",
-        help="Output format: table or json.",
+        help="Output format: table or json. Shortcut: --json.",
+    ),
+    json_flag: bool = typer.Option(
+        False,
+        "--json",
+        help="Shortcut for --format json. Overrides --format when set.",
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output."),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Show summary only."),
@@ -86,6 +91,9 @@ def config_check(
     """Scan agent definitions and score them against best practices."""
     if verbose and quiet:
         raise typer.BadParameter("--verbose and --quiet are mutually exclusive")
+
+    if json_flag:
+        format = "json"
 
     if scope not in ("user", "project", "all"):
         err_console.print(f"[red]Invalid scope:[/red] {scope}")

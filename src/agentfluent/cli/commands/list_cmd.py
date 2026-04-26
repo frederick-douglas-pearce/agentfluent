@@ -154,7 +154,12 @@ def list_cmd(
         "table",
         "--format",
         "-f",
-        help="Output format: 'table' or 'json'.",
+        help="Output format: 'table' or 'json'. Shortcut: --json.",
+    ),
+    json_flag: bool = typer.Option(
+        False,
+        "--json",
+        help="Shortcut for --format json. Overrides --format when set.",
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output."),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Show summary only."),
@@ -162,6 +167,8 @@ def list_cmd(
     """List available projects, or sessions within a project."""
     if verbose and quiet:
         raise typer.BadParameter("--verbose and --quiet are mutually exclusive")
+    if json_flag:
+        format = "json"
     config_dir = ctx.obj.claude_config_dir if ctx.obj else None
     if project:
         if format == "json":
