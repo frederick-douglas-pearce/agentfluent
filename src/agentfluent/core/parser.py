@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,25 @@ from agentfluent.core.session import (
 
 logger = logging.getLogger(__name__)
 
+_MAX_WARN_LINE_CHARS = 100
+
+
+def _emit_parse_warning(path: Path, line_num: int, reason: str, line: str) -> None:
+    """Print a parse-time warning to stderr and mirror to the logger.
+
+    Stderr emission uses a ``WARNING:`` prefix and truncates the offending
+    line to ``_MAX_WARN_LINE_CHARS`` so the user can decide whether to
+    investigate without flooding the terminal. Flushed before the caller
+    writes to stdout so the warning never lands inside a Rich table.
+    """
+    snippet = line.strip()
+    if len(snippet) > _MAX_WARN_LINE_CHARS:
+        snippet = snippet[:_MAX_WARN_LINE_CHARS] + "..."
+    snippet = snippet.replace("\x00", "\\x00")
+    message = f"WARNING: {reason} at {path.name}:{line_num}: {snippet}"
+    print(message, file=sys.stderr, flush=True)
+    logger.warning("%s at %s:%d", reason, path.name, line_num)
+
 
 def iter_raw_messages(path: Path) -> Iterator[tuple[int, dict[str, Any]]]:
     """Iterate a JSONL file, yielding (line_num, data) for analytical messages.
@@ -38,9 +58,11 @@ def iter_raw_messages(path: Path) -> Iterator[tuple[int, dict[str, Any]]]:
     originating line even though some lines were skipped. Callers that
     don't need it can unpack as ``for _, data in ...``.
 
-    Silently skips: missing files, empty files, empty lines, malformed
-    JSON (warn-logged), non-object JSON (warn-logged), and any message
-    whose ``type`` is in ``SKIP_TYPES`` or is missing.
+    Silently skips: missing files, empty files, empty lines, and any
+    message whose ``type`` is in ``SKIP_TYPES`` or is missing. Malformed
+    JSON and non-object JSON lines emit a ``WARNING:``-prefixed line to
+    stderr (with the offending content truncated to
+    ``_MAX_WARN_LINE_CHARS``) and continue.
     """
     if not path.exists():
         logger.warning("Session file not found: %s", path)
@@ -58,11 +80,11 @@ def iter_raw_messages(path: Path) -> Iterator[tuple[int, dict[str, Any]]]:
             try:
                 data = json.loads(line)
             except json.JSONDecodeError:
-                logger.warning("Malformed JSON at %s:%d", path.name, line_num)
+                _emit_parse_warning(path, line_num, "Malformed JSON", line)
                 continue
 
             if not isinstance(data, dict):
-                logger.warning("Non-object JSON at %s:%d", path.name, line_num)
+                _emit_parse_warning(path, line_num, "Non-object JSON", line)
                 continue
 
             msg_type = data.get("type")

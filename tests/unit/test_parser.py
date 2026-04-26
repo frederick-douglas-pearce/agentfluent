@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from agentfluent.core.parser import iter_raw_messages, parse_session
 from agentfluent.core.session import SessionMessage
 
@@ -155,6 +157,75 @@ class TestMalformedInput:
     def test_nonexistent_file(self, tmp_path: Path) -> None:
         messages = parse_session(tmp_path / "does-not-exist.jsonl")
         assert messages == []
+
+
+class TestParseWarningsToStderr:
+    """Issue #206: parse warnings must reach stderr with a `WARNING:` prefix
+    and include the truncated offending line so the user can decide whether
+    to investigate. Stdout must stay clean for piping/redirection.
+    """
+
+    def test_malformed_json_writes_to_stderr_with_prefix(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        path = tmp_path / "session-uuid.jsonl"
+        path.write_text(
+            '{"type": "user"}\n'
+            'this line is not valid json at all\n'
+            '{"type": "assistant"}\n',
+        )
+
+        parse_session(path)
+        captured = capsys.readouterr()
+
+        assert captured.out == ""
+        assert captured.err.startswith("WARNING:")
+        assert "Malformed JSON" in captured.err
+        assert "session-uuid.jsonl:2" in captured.err
+        assert "this line is not valid json at all" in captured.err
+
+    def test_non_object_json_writes_to_stderr_with_prefix(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        path = tmp_path / "arr.jsonl"
+        path.write_text('{"type": "user"}\n["not", "an", "object"]\n')
+
+        parse_session(path)
+        captured = capsys.readouterr()
+
+        assert captured.out == ""
+        assert "WARNING: Non-object JSON" in captured.err
+        assert "arr.jsonl:2" in captured.err
+        assert '["not", "an", "object"]' in captured.err
+
+    def test_long_line_truncated_to_100_chars(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        long_garbage = "x" * 500
+        path = tmp_path / "long.jsonl"
+        path.write_text(long_garbage + "\n")
+
+        parse_session(path)
+        captured = capsys.readouterr()
+
+        assert "..." in captured.err
+        # Header text plus 100 chars of payload plus the ellipsis; the raw
+        # 500-char line must not appear in full.
+        assert long_garbage not in captured.err
+        assert ("x" * 100) in captured.err
+        assert ("x" * 101) not in captured.err
+
+    def test_no_warning_for_clean_file(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        path = tmp_path / "clean.jsonl"
+        path.write_text('{"type": "user"}\n{"type": "assistant"}\n')
+
+        parse_session(path)
+        captured = capsys.readouterr()
+
+        assert captured.out == ""
+        assert captured.err == ""
 
 
 class TestToolUseResultOnUserMessage:
