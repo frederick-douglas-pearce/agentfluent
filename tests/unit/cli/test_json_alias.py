@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import typer
 from typer.testing import CliRunner
+
+# Rich/Typer style each character of an option with separate ANSI escapes
+# when FORCE_COLOR is set (CI does this), so a literal "--json" substring
+# search fails on raw stdout. Strip color codes before asserting.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
 
 
 class TestJsonAliasMatchesFormatJson:
@@ -85,18 +95,18 @@ class TestJsonAliasInHelp:
     ) -> None:
         result = runner.invoke(cli_app, ["list", "--help"])
         assert result.exit_code == 0
-        assert "--json" in result.stdout
+        assert "--json" in _strip_ansi(result.stdout)
 
     def test_analyze_help(
         self, runner: CliRunner, cli_app: typer.Typer,
     ) -> None:
         result = runner.invoke(cli_app, ["analyze", "--help"])
         assert result.exit_code == 0
-        assert "--json" in result.stdout
+        assert "--json" in _strip_ansi(result.stdout)
 
     def test_config_check_help(
         self, runner: CliRunner, cli_app: typer.Typer,
     ) -> None:
         result = runner.invoke(cli_app, ["config-check", "--help"])
         assert result.exit_code == 0
-        assert "--json" in result.stdout
+        assert "--json" in _strip_ansi(result.stdout)
