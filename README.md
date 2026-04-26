@@ -95,7 +95,7 @@ uvx agentfluent list
 
 #### Optional extras
 
-- **`agentfluent[clustering]`** — installs `scikit-learn` and enables delegation clustering, which proposes new specialized subagents from recurring `general-purpose` invocations. Without this extra, `agentfluent analyze --diagnostics` still runs all other diagnostics, but `delegation_suggestions` is always empty in JSON output and the "Suggested Subagents" section is omitted from terminal output. Install with `uv tool install 'agentfluent[clustering]'` (or `pip install 'agentfluent[clustering]'`).
+- **`agentfluent[clustering]`** — installs `scikit-learn` and enables delegation clustering, which proposes new specialized subagents from recurring `general-purpose` invocations. Without this extra, `agentfluent analyze --diagnostics` still runs all other diagnostics, but `delegation_suggestions` is always empty in JSON output and the "Suggested Subagents" section is omitted from terminal output. Install with `uv tool install 'agentfluent[clustering]'` or `pip install 'agentfluent[clustering]'`.
 
 ### First run
 
