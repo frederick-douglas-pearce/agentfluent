@@ -174,7 +174,7 @@ AgentFluent's "configuration" is CLI flags — no config file, no environment va
 | `--min-cluster-size` | 5 | Delegation clustering: minimum invocations per cluster (requires `agentfluent[clustering]`) |
 | `--min-similarity` | 0.7 | Delegation dedup: cosine-similarity threshold against existing agents |
 | `--claude-config-dir` | `~/.claude/` | Override the Claude config root (also honors `$CLAUDE_CONFIG_DIR`) |
-| `--format` | `table` | Output format: `table` (Rich) or `json` (envelope) |
+| `--format` | `table` | Output format: `table` (Rich) or `json` (envelope). Shortcut: `--json` (equivalent to `--format json`) |
 | `--verbose` | off | Extra detail: per-session breakdown, per-invocation detail, raw (un-aggregated) recommendations, and YAML subagent drafts for suggested clusters |
 | `--quiet` | off | Suppress non-essential output (useful in CI) |
 
@@ -182,7 +182,7 @@ AgentFluent's "configuration" is CLI flags — no config file, no environment va
 
 **Default (table):** Rich-rendered tables in the terminal, designed to be readable at a glance. Colors auto-adapt to terminal theme.
 
-**JSON envelope (`--format json`):** Stable schema `{version, command, data}` intended as a contract — pipe to `jq`, integrate with CI, build regression gates on top. Example:
+**JSON envelope (`--format json`, or the shortcut `--json`):** Stable schema `{version, command, data}` intended as a contract — pipe to `jq`, integrate with CI, build regression gates on top. Example:
 
 ```json
 {
