@@ -58,11 +58,11 @@ If you write your own prompts each session, use CodeFluent. If your prompts live
 
 ![Execution Analytics: token usage, per-model cost, tool frequency, and Agent Invocations tables](images/demo-analyze.svg)
 
-**Behavior Diagnostics** — `agentfluent analyze --project <name> --diagnostics`
+**Behavior Diagnostics** — `agentfluent analyze --project <name>` (diagnostics on by default)
 
 ![Behavior Diagnostics: aggregated Recommendations table with Count column and built-in-aware action text](images/demo-diagnostics.svg)
 
-**Suggested Subagents with copy-paste-ready YAML draft** — `agentfluent analyze --project <name> --diagnostics --verbose`
+**Suggested Subagents with copy-paste-ready YAML draft** — `agentfluent analyze --project <name> --verbose`
 
 ![Suggested Subagents: medium-confidence cluster + YAML subagent definition ready to save as ~/.claude/agents/<name>.md](images/demo-subagents.svg)
 
@@ -125,20 +125,20 @@ Lists every Claude Code / Agent SDK project found under `~/.claude/projects/`, w
 ### `agentfluent analyze` — token, cost, and behavior metrics
 
 ```bash
-agentfluent analyze --project codefluent                    # Full project analysis
-agentfluent analyze --project codefluent --agent pm         # Filter to one subagent
-agentfluent analyze --project codefluent --latest 5         # Last 5 sessions only
-agentfluent analyze --project codefluent --diagnostics      # Show behavior diagnostics
-agentfluent analyze --project codefluent --diagnostics -v   # + YAML subagent drafts
+agentfluent analyze --project codefluent                       # Full analysis with behavior diagnostics
+agentfluent analyze --project codefluent --no-diagnostics      # Token + cost only (skip diagnostics pipeline)
+agentfluent analyze --project codefluent --agent pm            # Filter to one subagent
+agentfluent analyze --project codefluent --latest 5            # Last 5 sessions only
+agentfluent analyze --project codefluent -v                    # + YAML subagent drafts
 agentfluent analyze --project codefluent --format json | jq '.data.token_metrics.total_cost'
 
 # Save the top-confidence cluster as a real subagent definition:
-agentfluent analyze --project codefluent --diagnostics --format json \
+agentfluent analyze --project codefluent --format json \
   | jq -r '.data.diagnostics.delegation_suggestions[0].yaml_draft' \
   > ~/.claude/agents/new-agent.md
 ```
 
-Produces a token-usage table, per-model cost breakdown (labeled as API rate — subscription plans differ), tool usage concentration, and an Agent Invocations table summarizing each subagent's token, duration, and tool-use count. `--diagnostics` surfaces the full v0.3 signal surface:
+Produces a token-usage table, per-model cost breakdown (labeled as API rate — subscription plans differ), tool usage concentration, and an Agent Invocations table summarizing each subagent's token, duration, and tool-use count. Behavior diagnostics run by default and surface the full v0.3 signal surface (pass `--no-diagnostics` to skip):
 
 - **Metadata-level** (from invocation summaries): tool-error keywords, token-per-tool-use outliers, duration outliers.
 - **Trace-level** (from `~/.claude/projects/<session>/subagents/`): retry loops, stuck patterns, permission failures, consecutive tool-error sequences — each with per-tool-call evidence.
@@ -170,7 +170,7 @@ AgentFluent's "configuration" is CLI flags — no config file, no environment va
 | `--agent` | (none) | Filter `analyze` or `config-check` to one subagent type |
 | `--latest N` | (all sessions) | `analyze` only the N most recent sessions |
 | `--session` | (all) | `analyze` a specific session filename within the project |
-| `--diagnostics` | off | `analyze`: show behavior-correlation signals |
+| `--diagnostics / --no-diagnostics` | on | `analyze`: behavior-correlation signals (default on; `--no-diagnostics` skips the pipeline) |
 | `--min-cluster-size` | 5 | Delegation clustering: minimum invocations per cluster (requires `agentfluent[clustering]`) |
 | `--min-similarity` | 0.7 | Delegation dedup: cosine-similarity threshold against existing agents |
 | `--claude-config-dir` | `~/.claude/` | Override the Claude config root (also honors `$CLAUDE_CONFIG_DIR`) |

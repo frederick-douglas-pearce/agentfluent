@@ -105,10 +105,13 @@ def analyze(
         help="Analyze only the N most recent sessions.",
     ),
     diagnostics: bool = typer.Option(
-        False,
-        "--diagnostics",
-        "-d",
-        help="Show detailed behavior diagnostics.",
+        True,
+        "--diagnostics/--no-diagnostics",
+        "-d/-D",
+        help=(
+            "Show detailed behavior diagnostics (default: on). "
+            "Pass --no-diagnostics to skip the diagnostics pipeline."
+        ),
     ),
     format: str = typer.Option(
         "table",
@@ -192,7 +195,7 @@ def analyze(
     all_invocations = [inv for s in result.sessions for inv in s.invocations]
     all_mcp_calls = [c for s in result.sessions for c in s.mcp_tool_calls]
 
-    if all_invocations:
+    if all_invocations and diagnostics:
         # `project_info.path` is the ~/.claude/projects/<slug>/ dir, not
         # the original project source path. MCP discovery needs the
         # real path (for .mcp.json and ~/.claude.json:projects[<abs>]
@@ -215,7 +218,7 @@ def analyze(
             project_dir=project_disk_path,
         )
     elif result.agent_metrics.total_invocations == 0 and diagnostics:
-        console.print(
+        err_console.print(
             "[dim]No agent invocations found -- "
             "diagnostics require agent activity.[/dim]"
         )
