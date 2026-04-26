@@ -9,10 +9,20 @@ the diagnostics pipeline would be overhead.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import typer
 from typer.testing import CliRunner
+
+# Rich/Typer style each char of an option with separate ANSI escapes when
+# FORCE_COLOR is set (CI does this), so a literal substring search fails
+# on raw stdout. Strip color codes before asserting.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
 
 
 class TestDiagnosticsDefaultOn:
@@ -111,6 +121,6 @@ class TestHelpReflectsDefault:
     ) -> None:
         result = runner.invoke(cli_app, ["analyze", "--help"])
         assert result.exit_code == 0
-        # Strip ANSI / wrapping for substring matching
-        assert "--no-diagnostics" in result.stdout
-        assert "default: on" in result.stdout.lower()
+        plain = _strip_ansi(result.stdout)
+        assert "--no-diagnostics" in plain
+        assert "default: on" in plain.lower()
