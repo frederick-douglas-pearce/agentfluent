@@ -237,15 +237,15 @@ def _mcp_signal(
 ) -> DiagnosticSignal:
     """Build an MCP audit signal with the boilerplate prefilled.
 
-    All MCP signals share ``agent_type=""`` (MCP servers aren't scoped
-    to a single agent_type — they're cross-agent concerns). This
-    helper pins that default so callers only specify the varying
-    fields.
+    All MCP signals share ``agent_type=None`` (MCP servers aren't scoped
+    to a single agent_type — they're cross-agent concerns). Renders as
+    ``(global)`` in terminal output and serializes to ``null`` in JSON,
+    making the cross-cutting nature explicit to consumers.
     """
     return DiagnosticSignal(
         signal_type=signal_type,
         severity=severity,
-        agent_type="",
+        agent_type=None,
         message=message,
         detail=detail,
     )

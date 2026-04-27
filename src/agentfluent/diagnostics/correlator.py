@@ -49,7 +49,7 @@ def _check_builtin(
     """Return a built-in recommendation when the signal's agent is a
     built-in, else ``None`` so the caller falls through to the custom
     path."""
-    if not is_builtin_agent(signal.agent_type):
+    if signal.agent_type is None or not is_builtin_agent(signal.agent_type):
         return None
     return builtin_recommendation(
         signal,
@@ -626,7 +626,11 @@ def correlate(
     pairs: list[tuple[DiagnosticSignal, DiagnosticRecommendation]] = []
 
     for signal in signals:
-        config = configs.get(signal.agent_type.lower()) if configs else None
+        config = (
+            configs.get(signal.agent_type.lower())
+            if configs and signal.agent_type
+            else None
+        )
 
         for rule in RULES:
             if rule.matches(signal, config):

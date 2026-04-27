@@ -40,12 +40,14 @@ _SCALAR_METRIC_SIGNALS: frozenset[SignalType] = frozenset(
 
 def _aggregation_key(
     rec: DiagnosticRecommendation,
-) -> tuple[str, str, frozenset[SignalType]]:
+) -> tuple[str | None, str, frozenset[SignalType]]:
     """Shape key used to group per-invocation recommendations.
 
     ``target`` is included because ``TokenOutlierRule`` /
     ``ErrorSequenceRule`` fork to ``tools`` vs ``prompt`` based on config
-    — those should remain distinct aggregated rows.
+    — those should remain distinct aggregated rows. ``agent_type`` is
+    ``None`` for cross-cutting recommendations (MCP audit) which form
+    their own group key.
     """
     return (rec.agent_type, rec.target, frozenset(rec.signal_types))
 
@@ -127,7 +129,7 @@ def aggregate_recommendations(
     impact findings surface first in the default table.
     """
     groups: dict[
-        tuple[str, str, frozenset[SignalType]],
+        tuple[str | None, str, frozenset[SignalType]],
         list[tuple[DiagnosticSignal, DiagnosticRecommendation]],
     ] = defaultdict(list)
     for signal, rec in pairs:
