@@ -113,10 +113,14 @@ def _enrich_dedup_with_mismatches(
     """
     if not suggestions:
         return
+    # MODEL_MISMATCH is always per-agent, so agent_type is non-None in
+    # practice. The explicit guard satisfies mypy after #207's schema
+    # change and degrades gracefully if a cross-cutting MODEL_MISMATCH
+    # ever lands.
     mismatches_by_agent: dict[str, DiagnosticSignal] = {
         s.agent_type.lower(): s
         for s in signals
-        if s.signal_type == SignalType.MODEL_MISMATCH
+        if s.signal_type == SignalType.MODEL_MISMATCH and s.agent_type
     }
     if not mismatches_by_agent:
         return

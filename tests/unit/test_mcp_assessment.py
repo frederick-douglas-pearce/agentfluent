@@ -332,7 +332,7 @@ class TestAuditMcpServers:
         s = signals[0]
         assert s.signal_type == SignalType.MCP_UNUSED_SERVER
         assert s.severity == Severity.INFO
-        assert s.agent_type == ""
+        assert s.agent_type is None
         assert s.detail["server_name"] == "slack"
         assert s.detail["sessions_analyzed"] == 10
 
@@ -416,3 +416,40 @@ class TestAuditMcpServers:
             sessions_analyzed=42,
         )
         assert signals[0].detail["sessions_analyzed"] == 42
+
+
+class TestCrossCuttingAgentTypeIsNone:
+    """MCP audit signals are not scoped to a specific agent (#207).
+
+    Cross-cutting findings carry ``agent_type=None`` rather than the
+    ``""`` empty-string sentinel that read as a stray tab in tooling.
+    """
+
+    def test_unused_server_signal_has_none_agent_type(self) -> None:
+        signals = audit_mcp_servers(
+            usage_by_server={},
+            configured=[_server("slack")],
+            sessions_analyzed=5,
+        )
+        assert signals[0].agent_type is None
+
+    def test_missing_server_signal_has_none_agent_type(self) -> None:
+        signals = audit_mcp_servers(
+            usage_by_server={"missing": _usage("missing", total=5, errors=5)},
+            configured=[],
+            sessions_analyzed=5,
+        )
+        assert signals
+        assert all(s.agent_type is None for s in signals)
+
+    def test_signal_serializes_agent_type_as_null(self) -> None:
+        # JSON consumers should see null, not "" — the reviewer's
+        # complaint was the empty string read as a stray tab when
+        # grouping output by agent.
+        signals = audit_mcp_servers(
+            usage_by_server={},
+            configured=[_server("slack")],
+            sessions_analyzed=5,
+        )
+        dumped = signals[0].model_dump(mode="json")
+        assert dumped["agent_type"] is None

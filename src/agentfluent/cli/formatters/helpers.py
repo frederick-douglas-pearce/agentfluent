@@ -16,6 +16,11 @@ SEVERITY_COLORS: dict[Severity, str] = {
     Severity.INFO: "cyan",
 }
 
+GLOBAL_AGENT_LABEL = "(global)"
+"""Display string for cross-cutting findings whose ``agent_type`` is
+``None`` (e.g., MCP audit). JSON output keeps ``null``; tables substitute
+this label."""
+
 CONFIDENCE_COLORS: dict[str, str] = {
     "high": "green",
     "medium": "yellow",

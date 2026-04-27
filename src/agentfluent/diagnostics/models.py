@@ -51,7 +51,10 @@ class DiagnosticSignal(BaseModel):
 
     signal_type: SignalType
     severity: Severity
-    agent_type: str
+    agent_type: str | None
+    """Agent this signal is scoped to. ``None`` for cross-cutting signals
+    that don't belong to a specific agent (e.g. MCP server audit findings,
+    which apply project-wide). Per-agent signals always carry a name."""
     message: str
     detail: dict[str, object] = Field(default_factory=dict)
     """Extensible detail dict for signal-specific data (keyword, snippet,
@@ -80,8 +83,10 @@ class DiagnosticRecommendation(BaseModel):
     action: str = ""
     """What to change in the config."""
 
-    agent_type: str = ""
-    """Which agent this recommendation applies to."""
+    agent_type: str | None = None
+    """Which agent this recommendation applies to. ``None`` for
+    cross-cutting recommendations not scoped to any single agent (e.g.
+    MCP server audit findings)."""
 
     config_file: str = ""
     """Path to the agent config file, if known."""
@@ -109,7 +114,9 @@ class AggregatedRecommendation(BaseModel):
     ``contributing_recommendations`` for ``--verbose`` and JSON output.
     """
 
-    agent_type: str
+    agent_type: str | None
+    """``None`` for cross-cutting findings; renders as ``(global)`` in
+    terminal output."""
     target: str
     severity: Severity
     signal_types: list[SignalType] = Field(default_factory=list)
