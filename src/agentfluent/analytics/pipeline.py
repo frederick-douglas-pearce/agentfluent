@@ -102,7 +102,9 @@ def analyze_session(
     mcp_tool_calls = extract_mcp_calls_from_messages(messages)
 
     agent_metrics = compute_agent_metrics(
-        invocations, session_total_tokens=token_metrics.total_tokens
+        invocations,
+        session_total_tokens=token_metrics.total_tokens,
+        session_total_cost=token_metrics.total_cost,
     )
 
     return SessionAnalysis(
@@ -256,14 +258,19 @@ def _merge_agent_metrics(
                     total_tokens=m.total_tokens,
                     total_tool_uses=m.total_tool_uses,
                     total_duration_ms=m.total_duration_ms,
+                    estimated_total_cost_usd=m.estimated_total_cost_usd,
                 )
             else:
                 existing.invocation_count += m.invocation_count
                 existing.total_tokens += m.total_tokens
                 existing.total_tool_uses += m.total_tool_uses
                 existing.total_duration_ms += m.total_duration_ms
+                existing.estimated_total_cost_usd += m.estimated_total_cost_usd
 
-    # Recompute averages on merged data
+    # estimated_total_cost_usd is summed at each session's blended rate
+    # so the per-invocation average property reads correctly. Tool-use
+    # averages have to be recomputed because the per-tool-use ratio
+    # changes when invocations from different sessions merge.
     for m in merged.values():
         if m.total_tool_uses > 0:
             if m.total_tokens > 0:

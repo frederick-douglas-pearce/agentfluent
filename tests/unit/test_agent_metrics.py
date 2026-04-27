@@ -1,5 +1,7 @@
 """Tests for per-agent execution metrics."""
 
+import pytest
+
 from agentfluent.agents.models import AgentInvocation
 from agentfluent.analytics.agent_metrics import compute_agent_metrics
 
@@ -167,3 +169,71 @@ class TestBuiltinVsCustom:
         metrics = compute_agent_metrics(invocations)
         assert len(metrics.by_agent_type) == 1
         assert metrics.by_agent_type["explore"].invocation_count == 2
+
+
+class TestPerAgentCost:
+    """Cost is estimated via session-level blended per-token rate (#200)."""
+
+    def test_zero_cost_when_session_cost_zero(self) -> None:
+        invocations = [_invocation(total_tokens=10000)]
+        metrics = compute_agent_metrics(invocations, session_total_tokens=10000)
+        pm = metrics.by_agent_type["pm"]
+        assert pm.estimated_total_cost_usd == 0.0
+        assert pm.estimated_avg_cost_per_invocation_usd is None
+
+    def test_blended_rate_proportional(self) -> None:
+        # Session: 100k tokens, $1.00 → blended rate $0.00001/token.
+        # Agent gets 30k tokens → $0.30; 1 invocation → avg $0.30/inv.
+        invocations = [_invocation(total_tokens=30000)]
+        metrics = compute_agent_metrics(
+            invocations,
+            session_total_tokens=100000,
+            session_total_cost=1.0,
+        )
+        pm = metrics.by_agent_type["pm"]
+        assert pm.estimated_total_cost_usd == pytest.approx(0.30)
+        assert pm.estimated_avg_cost_per_invocation_usd == pytest.approx(0.30)
+
+    def test_avg_cost_per_invocation(self) -> None:
+        # Two invocations, total 50k tokens of session's 100k @ $1.00.
+        invocations = [
+            _invocation(total_tokens=20000),
+            _invocation(total_tokens=30000),
+        ]
+        metrics = compute_agent_metrics(
+            invocations,
+            session_total_tokens=100000,
+            session_total_cost=1.0,
+        )
+        pm = metrics.by_agent_type["pm"]
+        assert pm.estimated_total_cost_usd == pytest.approx(0.50)
+        assert pm.estimated_avg_cost_per_invocation_usd == pytest.approx(0.25)
+
+    def test_zero_tokens_no_cost(self) -> None:
+        invocations = [_invocation(total_tokens=None)]
+        metrics = compute_agent_metrics(
+            invocations,
+            session_total_tokens=100000,
+            session_total_cost=1.0,
+        )
+        pm = metrics.by_agent_type["pm"]
+        assert pm.estimated_total_cost_usd == 0.0
+        assert pm.estimated_avg_cost_per_invocation_usd is None
+
+    def test_proportional_split_across_agent_types(self) -> None:
+        # pm has 30k of 100k tokens, Explore has 70k → cost split 30/70.
+        invocations = [
+            _invocation(agent_type="pm", total_tokens=30000),
+            _invocation(agent_type="Explore", total_tokens=70000),
+        ]
+        metrics = compute_agent_metrics(
+            invocations,
+            session_total_tokens=100000,
+            session_total_cost=1.0,
+        )
+        pm = metrics.by_agent_type["pm"]
+        explore = metrics.by_agent_type["explore"]
+        assert pm.estimated_total_cost_usd == pytest.approx(0.30)
+        assert explore.estimated_total_cost_usd == pytest.approx(0.70)
+        # Cost preserves the input/output dollar total.
+        assert pm.estimated_total_cost_usd + explore.estimated_total_cost_usd == pytest.approx(1.0)
