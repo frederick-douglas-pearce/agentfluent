@@ -130,8 +130,10 @@ class AggregatedRecommendation(BaseModel):
     not expose a comparable scalar (retry counts, permission failures)."""
 
     representative_message: str
-    """Aggregated message shown in the default table. For ``count == 1``
-    this is the original recommendation text verbatim."""
+    """The message shown in the default table. Verbatim copy of
+    ``contributing_recommendations[0].message`` when ``count == 1``;
+    a synthesized cluster summary
+    (``"<signal_type>[ (range)]: <action>"``) when ``count > 1``."""
 
     is_builtin: bool = False
     """Mirrors ``DiagnosticRecommendation.is_builtin`` — built-in and
@@ -142,12 +144,11 @@ class AggregatedRecommendation(BaseModel):
     contributing_recommendations: list[DiagnosticRecommendation] = Field(
         default_factory=list,
     )
-    """Raw per-invocation recommendations so ``--verbose`` can re-render
-    the unaggregated view without re-running the pipeline. Carries the
-    full observation/reason/action text and source ``signal_types`` for
-    each member of the group — those fields are not denormalized onto
-    this model since ``contributing_recommendations[0]`` is the source
-    of truth."""
+    """Raw per-invocation recommendations merged into this row. Source
+    of truth for the underlying signal text; carries the full
+    observation/reason/action/signal_types from each source recommendation
+    (not denormalized onto the aggregated row). ``--verbose`` re-renders
+    this list as the unaggregated view."""
 
 
 class DelegationSuggestion(BaseModel):

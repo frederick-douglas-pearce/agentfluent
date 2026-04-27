@@ -204,6 +204,35 @@ class TestRepresentativeMessage:
         assert any("token_outlier" in m for m in messages)
         assert any("retry_loop" in m for m in messages)
 
+    def test_count_one_message_equals_contributing_zero_message(self) -> None:
+        # #209 contract: when count == 1, representative_message and
+        # contributing_recommendations[0].message carry identical text.
+        # JSON consumers can rely on this when deciding which to read.
+        pairs = [_token_outlier_pair("pm", 3.4)]
+        aggregated = aggregate_recommendations(pairs)
+        agg = aggregated[0]
+        assert agg.count == 1
+        assert agg.representative_message == agg.contributing_recommendations[0].message
+
+    def test_count_gt_one_message_is_synthesized(self) -> None:
+        # #209 contract: when count > 1, representative_message is
+        # synthesized and may differ from contributing_recommendations[0].
+        # Consumers needing the raw signal text must read contributing[0].
+        pairs = [
+            _token_outlier_pair("Explore", 4.9),
+            _token_outlier_pair("Explore", 6.7),
+        ]
+        aggregated = aggregate_recommendations(pairs)
+        agg = aggregated[0]
+        assert agg.count == 2
+        # Synthesized form names the signal type explicitly; raw
+        # contributing message starts with the agent's observation.
+        assert agg.representative_message.startswith("token_outlier")
+        # Raw message from the rule, not the synthetic prefix.
+        assert not agg.contributing_recommendations[0].message.startswith(
+            "token_outlier",
+        )
+
 
 class TestSortOrder:
     def test_critical_before_warning(self) -> None:
