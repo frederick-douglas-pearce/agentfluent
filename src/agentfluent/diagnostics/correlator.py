@@ -105,6 +105,7 @@ class AccessErrorRule:
             reason=reason,
             action=action,
             agent_type=signal.agent_type,
+            invocation_id=signal.invocation_id,
             config_file=str(config.file_path) if config else "",
             signal_types=[signal.signal_type],
         )
@@ -161,6 +162,7 @@ class ErrorHandlingRule:
             reason=reason,
             action=action,
             agent_type=signal.agent_type,
+            invocation_id=signal.invocation_id,
             config_file=str(config.file_path) if config else "",
             signal_types=[signal.signal_type],
         )
@@ -211,6 +213,7 @@ class TokenOutlierRule:
             reason=reason,
             action=action,
             agent_type=signal.agent_type,
+            invocation_id=signal.invocation_id,
             config_file=str(config.file_path) if config else "",
             signal_types=[signal.signal_type],
         )
@@ -261,6 +264,7 @@ class DurationOutlierRule:
             reason=reason,
             action=action,
             agent_type=signal.agent_type,
+            invocation_id=signal.invocation_id,
             config_file=str(config.file_path) if config else "",
             signal_types=[signal.signal_type],
         )
@@ -312,6 +316,7 @@ class PermissionFailureRule:
             reason=reason,
             action=action,
             agent_type=signal.agent_type,
+            invocation_id=signal.invocation_id,
             config_file=str(config.file_path) if config else "",
             signal_types=[signal.signal_type],
         )
@@ -368,6 +373,7 @@ class RetryLoopRule:
             reason=reason,
             action=action,
             agent_type=signal.agent_type,
+            invocation_id=signal.invocation_id,
             config_file=str(config.file_path) if config else "",
             signal_types=[signal.signal_type],
         )
@@ -415,6 +421,7 @@ class StuckPatternRule:
             reason=reason,
             action=action,
             agent_type=signal.agent_type,
+            invocation_id=signal.invocation_id,
             config_file=str(config.file_path) if config else "",
             signal_types=[signal.signal_type],
         )
@@ -470,6 +477,7 @@ class ErrorSequenceRule:
             reason=reason,
             action=action,
             agent_type=signal.agent_type,
+            invocation_id=signal.invocation_id,
             config_file=str(config.file_path) if config else "",
             signal_types=[signal.signal_type],
         )
@@ -529,6 +537,7 @@ class ModelRoutingRule:
             reason=reason,
             action=action,
             agent_type=signal.agent_type,
+            invocation_id=signal.invocation_id,
             config_file=str(config.file_path) if config else "",
             signal_types=[signal.signal_type],
         )
@@ -586,6 +595,7 @@ class McpAuditRule:
             reason=reason,
             action=action,
             agent_type=signal.agent_type,
+            invocation_id=signal.invocation_id,
             config_file=str(signal.detail.get("source_file", "")),
             signal_types=[signal.signal_type],
         )

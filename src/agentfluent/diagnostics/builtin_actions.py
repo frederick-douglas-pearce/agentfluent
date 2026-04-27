@@ -70,6 +70,7 @@ def builtin_recommendation(
         reason=reason,
         action=action,
         agent_type=signal.agent_type,
+        invocation_id=signal.invocation_id,
         config_file="",
         signal_types=[signal.signal_type],
         is_builtin=True,

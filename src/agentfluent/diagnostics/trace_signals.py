@@ -96,7 +96,10 @@ def _cap_evidence(
 
 
 def _extract_permission_failures(
-    trace: SubagentTrace, agent_type: str,
+    trace: SubagentTrace,
+    agent_type: str,
+    *,
+    invocation_id: str | None = None,
 ) -> list[DiagnosticSignal]:
     """Emit one PERMISSION_FAILURE signal per unique tool with a denied result."""
     signals: list[DiagnosticSignal] = []
@@ -129,6 +132,7 @@ def _extract_permission_failures(
                 signal_type=SignalType.PERMISSION_FAILURE,
                 severity=Severity.CRITICAL,
                 agent_type=agent_type,
+                invocation_id=invocation_id,
                 message=(
                     f"Subagent '{agent_type}' was denied access to "
                     f"tool '{tool_name}' ({keyword!r})."
@@ -145,7 +149,10 @@ def _extract_permission_failures(
 
 
 def _extract_retry_and_stuck(
-    trace: SubagentTrace, agent_type: str,
+    trace: SubagentTrace,
+    agent_type: str,
+    *,
+    invocation_id: str | None = None,
 ) -> tuple[list[DiagnosticSignal], set[int]]:
     """Emit STUCK_PATTERN or RETRY_LOOP — never both — per `RetrySequence`.
 
@@ -176,9 +183,17 @@ def _extract_retry_and_stuck(
             c.input_summary == calls[0].input_summary for c in calls[1:]
         )
         if is_stuck:
-            signals.append(_build_stuck_signal(agent_type, seq, calls))
+            signals.append(
+                _build_stuck_signal(
+                    agent_type, seq, calls, invocation_id=invocation_id,
+                ),
+            )
         else:
-            signals.append(_build_retry_signal(agent_type, seq, calls))
+            signals.append(
+                _build_retry_signal(
+                    agent_type, seq, calls, invocation_id=invocation_id,
+                ),
+            )
         covered.update(seq.tool_call_indices)
 
     return signals, covered
@@ -188,12 +203,15 @@ def _build_stuck_signal(
     agent_type: str,
     seq: RetrySequence,
     calls: list[SubagentToolCall],
+    *,
+    invocation_id: str | None = None,
 ) -> DiagnosticSignal:
     evidence = _cap_evidence(calls, seq.tool_call_indices)
     return DiagnosticSignal(
         signal_type=SignalType.STUCK_PATTERN,
         severity=Severity.CRITICAL,
         agent_type=agent_type,
+        invocation_id=invocation_id,
         message=(
             f"Subagent '{agent_type}' repeated tool "
             f"'{seq.tool_name}' with identical input {seq.attempts} "
@@ -212,12 +230,15 @@ def _build_retry_signal(
     agent_type: str,
     seq: RetrySequence,
     calls: list[SubagentToolCall],
+    *,
+    invocation_id: str | None = None,
 ) -> DiagnosticSignal:
     evidence = _cap_evidence(calls, seq.tool_call_indices)
     return DiagnosticSignal(
         signal_type=SignalType.RETRY_LOOP,
         severity=Severity.WARNING,
         agent_type=agent_type,
+        invocation_id=invocation_id,
         message=(
             f"Subagent '{agent_type}' retried tool "
             f"'{seq.tool_name}' {seq.attempts} times."
@@ -233,7 +254,11 @@ def _build_retry_signal(
 
 
 def _extract_error_sequences(
-    trace: SubagentTrace, covered: set[int], agent_type: str,
+    trace: SubagentTrace,
+    covered: set[int],
+    agent_type: str,
+    *,
+    invocation_id: str | None = None,
 ) -> list[DiagnosticSignal]:
     """Emit TOOL_ERROR_SEQUENCE for runs of consecutive `is_error=True`
     tool calls that are not already covered by STUCK/RETRY signals.
@@ -272,6 +297,7 @@ def _extract_error_sequences(
                     signal_type=SignalType.TOOL_ERROR_SEQUENCE,
                     severity=severity,
                     agent_type=agent_type,
+                    invocation_id=invocation_id,
                     message=(
                         f"Subagent '{agent_type}' had "
                         f"{len(run_indices)} consecutive tool errors."
@@ -293,6 +319,7 @@ def extract_trace_signals(
     trace: SubagentTrace | None,
     *,
     agent_type: str | None = None,
+    invocation_id: str | None = None,
 ) -> list[DiagnosticSignal]:
     """Extract all trace-level behavior signals from a parsed subagent trace.
 
@@ -306,6 +333,10 @@ def extract_trace_signals(
     to avoid depending on the linker having populated the trace
     (programmatically-constructed or unlinked traces may still hold
     `UNKNOWN_AGENT_TYPE`).
+
+    `invocation_id` is stamped on every emitted signal so consumers can
+    drill from a trace finding back to its parent ``AgentInvocation``
+    (#197). The pipeline passes ``inv.agent_id or inv.tool_use_id``.
     """
     if trace is None or not trace.tool_calls:
         return []
@@ -313,8 +344,18 @@ def extract_trace_signals(
     effective_agent_type = agent_type if agent_type else trace.agent_type
 
     signals: list[DiagnosticSignal] = []
-    signals.extend(_extract_permission_failures(trace, effective_agent_type))
-    retry_stuck, covered = _extract_retry_and_stuck(trace, effective_agent_type)
+    signals.extend(
+        _extract_permission_failures(
+            trace, effective_agent_type, invocation_id=invocation_id,
+        ),
+    )
+    retry_stuck, covered = _extract_retry_and_stuck(
+        trace, effective_agent_type, invocation_id=invocation_id,
+    )
     signals.extend(retry_stuck)
-    signals.extend(_extract_error_sequences(trace, covered, effective_agent_type))
+    signals.extend(
+        _extract_error_sequences(
+            trace, covered, effective_agent_type, invocation_id=invocation_id,
+        ),
+    )
     return signals
