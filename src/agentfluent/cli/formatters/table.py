@@ -16,6 +16,7 @@ from rich.table import Table
 
 from agentfluent.cli.formatters.helpers import (
     CONFIDENCE_COLORS,
+    GLOBAL_AGENT_LABEL,
     SEVERITY_COLORS,
     average_score,
     format_cost,
@@ -260,7 +261,7 @@ def _format_diagnostics_table(
 
         for sig in diag.signals:
             sig_table.add_row(
-                escape(sig.agent_type or "(global)"),
+                escape(sig.agent_type or GLOBAL_AGENT_LABEL),
                 escape(sig.signal_type.value),
                 severity_cell(sig.severity),
                 escape(sig.message),
@@ -277,7 +278,7 @@ def _format_diagnostics_table(
 
         for rec in diag.recommendations:
             rec_table.add_row(
-                escape(rec.agent_type or "(global)"),
+                escape(rec.agent_type or GLOBAL_AGENT_LABEL),
                 escape(rec.target),
                 severity_cell(rec.severity),
                 escape(rec.observation),
@@ -294,7 +295,7 @@ def _format_diagnostics_table(
 
         for agg in diag.aggregated_recommendations:
             rec_table.add_row(
-                escape(agg.agent_type or "(global)"),
+                escape(agg.agent_type or GLOBAL_AGENT_LABEL),
                 escape(agg.target),
                 severity_cell(agg.severity),
                 str(agg.count),
@@ -347,7 +348,7 @@ def _render_trace_signal_evidence(console: Console, sig: DiagnosticSignal) -> No
     color = SEVERITY_COLORS[sig.severity]
     header = (
         f"\n[{color}]{escape(sig.signal_type.value)}[/{color}] "
-        f"[cyan]{escape(sig.agent_type or '(global)')}[/cyan] — {escape(sig.message)}"
+        f"[cyan]{escape(sig.agent_type or GLOBAL_AGENT_LABEL)}[/cyan] — {escape(sig.message)}"
     )
     console.print(header)
 
