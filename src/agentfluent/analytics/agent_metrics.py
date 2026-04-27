@@ -1,10 +1,12 @@
 """Per-agent execution metrics.
 
-Computes invocation counts, token usage, and efficiency metrics
-grouped by agent type. Reports token counts and percentages rather
-than dollar costs, since tool_result metadata only provides aggregate
-total_tokens without the per-category breakdown needed for accurate
-cost estimation.
+Computes invocation counts, token usage, cost estimates, and efficiency
+metrics grouped by agent type. Cost is estimated via a session-level
+blended per-token rate (``session.token_metrics.total_cost /
+session.token_metrics.total_tokens``) applied to each agent's
+``total_tokens``. This is an estimate — accurate per-agent cost
+requires per-token-type splits (input / output / cache_creation /
+cache_read) which #143 will retain on AgentInvocation.
 """
 
 from __future__ import annotations
@@ -24,8 +26,15 @@ class AgentTypeMetrics:
     total_tokens: int = 0
     total_tool_uses: int = 0
     total_duration_ms: int = 0
+    total_cost_usd: float = 0.0
+    """Estimated total cost in USD for this agent type's invocations.
+    Computed from a session-level blended per-token rate; accuracy is
+    bounded by the lack of per-invocation token-type splits (see #143)."""
     avg_tokens_per_tool_use: float | None = None
     avg_duration_per_tool_use: float | None = None
+    avg_cost_per_invocation_usd: float | None = None
+    """Estimated average cost per invocation in USD. ``None`` when
+    invocation count is zero or no token data was captured."""
 
     @property
     def avg_tokens_per_invocation(self) -> float | None:
@@ -62,6 +71,7 @@ class AgentMetrics:
 def compute_agent_metrics(
     invocations: list[AgentInvocation],
     session_total_tokens: int = 0,
+    session_total_cost: float = 0.0,
 ) -> AgentMetrics:
     """Compute per-agent-type execution metrics from extracted invocations.
 
@@ -71,6 +81,8 @@ def compute_agent_metrics(
     Args:
         invocations: Extracted agent invocations from a session.
         session_total_tokens: Total session tokens for computing agent percentage.
+        session_total_cost: Total session cost in USD; used to derive a
+            blended per-token rate that estimates per-agent cost.
 
     Returns:
         AgentMetrics with per-type breakdowns and summary totals.
@@ -93,7 +105,17 @@ def compute_agent_metrics(
         if inv.duration_ms is not None:
             metrics.total_duration_ms += inv.duration_ms
 
-    # Compute averages
+    # Session-level blended rate: total_cost / total_tokens. Per-agent
+    # cost is then `agent_tokens * rate`. This is an estimate — without
+    # per-invocation input/output/cache splits (#143), an agent that uses
+    # a different model mix than the session average will be misattributed.
+    blended_rate = (
+        session_total_cost / session_total_tokens
+        if session_total_tokens > 0 and session_total_cost > 0
+        else 0.0
+    )
+
+    # Compute averages and cost
     for metrics in by_type.values():
         if metrics.total_tool_uses > 0:
             if metrics.total_tokens > 0:
@@ -101,6 +123,12 @@ def compute_agent_metrics(
             if metrics.total_duration_ms > 0:
                 metrics.avg_duration_per_tool_use = (
                     metrics.total_duration_ms / metrics.total_tool_uses
+                )
+        if blended_rate > 0 and metrics.total_tokens > 0:
+            metrics.total_cost_usd = metrics.total_tokens * blended_rate
+            if metrics.invocation_count > 0:
+                metrics.avg_cost_per_invocation_usd = (
+                    metrics.total_cost_usd / metrics.invocation_count
                 )
 
     # Aggregate totals
