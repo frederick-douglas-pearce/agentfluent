@@ -130,8 +130,25 @@ class AggregatedRecommendation(BaseModel):
     not expose a comparable scalar (retry counts, permission failures)."""
 
     representative_message: str
-    """Aggregated message shown in the default table. For ``count == 1``
-    this is the original recommendation text verbatim."""
+    """The message shown in the default Recommendations table.
+
+    Two distinct shapes depending on ``count``:
+
+    - ``count == 1`` — verbatim copy of
+      ``contributing_recommendations[0].message`` (the raw underlying
+      recommendation). The two fields carry identical text in this case;
+      either is canonical.
+    - ``count > 1`` — synthesized by
+      ``aggregation._representative_message`` as
+      ``"<signal_type>[ (metric_range)]: <action>"``. Reads as a
+      summary of the cluster, not any individual member. The first
+      contributing recommendation's message is still available at
+      ``contributing_recommendations[0].message`` for code that needs
+      the raw form.
+
+    JSON consumers that want the raw signal text should always read
+    ``contributing_recommendations[0].message``.
+    """
 
     is_builtin: bool = False
     """Mirrors ``DiagnosticRecommendation.is_builtin`` — built-in and
@@ -142,12 +159,23 @@ class AggregatedRecommendation(BaseModel):
     contributing_recommendations: list[DiagnosticRecommendation] = Field(
         default_factory=list,
     )
-    """Raw per-invocation recommendations so ``--verbose`` can re-render
-    the unaggregated view without re-running the pipeline. Carries the
-    full observation/reason/action text and source ``signal_types`` for
-    each member of the group — those fields are not denormalized onto
-    this model since ``contributing_recommendations[0]`` is the source
-    of truth."""
+    """Raw per-invocation recommendations that were merged into this row.
+
+    Source of truth for the underlying signal text. ``--verbose`` re-
+    renders this list as the unaggregated view without re-running the
+    pipeline. Each element carries the full
+    observation/reason/action/signal_types from the source
+    recommendation — those fields are not denormalized onto the
+    aggregated row.
+
+    Relation to ``representative_message``:
+
+    - When ``count == 1`` the only contributing recommendation's
+      ``message`` is identical to ``representative_message``.
+    - When ``count > 1`` ``representative_message`` is a synthesized
+      cluster summary; the raw per-invocation messages are available
+      here as ``contributing_recommendations[i].message``.
+    """
 
 
 class DelegationSuggestion(BaseModel):
