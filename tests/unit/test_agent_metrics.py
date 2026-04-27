@@ -178,8 +178,8 @@ class TestPerAgentCost:
         invocations = [_invocation(total_tokens=10000)]
         metrics = compute_agent_metrics(invocations, session_total_tokens=10000)
         pm = metrics.by_agent_type["pm"]
-        assert pm.total_cost_usd == 0.0
-        assert pm.avg_cost_per_invocation_usd is None
+        assert pm.estimated_total_cost_usd == 0.0
+        assert pm.estimated_avg_cost_per_invocation_usd is None
 
     def test_blended_rate_proportional(self) -> None:
         # Session: 100k tokens, $1.00 → blended rate $0.00001/token.
@@ -191,8 +191,8 @@ class TestPerAgentCost:
             session_total_cost=1.0,
         )
         pm = metrics.by_agent_type["pm"]
-        assert pm.total_cost_usd == pytest.approx(0.30)
-        assert pm.avg_cost_per_invocation_usd == pytest.approx(0.30)
+        assert pm.estimated_total_cost_usd == pytest.approx(0.30)
+        assert pm.estimated_avg_cost_per_invocation_usd == pytest.approx(0.30)
 
     def test_avg_cost_per_invocation(self) -> None:
         # Two invocations, total 50k tokens of session's 100k @ $1.00.
@@ -206,8 +206,8 @@ class TestPerAgentCost:
             session_total_cost=1.0,
         )
         pm = metrics.by_agent_type["pm"]
-        assert pm.total_cost_usd == pytest.approx(0.50)
-        assert pm.avg_cost_per_invocation_usd == pytest.approx(0.25)
+        assert pm.estimated_total_cost_usd == pytest.approx(0.50)
+        assert pm.estimated_avg_cost_per_invocation_usd == pytest.approx(0.25)
 
     def test_zero_tokens_no_cost(self) -> None:
         invocations = [_invocation(total_tokens=None)]
@@ -217,8 +217,8 @@ class TestPerAgentCost:
             session_total_cost=1.0,
         )
         pm = metrics.by_agent_type["pm"]
-        assert pm.total_cost_usd == 0.0
-        assert pm.avg_cost_per_invocation_usd is None
+        assert pm.estimated_total_cost_usd == 0.0
+        assert pm.estimated_avg_cost_per_invocation_usd is None
 
     def test_proportional_split_across_agent_types(self) -> None:
         # pm has 30k of 100k tokens, Explore has 70k → cost split 30/70.
@@ -233,7 +233,7 @@ class TestPerAgentCost:
         )
         pm = metrics.by_agent_type["pm"]
         explore = metrics.by_agent_type["explore"]
-        assert pm.total_cost_usd == pytest.approx(0.30)
-        assert explore.total_cost_usd == pytest.approx(0.70)
+        assert pm.estimated_total_cost_usd == pytest.approx(0.30)
+        assert explore.estimated_total_cost_usd == pytest.approx(0.70)
         # Cost preserves the input/output dollar total.
-        assert pm.total_cost_usd + explore.total_cost_usd == pytest.approx(1.0)
+        assert pm.estimated_total_cost_usd + explore.estimated_total_cost_usd == pytest.approx(1.0)

@@ -26,15 +26,10 @@ class AgentTypeMetrics:
     total_tokens: int = 0
     total_tool_uses: int = 0
     total_duration_ms: int = 0
-    total_cost_usd: float = 0.0
-    """Estimated total cost in USD for this agent type's invocations.
-    Computed from a session-level blended per-token rate; accuracy is
-    bounded by the lack of per-invocation token-type splits (see #143)."""
+    estimated_total_cost_usd: float = 0.0
+    """Estimate; see module docstring. Bounded by #143."""
     avg_tokens_per_tool_use: float | None = None
     avg_duration_per_tool_use: float | None = None
-    avg_cost_per_invocation_usd: float | None = None
-    """Estimated average cost per invocation in USD. ``None`` when
-    invocation count is zero or no token data was captured."""
 
     @property
     def avg_tokens_per_invocation(self) -> float | None:
@@ -46,6 +41,12 @@ class AgentTypeMetrics:
     def avg_duration_per_invocation(self) -> float | None:
         if self.invocation_count > 0 and self.total_duration_ms > 0:
             return self.total_duration_ms / self.invocation_count
+        return None
+
+    @property
+    def estimated_avg_cost_per_invocation_usd(self) -> float | None:
+        if self.invocation_count > 0 and self.estimated_total_cost_usd > 0:
+            return self.estimated_total_cost_usd / self.invocation_count
         return None
 
 
@@ -125,11 +126,7 @@ def compute_agent_metrics(
                     metrics.total_duration_ms / metrics.total_tool_uses
                 )
         if blended_rate > 0 and metrics.total_tokens > 0:
-            metrics.total_cost_usd = metrics.total_tokens * blended_rate
-            if metrics.invocation_count > 0:
-                metrics.avg_cost_per_invocation_usd = (
-                    metrics.total_cost_usd / metrics.invocation_count
-                )
+            metrics.estimated_total_cost_usd = metrics.total_tokens * blended_rate
 
     # Aggregate totals
     total_invocations = sum(m.invocation_count for m in by_type.values())
