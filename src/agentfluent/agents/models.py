@@ -84,6 +84,15 @@ class AgentInvocation(BaseModel):
         return is_builtin_agent(self.agent_type)
 
     @property
+    def invocation_id(self) -> str:
+        """Stable identifier for this invocation. Prefers ``agent_id``
+        (UUID linking to the subagent trace file); falls back to
+        ``tool_use_id`` (always populated, links to the parent
+        ``tool_use`` block in the session JSONL) when ``agent_id`` is
+        absent (older sessions, interrupted runs)."""
+        return self.agent_id or self.tool_use_id
+
+    @property
     def tokens_per_tool_use(self) -> float | None:
         """Average tokens per tool call. None if data unavailable."""
         if self.total_tokens is not None and self.tool_uses and self.tool_uses > 0:

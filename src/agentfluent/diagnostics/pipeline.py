@@ -199,7 +199,7 @@ def run_diagnostics(
             extract_trace_signals(
                 inv.trace,
                 agent_type=inv.agent_type,
-                invocation_id=inv.agent_id or inv.tool_use_id,
+                invocation_id=inv.invocation_id,
             ),
         )
 
