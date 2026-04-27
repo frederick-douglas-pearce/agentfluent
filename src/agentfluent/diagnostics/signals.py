@@ -62,6 +62,7 @@ def _extract_error_signals(invocations: list[AgentInvocation]) -> list[Diagnosti
                 signal_type=SignalType.ERROR_PATTERN,
                 severity=severity,
                 agent_type=inv.agent_type,
+                invocation_id=inv.agent_id or inv.tool_use_id,
                 message=f"Agent '{inv.agent_type}' output contains '{keyword}'.",
                 detail={
                     "keyword": keyword,
@@ -96,6 +97,7 @@ def _extract_token_outliers(invocations: list[AgentInvocation]) -> list[Diagnost
                     signal_type=SignalType.TOKEN_OUTLIER,
                     severity=Severity.WARNING,
                     agent_type=inv.agent_type,
+                    invocation_id=inv.agent_id or inv.tool_use_id,
                     message=(
                         f"Agent '{inv.agent_type}' has {val:,.0f} tokens/tool_use, "
                         f"{val / mean:.1f}x above the {mean:,.0f} mean."
@@ -136,6 +138,7 @@ def _extract_duration_outliers(invocations: list[AgentInvocation]) -> list[Diagn
                     signal_type=SignalType.DURATION_OUTLIER,
                     severity=Severity.WARNING,
                     agent_type=inv.agent_type,
+                    invocation_id=inv.agent_id or inv.tool_use_id,
                     message=(
                         f"Agent '{inv.agent_type}' has {val / 1000:.1f}s/tool_use, "
                         f"{val / mean:.1f}x above the {mean / 1000:.1f}s mean."

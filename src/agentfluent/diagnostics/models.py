@@ -55,6 +55,15 @@ class DiagnosticSignal(BaseModel):
     """Agent this signal is scoped to. ``None`` for cross-cutting signals
     that don't belong to a specific agent (e.g. MCP server audit findings,
     which apply project-wide). Per-agent signals always carry a name."""
+    invocation_id: str | None = None
+    """Identifier of the source agent invocation when the signal is
+    per-invocation (metadata signals, trace signals). ``None`` for
+    cross-cutting signals (MCP audit, model-routing — those operate over
+    the full invocation set or per agent_type, not per single
+    invocation). Populated as ``inv.agent_id`` when available, else
+    ``inv.tool_use_id`` so consumers can grep the source session JSONL
+    or the linked subagent trace file
+    (``<session>/subagents/agent-<id>.jsonl``)."""
     message: str
     detail: dict[str, object] = Field(default_factory=dict)
     """Extensible detail dict for signal-specific data (keyword, snippet,
@@ -87,6 +96,13 @@ class DiagnosticRecommendation(BaseModel):
     """Which agent this recommendation applies to. ``None`` for
     cross-cutting recommendations not scoped to any single agent (e.g.
     MCP server audit findings)."""
+
+    invocation_id: str | None = None
+    """Identifier of the source agent invocation, copied from the
+    contributing ``DiagnosticSignal``. ``None`` for recommendations
+    derived from cross-cutting signals. Lets JSON consumers map a
+    recommendation back to a specific session / subagent trace for
+    drill-down (#197)."""
 
     config_file: str = ""
     """Path to the agent config file, if known."""

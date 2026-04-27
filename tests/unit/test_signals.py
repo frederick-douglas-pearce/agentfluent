@@ -12,16 +12,19 @@ def _inv(
     total_tokens: int | None = None,
     tool_uses: int | None = None,
     duration_ms: int | None = None,
+    tool_use_id: str = "toolu_01",
+    agent_id: str | None = None,
 ) -> AgentInvocation:
     return AgentInvocation(
         agent_type=agent_type,
         description="test",
         prompt="do something",
-        tool_use_id="toolu_01",
+        tool_use_id=tool_use_id,
         total_tokens=total_tokens,
         tool_uses=tool_uses,
         duration_ms=duration_ms,
         output_text=output_text,
+        agent_id=agent_id,
     )
 
 
@@ -141,3 +144,55 @@ class TestExtractSignals:
         signals = extract_signals(invocations)
         types = {s.signal_type for s in signals}
         assert SignalType.ERROR_PATTERN in types
+
+
+class TestInvocationIdPropagation:
+    """#197: every per-invocation signal carries an invocation_id pointing
+    back to the source AgentInvocation."""
+
+    def test_error_pattern_uses_agent_id_when_present(self) -> None:
+        invocations = [
+            _inv(
+                output_text="Operation blocked.",
+                agent_id="ag-uuid-1",
+                tool_use_id="toolu_99",
+            ),
+        ]
+        signals = extract_signals(invocations)
+        assert signals[0].invocation_id == "ag-uuid-1"
+
+    def test_falls_back_to_tool_use_id_when_agent_id_missing(self) -> None:
+        # Older sessions / interrupted runs lack agent_id; tool_use_id
+        # is always populated and lets consumers locate the parent
+        # tool_use block in the session JSONL.
+        invocations = [
+            _inv(
+                output_text="Operation blocked.",
+                agent_id=None,
+                tool_use_id="toolu_42",
+            ),
+        ]
+        signals = extract_signals(invocations)
+        assert signals[0].invocation_id == "toolu_42"
+
+    def test_token_outlier_signal_carries_invocation_id(self) -> None:
+        invocations = [
+            _inv(total_tokens=1000, tool_uses=10, agent_id="ag-1"),
+            _inv(total_tokens=1000, tool_uses=10, agent_id="ag-2"),
+            _inv(total_tokens=10000, tool_uses=10, agent_id="ag-3"),
+        ]
+        signals = extract_signals(invocations)
+        outlier = next(s for s in signals if s.signal_type == SignalType.TOKEN_OUTLIER)
+        # Outlier rule fires for ag-3 (10x the mean, well above 2x threshold).
+        assert outlier.invocation_id == "ag-3"
+
+    def test_duration_outlier_signal_carries_invocation_id(self) -> None:
+        invocations = [
+            _inv(duration_ms=1000, tool_uses=10, agent_id="ag-1"),
+            _inv(duration_ms=1000, tool_uses=10, agent_id="ag-2"),
+            _inv(duration_ms=10000, tool_uses=10, agent_id="ag-slow"),
+        ]
+        signals = extract_signals(invocations)
+        outlier = next(s for s in signals if s.signal_type == SignalType.DURATION_OUTLIER)
+        assert outlier.invocation_id == "ag-slow"
+

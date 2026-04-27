@@ -30,11 +30,13 @@ def _signal(
     keyword: str = "error",
     detail: dict[str, object] | None = None,
     message: str | None = None,
+    invocation_id: str | None = None,
 ) -> DiagnosticSignal:
     return DiagnosticSignal(
         signal_type=signal_type,
         severity=severity,
         agent_type=agent_type,
+        invocation_id=invocation_id,
         message=message or f"Agent '{agent_type}' output contains '{keyword}'.",
         detail=detail if detail is not None else {"keyword": keyword},
     )
@@ -561,3 +563,50 @@ class TestBuiltinAgentBranching:
         model_rec = correlate([_builtin_signal(SignalType.MODEL_MISMATCH)])[0]
         actions = {token_rec.action, retry_rec.action, perm_rec.action, model_rec.action}
         assert len(actions) == 4
+
+
+class TestInvocationIdPropagation:
+    """#197: invocation_id flows from signal to recommendation across rules."""
+
+    def test_access_error_rule_propagates_invocation_id(self) -> None:
+        sig = _signal(keyword="blocked", severity=Severity.CRITICAL,
+                      invocation_id="ag-1")
+        recs = correlate([sig])
+        assert recs and recs[0].invocation_id == "ag-1"
+
+    def test_token_outlier_rule_propagates_invocation_id(self) -> None:
+        sig = _signal(
+            signal_type=SignalType.TOKEN_OUTLIER,
+            detail={"actual_value": 5000, "mean_value": 1000, "ratio": 5.0},
+            invocation_id="ag-outlier",
+        )
+        recs = correlate([sig])
+        assert recs and recs[0].invocation_id == "ag-outlier"
+
+    def test_builtin_recommendation_propagates_invocation_id(self) -> None:
+        sig = _signal(
+            signal_type=SignalType.RETRY_LOOP,
+            severity=Severity.WARNING,
+            agent_type="Explore",
+            detail={"tool_name": "Bash", "retry_count": 3},
+            invocation_id="ag-builtin",
+        )
+        recs = correlate([sig])
+        assert recs and recs[0].invocation_id == "ag-builtin"
+        # Built-in agents get the concern-keyed action template; field
+        # still flows through.
+        assert recs[0].is_builtin
+
+    def test_cross_cutting_signal_carries_none(self) -> None:
+        # MCP audit signals leave invocation_id as None; the propagation
+        # should preserve None on the recommendation.
+        sig = DiagnosticSignal(
+            signal_type=SignalType.MCP_UNUSED_SERVER,
+            severity=Severity.INFO,
+            agent_type="",
+            invocation_id=None,
+            message="MCP server 'slack' is configured but unused.",
+            detail={"server_name": "slack", "source_file": "/etc/cfg.json"},
+        )
+        recs = correlate([sig])
+        assert recs and recs[0].invocation_id is None

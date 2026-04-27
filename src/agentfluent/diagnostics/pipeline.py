@@ -195,7 +195,13 @@ def run_diagnostics(
     for inv in invocations:
         if inv.trace is None:
             continue
-        signals.extend(extract_trace_signals(inv.trace, agent_type=inv.agent_type))
+        signals.extend(
+            extract_trace_signals(
+                inv.trace,
+                agent_type=inv.agent_type,
+                invocation_id=inv.agent_id or inv.tool_use_id,
+            ),
+        )
 
     signals = _dedup_error_patterns(signals)
 
