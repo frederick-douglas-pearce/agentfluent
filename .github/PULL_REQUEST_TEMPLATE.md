@@ -7,6 +7,7 @@
 - [ ] Type check clean: `uv run mypy src/agentfluent/`
 - [ ] New/changed behavior has test coverage
 - [ ] Manual smoke test via `uv run agentfluent ...` — required for CLI output changes
+- [ ] Add the `needs-security-review` label and confirm the security-review workflow passes before merging
 
 ## Breaking changes
 <!--
