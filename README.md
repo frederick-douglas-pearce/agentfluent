@@ -273,7 +273,7 @@ AgentFluent is designed so data stays on your machine. The attack surface is sma
 | Path handling | All paths resolved within `~/.claude/` | Path traversal |
 | Input validation | Pydantic models with strict type constraints | Malformed JSONL crashing the parser |
 | Safe YAML loading | `yaml.safe_load` only | Arbitrary code execution via frontmatter |
-| CI security review | Claude-powered review on every PR | New vulnerabilities |
+| CI security review | Claude-powered review when `needs-security-review` label is added | New vulnerabilities |
 | Automated testing | 730+ unit tests incl. security-focused cases | Regressions |
 
 ### Secrets handling
@@ -349,7 +349,7 @@ Both must pass cleanly before a PR merges.
 Five GitHub Actions workflows run automatically:
 
 - **CI** ([`ci.yml`](.github/workflows/ci.yml)) — Every PR: ruff, mypy strict, full unit-test suite. Must pass to merge.
-- **Security Review** ([`security-review.yml`](.github/workflows/security-review.yml)) — Claude-powered security review of code-changing PRs (markdown and image changes skip it).
+- **Security Review** ([`security-review.yml`](.github/workflows/security-review.yml)) — Claude-powered security review of code-changing PRs, triggered by the `needs-security-review` label (re-trigger by removing and re-adding).
 - **Claude Code Review** ([`claude-review.yml`](.github/workflows/claude-review.yml)) — AI-powered PR review, triggered by the `needs-review` label or `@claude` mentions.
 - **Release Please** ([`release-please.yml`](.github/workflows/release-please.yml)) — Auto-generates release PRs with changelog and version bumps from [Conventional Commits](https://www.conventionalcommits.org/).
 - **Dependabot Auto-Merge** ([`dependabot-auto-merge.yml`](.github/workflows/dependabot-auto-merge.yml)) — Auto-merges dependabot PRs once CI passes.

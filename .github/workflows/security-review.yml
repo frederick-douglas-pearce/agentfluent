@@ -2,6 +2,7 @@ name: Security Review
 
 on:
   pull_request:
+    types: [labeled]
     paths-ignore:
       - '**/*.md'
       - 'docs/**'
@@ -21,8 +22,13 @@ permissions:
 
 jobs:
   security:
+    # Manual gate: workflow runs only when the `needs-security-review`
+    # label is added (re-trigger by removing and re-adding). Saves API
+    # cost on PRs that get force-pushed multiple times during review.
     # Dependabot PRs don't have access to secrets.
-    if: github.actor != 'dependabot[bot]'
+    if: |
+      github.event.label.name == 'needs-security-review' &&
+      github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
