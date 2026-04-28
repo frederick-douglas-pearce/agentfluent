@@ -79,8 +79,23 @@ First call in a session typically writes; later calls read. A `cache_creation`
 spike on a session that should be re-using a stable prefix indicates cache
 invalidation — usually because the system prompt or early turns are changing.
 
+**What's typically in the cached prefix:** the system prompt scaffold,
+tool definitions, and `CLAUDE.md` content all land in the cached side
+on a typical Claude Code session. The first turn writes them; every
+subsequent turn within the cache window reads them. Anything that
+*changes* on every turn (the conversation history) is on the
+non-cached side.
+
+**Cache-invalidation triggers** that push these tokens back to
+`cache_creation`:
+- TTL expires (default 5-minute gap between turns)
+- `CLAUDE.md` is edited mid-session
+- Any earlier prefix bytes change (rare for `CLAUDE.md`, which sits
+  near the front)
+
 **Example:** `Cache creation tokens: 14,450` on the first call of a long
-session; `0` on subsequent calls until the cache TTL expires.
+session; `0` on subsequent calls until the cache TTL expires or the
+prefix changes.
 
 **Related:** `cache_read`, `cache_efficiency`.
 
@@ -94,6 +109,16 @@ reason cached agents are 10–20× cheaper than uncached. The `cache_efficiency`
 metric (`cache_read / total_input`) tells you what fraction of every prompt
 is hitting the cache; ratios below ~80% on long sessions warrant
 investigation.
+
+**What you're reading from cache:** the system prompt scaffold, tool
+definitions, and `CLAUDE.md` content (whatever was written by the prior
+turn's `cache_creation`). Each subsequent turn reads the same prefix
+bytes from cache instead of re-paying the full input rate.
+
+**Why `cache_efficiency` drops on a long session:** the cache TTL
+(default 5 minutes) expired between turns, or `CLAUDE.md` was edited,
+or some earlier prefix byte changed. Each invalidation forces the next
+turn to write `cache_creation` tokens before any `cache_read` resumes.
 
 **Example:** `Cache read tokens: 1,234,567` — the hot path on a session
 that's been running for an hour.
