@@ -34,6 +34,8 @@ API_RATE_FOOTNOTE = (
     "independent of usage."
 )
 
+GLOSSARY_FOOTNOTE = "See docs/GLOSSARY.md for term definitions."
+
 if TYPE_CHECKING:
     from agentfluent.analytics.pipeline import AnalysisResult
     from agentfluent.config.models import ConfigScore
@@ -136,7 +138,10 @@ def format_analysis_table(
     console.print(token_table)
 
     if tm.by_model and (verbose or len(tm.by_model) > 1):
-        model_table = Table(title="Cost by Model (API rate)", show_header=True)
+        model_table = Table(
+            title="Cost by Model — Parent Session (API rate)",
+            show_header=True,
+        )
         model_table.add_column("Model", style="cyan")
         model_table.add_column("Tokens", justify="right")
         model_table.add_column("Cost", justify="right")
@@ -147,6 +152,11 @@ def format_analysis_table(
                 format_cost(breakdown.cost),
             )
         console.print(model_table)
+        console.print(
+            "Subagent tokens are not broken out by model here — "
+            "see Agent Invocations for per-agent totals.",
+            style="dim",
+        )
 
     if tlm.total_tool_calls > 0:
         tool_table = Table(title="Tool Usage", show_header=True)
@@ -305,6 +315,8 @@ def _format_diagnostics_table(
 
     _format_deep_diagnostics(console, diag, verbose=verbose)
     _format_delegation_suggestions(console, diag, verbose=verbose)
+
+    console.print(GLOSSARY_FOOTNOTE, style="dim")
 
 
 def _format_deep_diagnostics(
@@ -492,3 +504,4 @@ def format_config_check_table(
         f"[bold]average score:[/bold] {average_score(scores)}/100, "
         f"[bold]recommendations:[/bold] {len(all_recs)}"
     )
+    console.print(GLOSSARY_FOOTNOTE, style="dim")
