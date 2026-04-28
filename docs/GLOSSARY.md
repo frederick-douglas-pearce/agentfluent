@@ -51,7 +51,7 @@ prompt prefix is changing in ways that defeat caching.
 
 **Example:** `agentfluent analyze` reports `Input tokens: 12,840` per session.
 
-**Related:** `cache_read` (the cached complement), `cache_efficiency`.
+**Related:** [`cache_read`](#cache_read) (the cached complement), `cache_efficiency`.
 
 ### `output`
 
@@ -66,7 +66,7 @@ prompt-side cost dominates.
 
 **Example:** `Output tokens: 8,420` in the analyze table.
 
-**Related:** `total_cost` (where `output` typically dominates per-call cost).
+**Related:** `total_cost` (where [`output`](#output) typically dominates per-call cost).
 
 ### `cache_creation`
 
@@ -97,7 +97,7 @@ non-cached side.
 session; `0` on subsequent calls until the cache TTL expires or the
 prefix changes.
 
-**Related:** `cache_read`, `cache_efficiency`.
+**Related:** [`cache_read`](#cache_read), `cache_efficiency`.
 
 ### `cache_read`
 
@@ -123,7 +123,7 @@ turn to write `cache_creation` tokens before any `cache_read` resumes.
 **Example:** `Cache read tokens: 1,234,567` — the hot path on a session
 that's been running for an hour.
 
-**Related:** `cache_creation`, `cache_efficiency`.
+**Related:** [`cache_creation`](#cache_creation), `cache_efficiency`.
 
 ---
 
@@ -134,7 +134,7 @@ worth attention. Signals are *not* errors — they're hypotheses about agent
 behavior that the correlator turns into actionable recommendations. Each
 signal has a fixed severity and detection threshold. Custom (user-defined)
 agents and built-in (Claude Code) agents both emit signals, but the
-recommendations differ — see **Built-in agent concern**.
+recommendations differ — see [**Built-in agent concern**](#built-in-agent-concern).
 
 ### `token_outlier`
 
@@ -155,8 +155,8 @@ Agent 'Explore' has 40,288 tokens/tool_use, 8.0x above the 5,064 mean.
 
 **Severity:** `warning`.
 
-**Related:** `duration_outlier`, `stuck_pattern` (often co-occur),
-`recommendation target: prompt`.
+**Related:** [`duration_outlier`](#duration_outlier), [`stuck_pattern`](#stuck_pattern) (often co-occur),
+[`recommendation target: prompt`](#prompt).
 
 ### `duration_outlier`
 
@@ -175,7 +175,7 @@ Agent 'pm' has 45.2s/tool_use, 3.1x above the 14.6s mean.
 
 **Severity:** `warning`.
 
-**Related:** `token_outlier`, `model_mismatch` (an underspec'd model often
+**Related:** [`token_outlier`](#token_outlier), [`model_mismatch`](#model_mismatch) (an underspec'd model often
 shows here).
 
 ### `tool_error_sequence`
@@ -195,7 +195,7 @@ Subagent 'general-purpose' had 3 consecutive tool errors.
 
 **Severity:** `warning` (2–3 errors); `critical` (4+).
 
-**Related:** `retry_loop`, `stuck_pattern`, `permission_failure`.
+**Related:** [`retry_loop`](#retry_loop), [`stuck_pattern`](#stuck_pattern), [`permission_failure`](#permission_failure).
 
 ### `retry_loop`
 
@@ -214,7 +214,7 @@ Subagent 'architect' retried tool 'Read' 5 times.
 
 **Severity:** `warning`.
 
-**Related:** `stuck_pattern` (the more-severe variant), `tool_error_sequence`.
+**Related:** [`stuck_pattern`](#stuck_pattern) (the more-severe variant), [`tool_error_sequence`](#tool_error_sequence).
 
 ### `stuck_pattern`
 
@@ -234,7 +234,7 @@ without progress.
 
 **Severity:** `critical`.
 
-**Related:** `retry_loop` (the less-severe variant where input varied).
+**Related:** [`retry_loop`](#retry_loop) (the less-severe variant where input varied).
 
 ### `permission_failure`
 
@@ -254,7 +254,7 @@ Subagent 'pm' was denied access to tool 'Write' ('permission denied').
 
 **Severity:** `critical`.
 
-**Related:** `error_pattern`, `recommendation target: tools`.
+**Related:** [`error_pattern`](#error_pattern), [`recommendation target: tools`](#tools).
 
 ### `error_pattern`
 
@@ -273,7 +273,7 @@ Agent 'pm' output contains 'unable to'.
 
 **Severity:** `critical` for permission-denied keywords, `warning` otherwise.
 
-**Related:** `permission_failure`, `tool_error_sequence` (both supersede
+**Related:** [`permission_failure`](#permission_failure), [`tool_error_sequence`](#tool_error_sequence) (both supersede
 `error_pattern` when present for the same agent).
 
 ### `model_mismatch`
@@ -298,8 +298,8 @@ claude-haiku-4-5.
 
 **Severity:** `warning`.
 
-**Related:** `complexity_tier`, `overspec`, `underspec`,
-`recommendation target: model`.
+**Related:** [`complexity_tier`](#complexity_tier), [`overspec`](#overspec), [`underspec`](#underspec),
+[`recommendation target: model`](#model).
 
 ### `mcp_unused_server`
 
@@ -320,7 +320,7 @@ marking as disabled.
 
 **Severity:** `info`.
 
-**Related:** `mcp_missing_server`.
+**Related:** [`mcp_missing_server`](#mcp_missing_server).
 
 ### `mcp_missing_server`
 
@@ -339,7 +339,7 @@ MCP config. Add to ~/.claude.json or .mcp.json.
 
 **Severity:** `warning`.
 
-**Related:** `mcp_unused_server`.
+**Related:** [`mcp_unused_server`](#mcp_unused_server).
 
 ---
 
@@ -358,7 +358,7 @@ agent failed or is stuck.
 permission-denial keywords. Critical findings are sorted to the top of the
 Recommendations table and rendered red.
 
-**Related:** `warning`, `info`.
+**Related:** [`warning`](#warning), [`info`](#info).
 
 ### `warning`
 
@@ -368,7 +368,7 @@ Recommendations table and rendered red.
 sequences. Warning findings often resolve on their own (e.g., a retry that
 eventually succeeded) but warrant attention if they recur. Rendered yellow.
 
-**Related:** `critical`, `info`.
+**Related:** [`critical`](#critical), [`info`](#info).
 
 ### `info`
 
@@ -378,7 +378,7 @@ eventually succeeded) but warrant attention if they recur. Rendered yellow.
 recommendations. These don't indicate runtime problems; they suggest
 hygiene improvements. Rendered cyan.
 
-**Related:** `warning`, `critical`.
+**Related:** [`warning`](#warning), [`critical`](#critical).
 
 ---
 
@@ -397,7 +397,7 @@ a new subagent.
 The YAML draft is rendered without a "review before use" caveat — the
 cluster has enough internal similarity to read as a coherent task family.
 
-**Related:** `cohesion_score`, `cluster_size`, `medium`, `low`.
+**Related:** [`cohesion_score`](#cohesion_score), [`cluster_size`](#cluster_size), [`medium`](#medium), [`low`](#low).
 
 ### `medium`
 
@@ -407,7 +407,7 @@ cluster has enough internal similarity to read as a coherent task family.
 threshold is met. The YAML draft is offered as a starting point; the
 suggested name and prompt should be reviewed before saving the agent.
 
-**Related:** `high`, `low`.
+**Related:** [`high`](#high), [`low`](#low).
 
 ### `low`
 
@@ -418,7 +418,7 @@ The YAML draft includes a `# REVIEW BEFORE USE — low confidence cluster`
 comment. Use the cluster as evidence that *some* coherent subset of work
 exists, not as a finished proposal.
 
-**Related:** `high`, `medium`, `cohesion_score`.
+**Related:** [`high`](#high), [`medium`](#medium), [`cohesion_score`](#cohesion_score).
 
 ---
 
@@ -439,7 +439,7 @@ agents (which have no editable prompt), the recommendation pivots to
 either a wrapper subagent or a tighter delegation prompt — see
 **Built-in agent concern: scope** and **recovery**.
 
-**Related:** `tools`, `model`, `mcp`.
+**Related:** [`tools`](#tools), [`model`](#model), [`mcp`](#mcp).
 
 ### `tools`
 
@@ -449,9 +449,9 @@ either a wrapper subagent or a tighter delegation prompt — see
 **Detail:** Used for `permission_failure` (the agent needs access to a
 tool it doesn't have) and for token outliers when the agent has too many
 tools to choose from (>8 → recommendation forks to `tools`). For built-in
-agents, see **Built-in agent concern: tools**.
+agents, see [**Built-in agent concern: tools**](#tools-1).
 
-**Related:** `prompt`, `permission_failure`.
+**Related:** [`prompt`](#prompt), [`permission_failure`](#permission_failure).
 
 ### `model`
 
@@ -460,9 +460,9 @@ agents, see **Built-in agent concern: tools**.
 **Detail:** Used for `model_mismatch` signals. Recommends `claude-haiku-4-5`
 when overspec'd, `claude-sonnet-4-6` when underspec'd. For built-in agents
 (model not configurable), pivots to "create a custom subagent with the
-recommended model" — see **Built-in agent concern: model**.
+recommended model" — see [**Built-in agent concern: model**](#model-1).
 
-**Related:** `model_mismatch`, `complexity_tier`, `overspec`, `underspec`.
+**Related:** [`model_mismatch`](#model_mismatch), [`complexity_tier`](#complexity_tier), [`overspec`](#overspec), [`underspec`](#underspec).
 
 ### `mcp`
 
@@ -472,7 +472,7 @@ recommended model" — see **Built-in agent concern: model**.
 `mcp_missing_server` (add the configuration). MCP recommendations carry
 `agent_type: null` since MCP servers aren't scoped to a single agent.
 
-**Related:** `mcp_unused_server`, `mcp_missing_server`.
+**Related:** [`mcp_unused_server`](#mcp_unused_server), [`mcp_missing_server`](#mcp_missing_server).
 
 ---
 
@@ -493,7 +493,7 @@ agents. The recommendation suggests: (a) a custom wrapper subagent that
 narrows the task, (b) a tighter delegation prompt passed to the built-in,
 or (c) rerouting to a different agent.
 
-**Related:** `recovery`, `tools`, `model`.
+**Related:** [`recovery`](#recovery), [`tools`](#tools-1), [`model`](#model-1).
 
 ### `recovery`
 
@@ -505,7 +505,7 @@ exit conditions to the *delegating* agent's prompt (since the built-in
 itself isn't editable), or wrapping the call in a custom subagent that
 owns recovery logic.
 
-**Related:** `scope`, `tools`.
+**Related:** [`scope`](#scope), [`tools`](#tools-1).
 
 ### `tools`
 
@@ -515,7 +515,7 @@ owns recovery logic.
 routing the task to a custom subagent with explicit tool grants, or
 confirming the built-in's fixed tool set is actually required.
 
-**Related:** `permission_failure`, `recommendation target: tools`.
+**Related:** [`permission_failure`](#permission_failure), [`recommendation target: tools`](#tools).
 
 ### `model`
 
@@ -525,7 +525,7 @@ confirming the built-in's fixed tool set is actually required.
 creating a custom subagent with the recommended model or rerouting to an
 existing custom agent that uses it.
 
-**Related:** `model_mismatch`, `recommendation target: model`.
+**Related:** [`model_mismatch`](#model_mismatch), [`recommendation target: model`](#model).
 
 ---
 
@@ -549,7 +549,7 @@ of 5–10 invocations are sensitive to centroid placement.
 **Example:** `cohesion_score: 0.42` on a five-invocation cluster about
 "PR review prompts" — solidly medium-confidence.
 
-**Related:** `cluster_size`, `confidence tier`.
+**Related:** [`cluster_size`](#cluster_size), [`confidence tier`](#confidence-tier).
 
 ### `cluster_size`
 
@@ -563,7 +563,7 @@ entirely (not enough evidence).
 **Example:** `cluster_size: 12` — confident enough to propose a new
 subagent based on size alone.
 
-**Related:** `cohesion_score`, `confidence tier`.
+**Related:** [`cohesion_score`](#cohesion_score), [`confidence tier`](#confidence-tier).
 
 ---
 
@@ -590,7 +590,7 @@ rate, and write-tool usage. Tiers map 1:1 to Claude model families:
 validation. On v0.3 single-dataset calibration, every observed agent
 classified as "complex" — the thresholds may be set too sensitive.
 
-**Related:** `overspec`, `underspec`, `model_mismatch`.
+**Related:** [`overspec`](#overspec), [`underspec`](#underspec), [`model_mismatch`](#model_mismatch).
 
 ### `overspec`
 
@@ -602,7 +602,7 @@ example. The `model_mismatch` signal recommends switching to the
 classified tier's family with an estimated cost savings derived from the
 observed token volume.
 
-**Related:** `underspec`, `complexity_tier`.
+**Related:** [`underspec`](#underspec), [`complexity_tier`](#complexity_tier).
 
 ### `underspec`
 
@@ -613,7 +613,7 @@ example. May correlate with elevated `error_rate` or `retry_loop` signals
 on the same agent. No cost-savings estimate (upgrading to a higher tier
 costs *more*); the recommendation is purely about output quality.
 
-**Related:** `overspec`, `complexity_tier`.
+**Related:** [`overspec`](#overspec), [`complexity_tier`](#complexity_tier).
 
 ---
 
