@@ -159,6 +159,10 @@ agentfluent config-check --format json | jq '.data.scores[] | select(.overall_sc
 
 Walks `~/.claude/agents/*.md` and `./.claude/agents/*.md`, parses each agent's YAML frontmatter and body, and scores against a 4-dimension rubric (description trigger quality, tool access appropriateness, model selection, prompt completeness). Outputs a score per agent plus ranked recommendations — e.g. "Prompt body doesn't mention error handling."
 
+### Glossary
+
+`analyze --diagnostics` and `config-check` introduce AgentFluent-specific vocabulary (signal types, severity, confidence tiers, recommendation targets). [`docs/GLOSSARY.md`](docs/GLOSSARY.md) defines every term that appears in CLI output, with worked examples and detection thresholds.
+
 ## Configuration
 
 AgentFluent's "configuration" is CLI flags — no config file, no environment variables beyond the defaults. Sensible defaults keep most invocations flagless.
