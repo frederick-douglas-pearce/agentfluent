@@ -20,6 +20,7 @@ data/
 # Claude Code local settings and runtime state
 .claude/settings.local.json
 .claude/*.lock
+.claude/worktrees/
 
 # IDE
 .vscode/
