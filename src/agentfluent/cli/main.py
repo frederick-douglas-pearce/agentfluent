@@ -8,7 +8,7 @@ import typer
 from rich.console import Console
 
 from agentfluent import __version__
-from agentfluent.cli.commands import analyze, config_check, list_cmd
+from agentfluent.cli.commands import analyze, config_check, explain, list_cmd
 from agentfluent.cli.exit_codes import EXIT_USER_ERROR
 from agentfluent.core.paths import validate_claude_config_dir
 
@@ -33,6 +33,10 @@ Common workflows:
   agentfluent config-check
       Score agent definitions against best practices.
 
+  agentfluent explain <term>
+      Look up a term seen in CLI output (e.g., `agentfluent explain
+      token_outlier`).
+
   agentfluent --claude-config-dir /custom/path list
       Point at a non-default Claude config directory (also honors
       $CLAUDE_CONFIG_DIR).
@@ -50,6 +54,7 @@ app = typer.Typer(
 app.add_typer(list_cmd.app, name="list")
 app.add_typer(analyze.app, name="analyze")
 app.add_typer(config_check.app, name="config-check")
+app.add_typer(explain.app, name="explain")
 
 err_console = Console(stderr=True)
 

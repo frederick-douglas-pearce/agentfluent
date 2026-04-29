@@ -55,8 +55,14 @@ dev = [
 ]
 
 [build-system]
-requires = ["uv_build>=0.9.5,<0.12.0"]
-build-backend = "uv_build"
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+# Use `packages = [...]` (respects .gitignore). Do NOT switch to
+# `force-include` -- it bypasses .gitignore and can bundle secrets
+# into the wheel.
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentfluent"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

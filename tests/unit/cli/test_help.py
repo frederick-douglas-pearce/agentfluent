@@ -22,6 +22,7 @@ class TestHelp:
         assert "list" in result.stdout
         assert "analyze" in result.stdout
         assert "config-check" in result.stdout
+        assert "explain" in result.stdout
 
     def test_list_help_has_examples(
         self, runner: CliRunner, cli_app: typer.Typer,
