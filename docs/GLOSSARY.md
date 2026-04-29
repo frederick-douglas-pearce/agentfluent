@@ -437,7 +437,7 @@ the problem: token outliers (broad exploration), retry loops (missing
 recovery guidance), error sequences (missing fallback). For built-in
 agents (which have no editable prompt), the recommendation pivots to
 either a wrapper subagent or a tighter delegation prompt — see
-**Built-in agent concern: scope** and **recovery**.
+[**Built-in agent concern: scope**](#scope) and [**recovery**](#recovery).
 
 **Related:** [`tools`](#tools), [`model`](#model), [`mcp`](#mcp).
 
@@ -689,6 +689,6 @@ boundary.
 ## See also
 
 - README: [How It Works](../README.md#how-it-works) — pipeline architecture
-- README: [Security Posture](../README.md#security-posture)
-- `CLAUDE.md` — project conventions and JSONL data format reference
+- README: [Privacy and Security](../README.md#privacy-and-security)
+- [`CLAUDE.md`](../CLAUDE.md) — project conventions and JSONL data format reference
 - Anthropic API docs: [Pricing](https://platform.claude.com/docs/en/about-claude/pricing), [Prompt caching](https://docs.claude.com/en/docs/build-with-claude/prompt-caching)
