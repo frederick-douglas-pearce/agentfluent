@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.3.0...v0.4.0) (2026-04-30)
+
+
+### Features
+
+* **analytics:** surface total_cost_usd + avg_cost_per_invocation_usd on by_agent_type ([#200](https://github.com/frederick-douglas-pearce/agentfluent/issues/200)) ([#217](https://github.com/frederick-douglas-pearce/agentfluent/issues/217)) ([270e585](https://github.com/frederick-douglas-pearce/agentfluent/commit/270e58550dabc0d47625ddebd5a80f0229e30a8a))
+* **cli:** accept --json as alias for --format json ([#196](https://github.com/frederick-douglas-pearce/agentfluent/issues/196)) ([#212](https://github.com/frederick-douglas-pearce/agentfluent/issues/212)) ([4660c28](https://github.com/frederick-douglas-pearce/agentfluent/commit/4660c28ab2ad506f33ba2e1b47539241b9de037a))
+* **cli:** default --diagnostics on for analyze ([#202](https://github.com/frederick-douglas-pearce/agentfluent/issues/202)) ([#214](https://github.com/frederick-douglas-pearce/agentfluent/issues/214)) ([15547f1](https://github.com/frederick-douglas-pearce/agentfluent/commit/15547f12fef25c169c361db10d28dcbd4e653420))
+* **diagnostics:** populate invocation_id on contributing recommendations ([#197](https://github.com/frederick-douglas-pearce/agentfluent/issues/197)) ([#220](https://github.com/frederick-douglas-pearce/agentfluent/issues/220)) ([18e1ca4](https://github.com/frederick-douglas-pearce/agentfluent/commit/18e1ca47792c5d307dfcb5314e8ce10d60199ca5))
+* **glossary:** structured YAML source + agentfluent explain CLI ([#191](https://github.com/frederick-douglas-pearce/agentfluent/issues/191)) ([#224](https://github.com/frederick-douglas-pearce/agentfluent/issues/224)) ([ef05715](https://github.com/frederick-douglas-pearce/agentfluent/commit/ef05715f0730d04f49ce0778a2e5cb9c3b786e03))
+
+
+### Bug Fixes
+
+* **cli:** route parse warnings to stderr with WARNING prefix ([#206](https://github.com/frederick-douglas-pearce/agentfluent/issues/206)) ([#213](https://github.com/frederick-douglas-pearce/agentfluent/issues/213)) ([18248b3](https://github.com/frederick-douglas-pearce/agentfluent/commit/18248b37eefe87ea4c063705e40b94ea74d1fad5))
+* **schema:** agent_type None instead of "" for cross-cutting findings ([#207](https://github.com/frederick-douglas-pearce/agentfluent/issues/207)) ([#218](https://github.com/frederick-douglas-pearce/agentfluent/issues/218)) ([8f90cbf](https://github.com/frederick-douglas-pearce/agentfluent/commit/8f90cbf0c3dc093c3b9f66f70ba6511438313e8d))
+
 ## [0.3.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.2.0...v0.3.0) (2026-04-25)
 
 
