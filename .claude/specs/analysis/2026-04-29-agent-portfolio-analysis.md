@@ -221,11 +221,27 @@ Adding too many agents at once makes attribution impossible.
 
 ## Open questions / followups
 
-- **Why does `pm` average 999s/call?** Worth a per-invocation drill-down
-  separate from this analysis. Could be: (a) genuinely heavy PM tasks,
-  (b) wasted exploration cycles, (c) waiting on user clarification mid-
-  invocation. Currently flagged as a duration_outlier with model
-  recommendation; the model isn't necessarily the issue.
+- **Why does `pm` average 999s/call?** **Resolved by domain knowledge:**
+  most of pm's duration is user-input wait time — when the user is AFK,
+  pm sits at an `AskUserQuestion` for hours, accumulating "duration"
+  that's not agent work. When the user is responsive, pm calls finish
+  in a few minutes. The 999s mean is a measurement artifact, not a
+  performance problem. **This insight surfaces a real agentfluent
+  data-quality bug, not a pm agent problem.**
+  - Filed as **#230** — "detect and exclude user-input wait time from
+    duration metrics" (v0.5). The duration_outlier signal currently
+    produces false positives on agents that use AskUserQuestion or have
+    interactive workflows. Splitting `total_duration_ms` into
+    `active_duration_ms` + `wait_duration_ms` and using active for
+    outlier detection is the proposed fix.
+  - Composes with **#186** (outlier recalibration: mean → robust stats).
+    #186 fixes the math; #230 fixes the input. Both should land before
+    duration_outlier can be trusted.
+  - **Compelling narrative material:** "I built a tool to analyze agent
+    behavior. It told me my pm agent was 16 minutes per call — turned
+    out to be measurement artifact. Here's what we changed and why."
+    This is exactly the kind of iterative-tool-development story that
+    positions agentfluent as something that improves with use.
 - **Filtering hook-induced `permission_failure` noise.** The "blocked"
   signals from the secret-reads hook are intended behavior. Should
   agentfluent learn to recognize these and downgrade severity / hide
