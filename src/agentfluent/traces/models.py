@@ -38,6 +38,13 @@ class SubagentToolCall(BaseModel):
     ``RESULT_SUMMARY_MAX_CHARS`` constants; the model itself does not
     enforce those limits so fixtures and replay tools can construct
     untruncated instances.
+
+    ``timestamp`` is the assistant ``tool_use`` message timestamp;
+    ``result_timestamp`` is the matching user ``tool_result`` message
+    timestamp. Both Optional because: pre-trace-capture sessions, the
+    pairing miss case, and programmatically-constructed instances.
+    The pair is what enables idle-gap detection (#230) — the gap
+    between them is the per-call elapsed time observable in the JSONL.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -48,6 +55,7 @@ class SubagentToolCall(BaseModel):
     is_error: bool = False
     usage: Usage = Field(default_factory=Usage)
     timestamp: datetime | None = None
+    result_timestamp: datetime | None = None
 
 
 class RetrySequence(BaseModel):
@@ -103,6 +111,21 @@ class SubagentTrace(BaseModel):
     total_retries: int = 0
     usage: Usage = Field(default_factory=Usage)
     duration_ms: int | None = None
+    idle_gap_ms: int | None = None
+    """Sum of per-call gaps flagged as idle by the per-trace heuristic
+    in ``traces.parser._compute_idle_gap_ms`` (#230). ``None`` when no
+    paired tool calls have both timestamps; ``0`` when computable but
+    no gap met the threshold. The Claude Code JSONL has no marker for
+    the wait condition, so this is structurally a workaround — see
+    ``anthropics/claude-code#55240`` for the upstream proposal that
+    would make this unnecessary."""
+
+    active_duration_ms: int | None = None
+    """``duration_ms - idle_gap_ms`` when both are populated; ``None``
+    otherwise. Downstream consumers (e.g., outlier detection) should
+    prefer this over ``duration_ms`` to avoid attributing user-input
+    wait time to agent work."""
+
     source_file: Path | None = None
 
     model: str | None = None

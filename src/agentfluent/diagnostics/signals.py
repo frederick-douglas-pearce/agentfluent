@@ -114,12 +114,18 @@ def _extract_token_outliers(invocations: list[AgentInvocation]) -> list[Diagnost
 
 
 def _extract_duration_outliers(invocations: list[AgentInvocation]) -> list[DiagnosticSignal]:
-    """Detect invocations with unusually high duration."""
+    """Detect invocations with unusually high duration.
+
+    Uses ``active_duration_per_tool_use`` (idle gaps removed when a
+    subagent trace is linked) so user-approval wait time isn't
+    attributed to the agent. Falls back to raw ``duration_per_tool_use``
+    on invocations without trace data (#230).
+    """
     signals: list[DiagnosticSignal] = []
 
     by_type: dict[str, list[AgentInvocation]] = defaultdict(list)
     for inv in invocations:
-        if inv.duration_per_tool_use is not None:
+        if inv.active_duration_per_tool_use is not None:
             by_type[inv.agent_type.lower()].append(inv)
 
     for agent_type, group in by_type.items():
@@ -127,12 +133,14 @@ def _extract_duration_outliers(invocations: list[AgentInvocation]) -> list[Diagn
             continue
 
         values = [
-            inv.duration_per_tool_use for inv in group if inv.duration_per_tool_use is not None
+            inv.active_duration_per_tool_use
+            for inv in group
+            if inv.active_duration_per_tool_use is not None
         ]
         mean = sum(values) / len(values)
 
         for inv in group:
-            val = inv.duration_per_tool_use
+            val = inv.active_duration_per_tool_use
             if val is not None and val > mean * OUTLIER_THRESHOLD:
                 signals.append(DiagnosticSignal(
                     signal_type=SignalType.DURATION_OUTLIER,

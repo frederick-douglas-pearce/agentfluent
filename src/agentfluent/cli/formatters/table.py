@@ -232,7 +232,21 @@ def format_analysis_table(
             for inv in s.invocations:
                 tokens = format_tokens(inv.total_tokens) if inv.total_tokens else "-"
                 tools = str(inv.tool_uses) if inv.tool_uses else "-"
-                duration = f"{inv.duration_ms / 1000:.1f}s" if inv.duration_ms else "-"
+                # Display "active (wall)" when active duration is meaningfully
+                # less than wall-clock — surfaces approval-wait time without
+                # cluttering the row when no idle gap was detected.
+                if inv.duration_ms is None:
+                    duration = "-"
+                elif (
+                    inv.active_duration_ms is not None
+                    and inv.active_duration_ms < inv.duration_ms
+                ):
+                    duration = (
+                        f"{inv.active_duration_ms / 1000:.1f}s "
+                        f"({inv.duration_ms / 1000:.1f}s wall)"
+                    )
+                else:
+                    duration = f"{inv.duration_ms / 1000:.1f}s"
                 desc = truncate(inv.description, 60)
                 inv_table.add_row(
                     escape(inv.agent_type),
