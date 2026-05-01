@@ -628,6 +628,514 @@ Commit the updated `.ipynb` with its new outputs. Update the findings
 table above to reflect the new data, and update source comments next
 to each constant if the re-calibration motivates a change."""))
 
+    cells.append(md(r"""## 10 · Outlier detection — token distribution analysis
+
+**Issue:** [#186](https://github.com/frederick-douglas-pearce/agentfluent/issues/186)
+
+The current `_extract_token_outliers` and `_extract_duration_outliers`
+in `signals.py` use a single ratio-to-mean comparison
+(`OUTLIER_THRESHOLD = 2.0`):
+
+```python
+mean = sum(values) / len(values)
+if val > mean * OUTLIER_THRESHOLD:
+    emit TOKEN_OUTLIER / DURATION_OUTLIER signal
+```
+
+**Two problems with this rule:**
+
+1. **The mean is unstable under right-skew.** Token-per-tool-use
+   distributions are almost certainly right-tailed — a few large
+   invocations pull the mean up, so "Nx above mean" shifts as outliers
+   themselves enter or leave the set. The signal is self-referential.
+2. **No distribution context.** Users see "8.0x above 5,064 mean" with
+   no way to know whether that's 2σ out or 10σ out, whether the
+   distribution is heavy-tailed, or how the cluster of "normal"
+   invocations looks.
+
+**Scope of this section.** Focuses on the **token half**
+(`tokens_per_tool_use`). The duration half (`duration_per_tool_use`)
+is **deferred until #230 lands** — calibrating against
+`duration_ms` would mean fitting thresholds to wall-clock measurements
+that include user-approval wait time, defeating the purpose. Once
+#230's `active_duration_ms` is available, this section gets a
+follow-up duration analysis using that field.
+
+### Methods compared
+
+| Method | Rule | Strength | Weakness |
+|---|---|---|---|
+| Current | `val > mean × 2.0` | Simple | Mean unstable under skew |
+| Z-score | `val > mean + 2σ` | Conventional | Assumes normality; n<30 with skew unreliable |
+| IQR-based | `val > Q3 + 1.5 × IQR` | Robust to skew | Q3/IQR meaningful only at n ≥ ~10 |
+| P95-based | `val > P95(values)` | Easy to explain | Tautology at small n (P95 = top value) |
+"""))
+
+    cells.append(code("""\
+# Build per-agent-type token-per-tool-use DataFrame
+df_tok = df_inv.dropna(subset=["total_tokens", "tool_uses"]).copy()
+df_tok = df_tok[df_tok["tool_uses"] > 0]
+df_tok["tokens_per_tool_use"] = df_tok["total_tokens"] / df_tok["tool_uses"]
+
+# Restrict to agent types with enough data points for meaningful per-type stats
+agent_n = df_tok.groupby("agent_type").size()
+eligible_types = agent_n[agent_n >= 5].index.tolist()
+df_tok_eligible = df_tok[df_tok["agent_type"].isin(eligible_types)].copy()
+
+print(f"Total invocations with token data: {len(df_tok)}")
+print(f"Agent types with n ≥ 5 (eligible for per-type analysis): "
+      f"{len(eligible_types)} — {sorted(eligible_types)}")
+print(f"Eligible invocations: {len(df_tok_eligible)}")
+
+agent_n.sort_values(ascending=False)"""))
+
+    cells.append(code("""\
+# Per-agent distribution stats
+def dist_stats(s: pd.Series) -> pd.Series:
+    return pd.Series({
+        "n": len(s),
+        "mean": s.mean(),
+        "median": s.median(),
+        "std": s.std(),
+        "Q1": s.quantile(0.25),
+        "Q3": s.quantile(0.75),
+        "IQR": s.quantile(0.75) - s.quantile(0.25),
+        "P90": s.quantile(0.90),
+        "P95": s.quantile(0.95),
+        "P99": s.quantile(0.99),
+        "max": s.max(),
+        "skew": s.skew(),
+    })
+
+stats_tok = (
+    df_tok_eligible.groupby("agent_type")["tokens_per_tool_use"]
+    .apply(dist_stats)
+    .unstack()
+    .sort_values("n", ascending=False)
+)
+stats_tok.round(0)"""))
+
+    cells.append(code("""\
+# Histograms per eligible agent type with current threshold + alternatives marked
+ncols = min(2, len(eligible_types))
+nrows = (len(eligible_types) + ncols - 1) // ncols if ncols else 0
+fig, axes = plt.subplots(nrows, ncols, figsize=(12, 3 * max(nrows, 1)),
+                         squeeze=False) if nrows else (None, None)
+if axes is not None:
+    flat = axes.flat
+    for ax, agent_type in zip(flat, sorted(eligible_types,
+                                           key=lambda t: -agent_n[t])):
+        vals = df_tok_eligible[
+            df_tok_eligible["agent_type"] == agent_type
+        ]["tokens_per_tool_use"]
+        ax.hist(vals, bins=15, edgecolor="black", alpha=0.7)
+        mean = vals.mean()
+        q3 = vals.quantile(0.75)
+        iqr = q3 - vals.quantile(0.25)
+        ax.axvline(mean * 2.0, color="red", linestyle="--",
+                   label=f"current: 2×mean={mean*2:,.0f}")
+        ax.axvline(q3 + 1.5 * iqr, color="green", linestyle="--",
+                   label=f"IQR: Q3+1.5×IQR={q3+1.5*iqr:,.0f}")
+        ax.axvline(vals.quantile(0.95), color="orange", linestyle=":",
+                   label=f"P95={vals.quantile(0.95):,.0f}")
+        ax.set_xlabel("tokens_per_tool_use")
+        ax.set_ylabel("invocation count")
+        ax.set_title(f"{agent_type} (n={len(vals)})")
+        ax.legend(fontsize=8)
+    # Hide any unused axes
+    for ax in list(flat)[len(eligible_types):]:
+        ax.set_visible(False)
+    plt.tight_layout()
+    plt.show()
+else:
+    print("No eligible agent types for histograms.")"""))
+
+    cells.append(code("""\
+# Method comparison — count outliers each method flags, per agent type
+def count_outliers(values: pd.Series) -> dict:
+    if len(values) < 2:
+        return {"current": 0, "zscore_2": 0, "zscore_3": 0, "iqr_15": 0, "p95": 0}
+    mean = values.mean()
+    std = values.std()
+    q1 = values.quantile(0.25)
+    q3 = values.quantile(0.75)
+    iqr = q3 - q1
+    p95 = values.quantile(0.95)
+    return {
+        "current": int((values > mean * 2.0).sum()),
+        "zscore_2": int((values > mean + 2 * std).sum()) if std > 0 else 0,
+        "zscore_3": int((values > mean + 3 * std).sum()) if std > 0 else 0,
+        "iqr_15": int((values > q3 + 1.5 * iqr).sum()),
+        "p95": int((values > p95).sum()),
+    }
+
+method_counts = (
+    df_tok_eligible.groupby("agent_type")["tokens_per_tool_use"]
+    .apply(lambda s: pd.Series(count_outliers(s)))
+    .unstack()
+)
+method_counts["total_invocations"] = agent_n.reindex(method_counts.index)
+method_counts = method_counts.sort_values("total_invocations", ascending=False)
+method_counts"""))
+
+    cells.append(md(r"""**Decision rule.**
+
+- **Z-score** assumes normality and is unreliable at small n with right-
+  skewed data — agent token distributions are unlikely to be Gaussian.
+  De-prioritized.
+- **P95** is tautological at small n (with n=10, the top value IS the
+  P95 and always flags itself). De-prioritized for per-agent-type
+  analysis where most agents have n < 30.
+- **IQR-based** (`Q3 + 1.5 × IQR`) is the standard robust-statistics
+  choice for skewed distributions. Q3/IQR remain meaningful even at
+  modest n. **Recommended method.**
+- **Current method** still produces useful signals on this dataset
+  (low single-digit counts per agent), but the lack of distribution
+  context in the signal `detail` dict is the bigger gap — fix that
+  alongside the method change.
+
+**Phase 2 implementation (deferred to #186 Phase 2 PR):**
+
+- Migrate `_extract_token_outliers` to IQR-based threshold:
+  `val > Q3 + 1.5 × IQR` per agent type.
+- Update signal `detail` dict to include `q3_value`, `iqr_value`,
+  `p95_value`, `median_value` alongside the actual value, so
+  downstream recommendation messages can cite distribution context
+  ("3.2× above the agent's typical Q3").
+- Propagation: `aggregation.py` (any metric_range computation),
+  `correlator.py` (recommendation message templates), tests asserting
+  `detail["ratio"]`.
+- **Duration half deferred** to a follow-up cell in this section,
+  added after #230 lands and `active_duration_per_tool_use` is
+  available on `AgentInvocation`.
+
+**Caveat.** Same single-dataset limitation as Sections 1-9. The
+distribution shapes here may not generalize across contributors with
+different agent workloads. Re-run when multi-contributor data becomes
+available.
+"""))
+
+    cells.append(md(r"""## 11 · Tool-call idle-gap detection — gap distribution analysis
+
+**Issue:** [#230](https://github.com/frederick-douglas-pearce/agentfluent/issues/230)
+
+The v0.4.0 dogfood run flagged the `pm` agent at 999s/call — 16
+minutes of "duration" per invocation. Domain knowledge attributed
+this to user-input wait time. **Empirical investigation refined
+that diagnosis.**
+
+### Empirical findings (informed this section's design)
+
+1. **`AskUserQuestion` is not used in subagent traces.** Across all
+   212 subagent JSONL files in the test dataset, **0** contain a
+   `tool_use` block with `name: "AskUserQuestion"`. The original
+   issue body's "AskUserQuestion-anchored detection" approach
+   would catch zero cases.
+2. **The actual mechanism is gaps inside `tool_use → tool_result`
+   pairs.** Of 13 subagent traces longer than 10 minutes, **46%
+   have a single gap accounting for >80% of total duration.** The
+   gap-causing tools are approval-gated:
+   `mcp__github__list_issues`, `mcp__github__add_issue_comment`,
+   `Write`, `WebSearch`. The pattern is: agent calls an
+   approval-gated tool → IDE prompts user → user is AFK → tool sits
+   pending for hours.
+3. **The Claude Code JSONL has no marker for the wait condition.**
+   Inspected the giant-gap window in detail: between the `tool_use`
+   message and its matching `tool_result` message there are
+   **0 records of any kind**. Top-level keys on both messages are
+   standard (`agentId, message, parentUuid, sessionId, timestamp,
+   type, uuid, version`). Nothing indicates "awaiting user
+   approval" or "tool execution started." The wait is invisible in
+   the data format.
+
+   This is a Claude Code data-format gap. An upstream proposal that
+   approval-pending periods get explicit markers (e.g.,
+   `tool_status: "pending_user_approval"`) would replace this
+   workaround with structural detection.
+
+### Detection approach (per architect review on issue)
+
+Detect single `tool_use → tool_result` gaps that are extreme outliers
+**within their own trace**:
+
+```
+gap > max(k × median(other_gaps_in_trace), floor)
+```
+
+Self-calibrating per-trace; no dataset-wide statistics needed. A
+trace dominated by `mcp__github__*` calls has a different median
+than one dominated by fast `Read` calls — per-trace calibration
+adapts naturally.
+
+This section sweeps `k` and `floor` to pick defensible defaults.
+Architect's starting point: `k = 10`, `floor = 300_000 ms` (5 min,
+matching the prompt-cache TTL boundary).
+"""))
+
+    cells.append(code("""\
+# Walk subagent JSONL files; pair tool_use → tool_result by tool_use_id;
+# compute per-pair gap_ms.
+import json as _json
+from datetime import datetime as _dt
+from pathlib import Path as _Path
+from agentfluent.core.discovery import DEFAULT_PROJECTS_DIR as _DEFAULT
+
+_root = _Path(projects_root) if projects_root is not None else _DEFAULT
+
+def _parse_iso(s):
+    if not s:
+        return None
+    return _dt.fromisoformat(s.replace("Z", "+00:00"))
+
+def gaps_from_trace(path):
+    use_by_id = {}
+    paired = []
+    with open(path) as f:
+        for line in f:
+            try:
+                obj = _json.loads(line)
+            except Exception:
+                continue
+            ts = _parse_iso(obj.get("timestamp"))
+            content = obj.get("message", {}).get("content", [])
+            if not isinstance(content, list):
+                continue
+            for blk in content:
+                if not isinstance(blk, dict):
+                    continue
+                btype = blk.get("type")
+                if btype == "tool_use":
+                    tu_id = blk.get("id")
+                    if tu_id and ts:
+                        use_by_id[tu_id] = (blk.get("name") or "", ts)
+                elif btype == "tool_result":
+                    tu_id = blk.get("tool_use_id")
+                    if tu_id and ts and tu_id in use_by_id:
+                        tool_name, use_ts = use_by_id.pop(tu_id)
+                        gap_ms = (ts - use_ts).total_seconds() * 1000
+                        paired.append({
+                            "trace": path.name,
+                            "tool_name": tool_name,
+                            "gap_ms": gap_ms,
+                            "use_ts": use_ts,
+                            "result_ts": ts,
+                        })
+    return paired
+
+trace_paths = list(_root.glob("*/*/subagents/agent-*.jsonl"))
+print(f"Subagent trace files discovered: {len(trace_paths)}")
+
+all_gaps = []
+for p in trace_paths:
+    all_gaps.extend(gaps_from_trace(p))
+
+df_gaps = pd.DataFrame(all_gaps)
+if len(df_gaps):
+    df_gaps["gap_s"] = df_gaps["gap_ms"] / 1000
+    df_gaps["gap_min"] = df_gaps["gap_s"] / 60
+print(f"Total tool_use → tool_result pairs: {len(df_gaps)}")
+df_gaps[["gap_ms", "gap_s", "gap_min"]].describe(
+    percentiles=[0.5, 0.9, 0.95, 0.99]
+).round(2) if len(df_gaps) else "(no data)" """))
+
+    cells.append(code("""\
+# Distribution of gaps — clipped view + log-scale view
+if len(df_gaps):
+    fig, axes = plt.subplots(1, 2, figsize=(14, 4))
+    axes[0].hist(df_gaps["gap_s"].clip(upper=300), bins=60,
+                 edgecolor="black", alpha=0.8)
+    axes[0].set_xlabel("Gap (seconds, clipped at 300s)")
+    axes[0].set_ylabel("Tool-call count")
+    axes[0].set_title("Gap distribution — clipped to 300s")
+    axes[0].axvline(60, color="red", linestyle="--", alpha=0.6, label="60s")
+    axes[0].axvline(300, color="orange", linestyle="--", alpha=0.6,
+                    label="300s (prompt-cache TTL)")
+    axes[0].legend()
+
+    pos = df_gaps[df_gaps["gap_s"] > 0]["gap_s"]
+    if len(pos):
+        axes[1].hist(pos, bins=60, edgecolor="black", alpha=0.8)
+        axes[1].set_xscale("log")
+        axes[1].set_xlabel("Gap (seconds, log scale)")
+        axes[1].set_ylabel("Tool-call count")
+        axes[1].set_title("Gap distribution — log scale")
+    plt.tight_layout()
+    plt.show()
+else:
+    print("No gap data available.")"""))
+
+    cells.append(code("""\
+# Per-tool gap distribution (top tools by call count)
+if len(df_gaps):
+    top_tools = df_gaps["tool_name"].value_counts().head(8).index.tolist()
+    rows = []
+    for tn in top_tools:
+        s = df_gaps[df_gaps["tool_name"] == tn]["gap_ms"]
+        rows.append({
+            "tool": tn,
+            "n": len(s),
+            "median_s": s.median() / 1000,
+            "mean_s": s.mean() / 1000,
+            "P95_s": s.quantile(0.95) / 1000,
+            "max_s": s.max() / 1000,
+        })
+    df_per_tool = pd.DataFrame(rows).sort_values("n", ascending=False)
+    print("Per-tool gap stats (top 8 by call count):")
+    print(df_per_tool.round(2).to_string(index=False))"""))
+
+    cells.append(code("""\
+# Self-calibrating threshold sweep:
+#   gap > max(k × median(gaps_in_trace), floor)
+# Per trace, compute median; flag gaps exceeding the per-trace threshold.
+import numpy as _np
+
+def flag_gaps_per_trace(df, k, floor_ms):
+    flagged_total = 0
+    flagged_traces = {}
+    for trace, group in df.groupby("trace"):
+        gaps = group["gap_ms"].values
+        if len(gaps) < 2:
+            continue
+        med = _np.median(gaps)
+        threshold = max(k * med, floor_ms)
+        n = int((gaps > threshold).sum())
+        if n > 0:
+            flagged_total += n
+            flagged_traces[trace] = n
+    return flagged_total, flagged_traces
+
+if len(df_gaps):
+    ks = [5, 10, 15, 20]
+    floors_ms = [60_000, 120_000, 300_000, 600_000]
+    rows = []
+    for k in ks:
+        for f_ms in floors_ms:
+            n, _ = flag_gaps_per_trace(df_gaps, k, f_ms)
+            rows.append({"k": k, "floor_min": f_ms / 60_000, "n_flagged": n})
+    df_sweep = pd.DataFrame(rows).pivot(
+        index="k", columns="floor_min", values="n_flagged"
+    )
+    df_sweep.columns = [f"floor={int(c)}min" for c in df_sweep.columns]
+    print("Gaps flagged as idle (rows=k, cols=floor):")
+    print(df_sweep)"""))
+
+    cells.append(code("""\
+# Identify obviously-stuck traces (positive cases for validation):
+# total span > 10 min AND single biggest gap accounts for >50% of span.
+if len(df_gaps):
+    span_rows = []
+    for trace, group in df_gaps.groupby("trace"):
+        if len(group) < 2:
+            continue
+        span_ms = (group["result_ts"].max()
+                   - group["use_ts"].min()).total_seconds() * 1000
+        if span_ms <= 0:
+            continue
+        biggest = group["gap_ms"].max()
+        span_rows.append({
+            "trace": trace,
+            "n_pairs": len(group),
+            "span_min": span_ms / 60_000,
+            "biggest_gap_min": biggest / 60_000,
+            "biggest_share": biggest / span_ms,
+        })
+    df_traces = pd.DataFrame(span_rows).sort_values("span_min", ascending=False)
+    stuck_traces = df_traces[
+        (df_traces["span_min"] > 10) & (df_traces["biggest_share"] > 0.5)
+    ]
+    print(f"Obviously-stuck traces (span > 10 min, biggest_gap > 50% of span):")
+    print(f"  count: {len(stuck_traces)}")
+    print(stuck_traces.head(15).round(1).to_string(index=False))"""))
+
+    cells.append(code("""\
+# Validate chosen (k, floor) against the obviously-stuck set.
+# Goal: catch all stuck traces with as few false positives as possible
+# (ideally flagged gaps are concentrated on the stuck traces).
+if len(df_gaps) and len(stuck_traces):
+    chosen_k = 10
+    chosen_floor_ms = 300_000  # 5 min — prompt-cache TTL boundary
+
+    n_flagged, by_trace = flag_gaps_per_trace(df_gaps, chosen_k, chosen_floor_ms)
+    stuck_set = set(stuck_traces["trace"])
+    caught = stuck_set.intersection(by_trace.keys())
+    missed = stuck_set - caught
+    extra = set(by_trace.keys()) - stuck_set
+
+    print(f"Chosen: k={chosen_k}, floor={chosen_floor_ms/60_000:.0f} min")
+    print(f"  Total gaps flagged as idle: {n_flagged}")
+    print(f"  Traces with at least one flag: {len(by_trace)}")
+    print(f"  Stuck traces caught: {len(caught)} / {len(stuck_set)}")
+    if missed:
+        print(f"  ⚠ Stuck traces missed: {sorted(missed)}")
+    if extra:
+        print(f"  Other traces with flags (potential false positives or ")
+        print(f"     legitimate-but-shorter waits): {len(extra)}")
+        # Show a sample for inspection
+        sample = list(extra)[:5]
+        for tr in sample:
+            tr_gaps = df_gaps[df_gaps["trace"] == tr]
+            biggest = tr_gaps["gap_ms"].max() / 60_000
+            print(f"    {tr}: biggest_gap={biggest:.1f} min")"""))
+
+    cells.append(md(r"""### Findings — Section 11
+
+**Chosen values: `k = 10`, `floor = 300_000 ms` (5 min).**
+
+Validation against this dataset's 12 "obviously-stuck" traces (span
+> 10 min, biggest gap > 50% of span):
+
+- **Recall: 100%** — all 12 stuck traces are flagged at the chosen
+  values.
+- **Additional flags:** 9 other traces with at least one gap in the
+  5-12 min range — likely real partial-stuck cases, not false
+  positives.
+
+**Why `floor = 5 min`:** anchors on the prompt-cache TTL boundary, a
+meaningful operational marker (cache invalidation imposes real cost
+above this threshold regardless of cause). Below 5 min the floor
+catches normal variability in slow tools (large reads, long Bash
+invocations); above 5 min the gap is almost certainly not productive
+agent work.
+
+**Why `k = 10`:** in this dataset the per-trace median tool latency
+is small (most tool calls are sub-second), so the `floor` is the
+binding constraint and `k` has minimal effect on the sweep counts.
+**That doesn't mean `k` is dead code.** It guards forward-compatibility
+for traces with higher baseline latency (e.g., a future workflow
+heavy on long-running ML inference calls or large WebFetch tasks).
+Without `k`, a trace with a 60-second median would happily fire idle
+signals at every 5-minute gap that's still well within normal
+variability for that workload. Keeping `k = 10` future-proofs the
+heuristic without affecting present-day behavior.
+
+**Combined rule (`gap > max(k × median, floor)`)** means a gap must
+be both **much slower than this trace's normal** and **objectively
+long** to be flagged. False-positive rate against legitimate long-
+running tools is minimized.
+
+### Caveats and follow-ups
+
+- **Single-developer dataset** — same caveat as Sections 1-9. A
+  different developer's workflow (e.g., a CI environment with no
+  approval prompts) might shift the floor or k.
+- **The Claude Code JSONL format does not mark approval-pending
+  periods.** This heuristic is a workaround, not a structural
+  fix. If a future format adds `tool_status: "pending_user_approval"`
+  or similar, replace the heuristic with structural detection.
+- **As more contributor data accumulates, re-run this section.**
+  Specifically: validate the floor stays defensible at 5 min; check
+  whether the per-trace median calibration handles new tool families
+  (e.g., long-running ML inference calls) correctly.
+- **Phase 2 implementation lives in `traces/parser.py`** (per
+  architect): adds `idle_gap_ms` and `active_duration_ms` to
+  `SubagentTrace`. `AgentInvocation.active_duration_per_tool_use`
+  delegates to the trace; falls back to `duration_per_tool_use` when
+  no trace is linked (older sessions).
+- **Section 10 duration half (deferred)** picks back up after #230
+  Phase 2 ships, using `active_duration_per_tool_use` from
+  `AgentInvocation`.
+"""))
+
     nb.cells = cells
     nb.metadata["kernelspec"] = {
         "display_name": "Python 3",
