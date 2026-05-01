@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from collections.abc import Callable
 
 from agentfluent.agents.models import AgentInvocation
 from agentfluent.config.models import Severity
@@ -74,34 +75,44 @@ def _extract_error_signals(invocations: list[AgentInvocation]) -> list[Diagnosti
     return signals
 
 
-def _extract_token_outliers(invocations: list[AgentInvocation]) -> list[DiagnosticSignal]:
-    """Detect invocations with unusually high token consumption."""
+def _detect_outliers(
+    invocations: list[AgentInvocation],
+    *,
+    accessor: Callable[[AgentInvocation], float | None],
+    signal_type: SignalType,
+    format_message: Callable[[AgentInvocation, float, float], str],
+) -> list[DiagnosticSignal]:
+    """Generic per-agent-type outlier detector.
+
+    Groups invocations by agent type, computes the mean of ``accessor``
+    values per group, and emits a ``DiagnosticSignal`` for each value
+    exceeding ``mean * OUTLIER_THRESHOLD``. Callers supply a
+    ``format_message`` that receives ``(invocation, value, mean)`` and
+    returns the human-readable signal message.
+    """
     signals: list[DiagnosticSignal] = []
 
     by_type: dict[str, list[AgentInvocation]] = defaultdict(list)
     for inv in invocations:
-        if inv.tokens_per_tool_use is not None:
+        if accessor(inv) is not None:
             by_type[inv.agent_type.lower()].append(inv)
 
-    for agent_type, group in by_type.items():
+    for group in by_type.values():
         if len(group) < 2:
             continue
 
-        values = [inv.tokens_per_tool_use for inv in group if inv.tokens_per_tool_use is not None]
+        values = [v for v in (accessor(inv) for inv in group) if v is not None]
         mean = sum(values) / len(values)
 
         for inv in group:
-            val = inv.tokens_per_tool_use
+            val = accessor(inv)
             if val is not None and val > mean * OUTLIER_THRESHOLD:
                 signals.append(DiagnosticSignal(
-                    signal_type=SignalType.TOKEN_OUTLIER,
+                    signal_type=signal_type,
                     severity=Severity.WARNING,
                     agent_type=inv.agent_type,
                     invocation_id=inv.invocation_id,
-                    message=(
-                        f"Agent '{inv.agent_type}' has {val:,.0f} tokens/tool_use, "
-                        f"{val / mean:.1f}x above the {mean:,.0f} mean."
-                    ),
+                    message=format_message(inv, val, mean),
                     detail={
                         "actual_value": val,
                         "mean_value": mean,
@@ -111,6 +122,19 @@ def _extract_token_outliers(invocations: list[AgentInvocation]) -> list[Diagnost
                 ))
 
     return signals
+
+
+def _extract_token_outliers(invocations: list[AgentInvocation]) -> list[DiagnosticSignal]:
+    """Detect invocations with unusually high token consumption."""
+    return _detect_outliers(
+        invocations,
+        accessor=lambda i: i.tokens_per_tool_use,
+        signal_type=SignalType.TOKEN_OUTLIER,
+        format_message=lambda inv, val, mean: (
+            f"Agent '{inv.agent_type}' has {val:,.0f} tokens/tool_use, "
+            f"{val / mean:.1f}x above the {mean:,.0f} mean."
+        ),
+    )
 
 
 def _extract_duration_outliers(invocations: list[AgentInvocation]) -> list[DiagnosticSignal]:
@@ -119,45 +143,15 @@ def _extract_duration_outliers(invocations: list[AgentInvocation]) -> list[Diagn
     Uses ``active_duration_per_tool_use`` so user-approval wait time
     isn't attributed to the agent.
     """
-    signals: list[DiagnosticSignal] = []
-
-    by_type: dict[str, list[AgentInvocation]] = defaultdict(list)
-    for inv in invocations:
-        if inv.active_duration_per_tool_use is not None:
-            by_type[inv.agent_type.lower()].append(inv)
-
-    for agent_type, group in by_type.items():
-        if len(group) < 2:
-            continue
-
-        values = [
-            inv.active_duration_per_tool_use
-            for inv in group
-            if inv.active_duration_per_tool_use is not None
-        ]
-        mean = sum(values) / len(values)
-
-        for inv in group:
-            val = inv.active_duration_per_tool_use
-            if val is not None and val > mean * OUTLIER_THRESHOLD:
-                signals.append(DiagnosticSignal(
-                    signal_type=SignalType.DURATION_OUTLIER,
-                    severity=Severity.WARNING,
-                    agent_type=inv.agent_type,
-                    invocation_id=inv.invocation_id,
-                    message=(
-                        f"Agent '{inv.agent_type}' has {val / 1000:.1f}s/tool_use, "
-                        f"{val / mean:.1f}x above the {mean / 1000:.1f}s mean."
-                    ),
-                    detail={
-                        "actual_value": val,
-                        "mean_value": mean,
-                        "ratio": round(val / mean, 1),
-                        "tool_use_id": inv.tool_use_id,
-                    },
-                ))
-
-    return signals
+    return _detect_outliers(
+        invocations,
+        accessor=lambda i: i.active_duration_per_tool_use,
+        signal_type=SignalType.DURATION_OUTLIER,
+        format_message=lambda inv, val, mean: (
+            f"Agent '{inv.agent_type}' has {val / 1000:.1f}s/tool_use, "
+            f"{val / mean:.1f}x above the {mean / 1000:.1f}s mean."
+        ),
+    )
 
 
 def extract_signals(invocations: list[AgentInvocation]) -> list[DiagnosticSignal]:
