@@ -105,3 +105,31 @@ class AgentInvocation(BaseModel):
         if self.duration_ms is not None and self.tool_uses and self.tool_uses > 0:
             return self.duration_ms / self.tool_uses
         return None
+
+    @property
+    def idle_gap_ms(self) -> int | None:
+        """Idle time deducted to compute ``active_duration_ms``. ``None``
+        when no trace is linked or the trace couldn't compute it."""
+        if self.trace is None:
+            return None
+        return self.trace.idle_gap_ms
+
+    @property
+    def active_duration_ms(self) -> int | None:
+        """Wall-clock duration with detected idle gaps subtracted.
+
+        ``None`` when no trace is linked or the trace lacked timestamp
+        data; callers should fall back to ``duration_ms`` in that case.
+        """
+        if self.trace is None:
+            return None
+        return self.trace.active_duration_ms
+
+    @property
+    def active_duration_per_tool_use(self) -> float | None:
+        """Average active duration (ms) per tool call. Falls back to
+        ``duration_per_tool_use`` when no trace is linked."""
+        active = self.active_duration_ms
+        if active is not None and self.tool_uses and self.tool_uses > 0:
+            return active / self.tool_uses
+        return self.duration_per_tool_use

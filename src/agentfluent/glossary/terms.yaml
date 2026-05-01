@@ -145,12 +145,30 @@
     An invocation takes far longer per tool call than the agent's typical run.
   long: |
     Same threshold as `token_outlier` (`OUTLIER_THRESHOLD = 2.0x` the
-    per-agent mean) but on `duration_per_tool_use`. Often co-occurs with
-    `token_outlier`. When it appears alone, the agent is making slow tool
-    calls (network latency, large file reads) rather than over-thinking.
+    per-agent mean) but on `active_duration_per_tool_use` --
+    wall-clock duration with detected idle gaps subtracted. Often
+    co-occurs with `token_outlier`. When it appears alone, the agent
+    is making slow tool calls (network latency, large file reads)
+    rather than over-thinking.
+
+    **Active vs wall-clock duration (#230).** When a tool call sits
+    pending user approval -- the IDE prompts to allow a `Write`, an
+    MCP call, etc., and the user is AFK -- the wall-clock duration
+    inflates without any agent work happening. AgentFluent detects
+    these idle periods per-trace
+    (`gap > max(10 * median, 5 minutes)`) and exposes both
+    `duration_ms` (raw wall-clock) and `active_duration_ms` (idle
+    subtracted) on subagent traces. Outlier detection uses the
+    active variant when a trace is linked, so an agent that "looked
+    slow" only because the user was away no longer false-positive
+    flags. When no trace is linked (older sessions), detection
+    falls back to raw `duration_per_tool_use`. The Claude Code JSONL
+    has no native marker for approval-pending state -- see
+    `anthropics/claude-code#55240` for the upstream proposal that
+    would replace the heuristic with structural detection.
   example: "Agent 'pm' has 45.2s/tool_use, 3.1x above the 14.6s mean."
   severity_range: warning
-  threshold: 2.0x mean (OUTLIER_THRESHOLD)
+  threshold: 2.0x mean (OUTLIER_THRESHOLD), computed on active_duration_per_tool_use
   recommendation_target: prompt
   related: [token_outlier, model_mismatch]
 

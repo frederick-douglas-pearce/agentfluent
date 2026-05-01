@@ -22,6 +22,8 @@ populates ``retry_sequences`` / ``total_retries`` before returning.
 from __future__ import annotations
 
 import json
+import statistics
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +39,15 @@ from agentfluent.traces.models import (
     SubagentTrace,
 )
 from agentfluent.traces.retry import detect_retry_sequences
+
+# Idle-gap heuristic: a per-call (tool_use → tool_result) gap counts
+# as idle when gap_ms > max(IDLE_GAP_K * median_gap_in_trace, IDLE_GAP_FLOOR_MS).
+# Calibrated in scripts/calibration/threshold_validation.ipynb §11
+# (100% recall on 12 stuck traces in v0.4.0 dogfood data). Floor
+# anchors on the 5-min prompt-cache TTL boundary; k forward-protects
+# against future workloads with higher baseline tool latency.
+IDLE_GAP_K = 10
+IDLE_GAP_FLOOR_MS = 300_000
 
 
 def _truncate_input(input_dict: dict[str, Any] | None) -> str:
@@ -119,13 +130,13 @@ def _pair_tool_calls(messages: list[SessionMessage]) -> list[SubagentToolCall]:
     multiple ``tool_use`` blocks, so faithful per-call token attribution
     is not possible. Trace-level ``usage`` is the source of truth.
     """
-    results: dict[str, ContentBlock] = {}
+    results: dict[str, tuple[ContentBlock, datetime | None]] = {}
     for msg in messages:
         if msg.type != "user":
             continue
         for block in msg.content_blocks:
             if block.type == "tool_result" and block.tool_use_id:
-                results[block.tool_use_id] = block
+                results[block.tool_use_id] = (block, msg.timestamp)
 
     tool_calls: list[SubagentToolCall] = []
     for msg in messages:
@@ -134,9 +145,15 @@ def _pair_tool_calls(messages: list[SessionMessage]) -> list[SubagentToolCall]:
         for block in msg.content_blocks:
             if block.type != "tool_use" or block.id is None:
                 continue
-            result_block = results.get(block.id)
-            is_error = _detect_is_error(result_block) if result_block else False
-            result_text = result_block.text if result_block else None
+            entry = results.get(block.id)
+            if entry is not None:
+                result_block, result_ts = entry
+                is_error = _detect_is_error(result_block)
+                result_text = result_block.text
+            else:
+                is_error = False
+                result_text = None
+                result_ts = None
             tool_calls.append(
                 SubagentToolCall(
                     tool_name=block.name or "",
@@ -144,9 +161,42 @@ def _pair_tool_calls(messages: list[SessionMessage]) -> list[SubagentToolCall]:
                     result_summary=_truncate_result(result_text),
                     is_error=is_error,
                     timestamp=msg.timestamp,
+                    result_timestamp=result_ts,
                 ),
             )
     return tool_calls
+
+
+def _compute_idle_gap_ms(tool_calls: list[SubagentToolCall]) -> int | None:
+    """Sum per-call gaps (``tool_use`` to ``tool_result``) flagged as idle.
+
+    Returns ``None`` when fewer than two paired calls have both
+    timestamps — too little data to compute a meaningful per-trace
+    median, and a single isolated long gap can't be distinguished from
+    "this is just how slow this tool runs" without context.
+
+    The Claude Code JSONL has no structural marker for approval-pending
+    state; this heuristic is a workaround. See anthropics/claude-code#55240
+    for the upstream proposal that would replace it with structural detection.
+    """
+    gaps_ms: list[float] = []
+    for tc in tool_calls:
+        if tc.timestamp is None or tc.result_timestamp is None:
+            continue
+        delta = (tc.result_timestamp - tc.timestamp).total_seconds() * 1000
+        if delta < 0:
+            # Out-of-order timestamps (clock skew, parsing artifact);
+            # don't synthesize work that didn't happen.
+            continue
+        gaps_ms.append(delta)
+
+    if len(gaps_ms) < 2:
+        return None
+
+    median_gap = statistics.median(gaps_ms)
+    threshold = max(IDLE_GAP_K * median_gap, float(IDLE_GAP_FLOOR_MS))
+    idle_total = sum(g for g in gaps_ms if g > threshold)
+    return int(round(idle_total))
 
 
 def parse_subagent_trace(path: Path) -> SubagentTrace:
@@ -187,6 +237,7 @@ def parse_subagent_trace(path: Path) -> SubagentTrace:
         total_retries=sum(seq.attempts - 1 for seq in retry_sequences),
         usage=_sum_usage(messages),
         duration_ms=_compute_duration_ms(messages),
+        idle_gap_ms=_compute_idle_gap_ms(tool_calls),
         source_file=path.resolve(),
         model=_first_assistant_model(messages),
     )

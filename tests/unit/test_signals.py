@@ -130,6 +130,28 @@ class TestDurationOutlierDetection:
         outliers = [s for s in signals if s.signal_type == SignalType.DURATION_OUTLIER]
         assert len(outliers) == 0
 
+    def test_uses_active_duration_when_trace_present(self) -> None:
+        # #230: outlier detection should compare active_duration_per_tool_use.
+        # Without #230's fix, the third invocation's wall-clock 50000ms would
+        # flag as an outlier; with the fix, its active duration of 1000ms (the
+        # other 49 seconds were idle wait) puts it in line with peers.
+        from agentfluent.traces.models import SubagentTrace
+
+        normal_a = _inv(duration_ms=10000, tool_uses=10, agent_id="ag-1")
+        normal_b = _inv(duration_ms=10000, tool_uses=10, agent_id="ag-2")
+        slow_wall = _inv(duration_ms=50000, tool_uses=10, agent_id="ag-3")
+        slow_wall.trace = SubagentTrace(
+            agent_id="t3",
+            agent_type="pm",
+            delegation_prompt="x",
+            duration_ms=50000,
+            idle_gap_ms=40000,  # active = 10000ms, same per-tool rate as peers
+        )
+
+        signals = extract_signals([normal_a, normal_b, slow_wall])
+        outliers = [s for s in signals if s.signal_type == SignalType.DURATION_OUTLIER]
+        assert outliers == []  # Wall-clock outlier is rescued by active duration
+
 
 class TestExtractSignals:
     def test_empty_invocations(self) -> None:

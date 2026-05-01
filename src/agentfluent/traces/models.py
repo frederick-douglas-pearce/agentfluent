@@ -19,7 +19,7 @@ from datetime import datetime
 from functools import cached_property
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from agentfluent.core.session import Usage
 
@@ -38,6 +38,11 @@ class SubagentToolCall(BaseModel):
     ``RESULT_SUMMARY_MAX_CHARS`` constants; the model itself does not
     enforce those limits so fixtures and replay tools can construct
     untruncated instances.
+
+    ``timestamp`` is the assistant ``tool_use`` message timestamp;
+    ``result_timestamp`` is the matching user ``tool_result`` message
+    timestamp. Both Optional because: pre-trace-capture sessions, the
+    pairing miss case, and programmatically-constructed instances.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -48,6 +53,7 @@ class SubagentToolCall(BaseModel):
     is_error: bool = False
     usage: Usage = Field(default_factory=Usage)
     timestamp: datetime | None = None
+    result_timestamp: datetime | None = None
 
 
 class RetrySequence(BaseModel):
@@ -103,6 +109,11 @@ class SubagentTrace(BaseModel):
     total_retries: int = 0
     usage: Usage = Field(default_factory=Usage)
     duration_ms: int | None = None
+    idle_gap_ms: int | None = None
+    """Sum of per-call gaps flagged as idle by ``traces.parser._compute_idle_gap_ms``.
+    ``None`` when fewer than two paired tool calls have both timestamps;
+    ``0`` when computable but no gap met the threshold."""
+
     source_file: Path | None = None
 
     model: str | None = None
@@ -113,6 +124,20 @@ class SubagentTrace(BaseModel):
     when the agent's ``AgentConfig`` doesn't declare a model explicitly —
     which is the common case for Claude Code subagents that inherit the
     parent session's model."""
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def active_duration_ms(self) -> int | None:
+        """Wall-clock duration with detected idle gaps subtracted.
+
+        ``None`` when ``duration_ms`` or ``idle_gap_ms`` is ``None``.
+        Clamped at zero to guard against any pathological case where
+        summed idle gaps exceed wall-clock span (overlapping calls,
+        clock skew, future heuristic changes).
+        """
+        if self.duration_ms is None or self.idle_gap_ms is None:
+            return None
+        return max(self.duration_ms - self.idle_gap_ms, 0)
 
     @cached_property
     def unique_tool_names(self) -> set[str]:
