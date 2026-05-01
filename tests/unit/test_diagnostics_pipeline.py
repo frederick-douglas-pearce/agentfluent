@@ -111,25 +111,28 @@ class TestDedup:
         assert len(error_signals) >= 1
 
     def test_token_outlier_not_suppressed_by_trace_signal(self) -> None:
-        # 'pm' invocations spread such that one clears the 2x-mean outlier
-        # threshold; one of them also carries a trace. TOKEN_OUTLIER must
-        # survive the dedup pass.
-        inv_a = AgentInvocation(
+        # IQR-based detection (#186 P2) needs OUTLIER_MIN_SAMPLE peers
+        # to compute Q3/IQR. One outlier carries a trace; TOKEN_OUTLIER
+        # must survive the dedup pass alongside STUCK_PATTERN.
+        peers = [
+            AgentInvocation(
+                agent_type="pm", description=f"p{i}", prompt="x",
+                tool_use_id=f"t-peer-{i}", output_text="",
+                total_tokens=100 + 10 * i, tool_uses=1,
+            )
+            for i in range(9)
+        ]
+        with_trace = AgentInvocation(
             agent_type="pm", description="a", prompt="a",
-            tool_use_id="t1", output_text="",
-            total_tokens=100, tool_uses=1, trace=_stuck_trace(agent_type="pm"),
+            tool_use_id="t-trace", output_text="",
+            total_tokens=200, tool_uses=1, trace=_stuck_trace(agent_type="pm"),
         )
-        inv_b = AgentInvocation(
-            agent_type="pm", description="b", prompt="b",
-            tool_use_id="t2", output_text="",
-            total_tokens=100, tool_uses=1,
-        )
-        inv_c = AgentInvocation(
+        outlier_inv = AgentInvocation(
             agent_type="pm", description="c", prompt="c",
-            tool_use_id="t3", output_text="",
-            total_tokens=10_000, tool_uses=1,
+            tool_use_id="t-outlier", output_text="",
+            total_tokens=100_000, tool_uses=1,
         )
-        result = run_diagnostics([inv_a, inv_b, inv_c])
+        result = run_diagnostics([*peers, with_trace, outlier_inv])
         assert any(s.signal_type == SignalType.TOKEN_OUTLIER for s in result.signals)
         assert any(s.signal_type == SignalType.STUCK_PATTERN for s in result.signals)
 

@@ -577,7 +577,15 @@ class TestInvocationIdPropagation:
     def test_token_outlier_rule_propagates_invocation_id(self) -> None:
         sig = _signal(
             signal_type=SignalType.TOKEN_OUTLIER,
-            detail={"actual_value": 5000, "mean_value": 1000, "ratio": 5.0},
+            detail={
+                "actual_value": 5000,
+                "median_value": 1000,
+                "q3_value": 1500,
+                "iqr_value": 500,
+                "p95_value": 5000,
+                "threshold_value": 2250,
+                "excess_iqrs": 7.0,
+            },
             invocation_id="ag-outlier",
         )
         recs = correlate([sig])

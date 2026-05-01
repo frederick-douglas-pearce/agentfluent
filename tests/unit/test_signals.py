@@ -76,38 +76,51 @@ class TestErrorPatternDetection:
 
 
 class TestTokenOutlierDetection:
+    """IQR-based detection (#186 P2): val > Q3 + 1.5*IQR. Requires
+    OUTLIER_MIN_SAMPLE invocations and IQR > 0 to fire."""
+
     def test_detects_outlier(self) -> None:
+        # Spread of 50–130 tokens/use + one clear outlier at 1000.
+        # Q1≈67.5, Q3≈122.5, IQR≈55, threshold≈205 — 1000 fires.
         invocations = [
-            _inv(total_tokens=1000, tool_uses=10),  # 100 tokens/use
-            _inv(total_tokens=1000, tool_uses=10),  # 100 tokens/use
-            _inv(total_tokens=5000, tool_uses=10),  # 500 tokens/use (5x mean ~233)
-        ]
+            _inv(total_tokens=500 + 100 * i, tool_uses=10) for i in range(9)
+        ] + [_inv(total_tokens=10_000, tool_uses=10)]
         signals = extract_signals(invocations)
         outliers = [s for s in signals if s.signal_type == SignalType.TOKEN_OUTLIER]
-        assert len(outliers) >= 1
-        assert outliers[0].detail["ratio"] > 2.0
+        assert len(outliers) == 1
+        d = outliers[0].detail
+        assert d["actual_value"] == 1000.0
+        assert d["excess_iqrs"] > 1.5  # by definition of the threshold
+        assert {"q3_value", "iqr_value", "median_value", "p95_value", "threshold_value"} <= d.keys()
 
     def test_no_outlier_when_similar(self) -> None:
+        invocations = [_inv(total_tokens=1000 + 50 * i, tool_uses=10) for i in range(10)]
+        signals = extract_signals(invocations)
+        outliers = [s for s in signals if s.signal_type == SignalType.TOKEN_OUTLIER]
+        assert len(outliers) == 0
+
+    def test_below_min_sample_skipped(self) -> None:
+        # IQR detection needs OUTLIER_MIN_SAMPLE (= 4). At n=3 the rule
+        # mathematically applies but the architect review bounded
+        # detection at n>=4 for stability.
         invocations = [
-            _inv(total_tokens=1000, tool_uses=10),
-            _inv(total_tokens=1100, tool_uses=10),
-            _inv(total_tokens=900, tool_uses=10),
+            _inv(total_tokens=100, tool_uses=10),
+            _inv(total_tokens=100, tool_uses=10),
+            _inv(total_tokens=10_000, tool_uses=10),
         ]
         signals = extract_signals(invocations)
         outliers = [s for s in signals if s.signal_type == SignalType.TOKEN_OUTLIER]
         assert len(outliers) == 0
 
-    def test_single_invocation_skipped(self) -> None:
-        invocations = [_inv(total_tokens=5000, tool_uses=10)]
+    def test_zero_iqr_skipped(self) -> None:
+        # All values identical → IQR=0 → can't establish outlier.
+        invocations = [_inv(total_tokens=1000, tool_uses=10) for _ in range(8)]
         signals = extract_signals(invocations)
         outliers = [s for s in signals if s.signal_type == SignalType.TOKEN_OUTLIER]
         assert len(outliers) == 0
 
     def test_no_metadata_skipped(self) -> None:
-        invocations = [
-            _inv(total_tokens=None, tool_uses=None),
-            _inv(total_tokens=None, tool_uses=None),
-        ]
+        invocations = [_inv(total_tokens=None, tool_uses=None) for _ in range(5)]
         signals = extract_signals(invocations)
         outliers = [s for s in signals if s.signal_type == SignalType.TOKEN_OUTLIER]
         assert len(outliers) == 0
@@ -115,14 +128,13 @@ class TestTokenOutlierDetection:
 
 class TestDurationOutlierDetection:
     def test_detects_outlier(self) -> None:
+        # Spread of 1000–1800 ms/use + one outlier at 50000.
         invocations = [
-            _inv(duration_ms=10000, tool_uses=10),  # 1000ms/use
-            _inv(duration_ms=10000, tool_uses=10),  # 1000ms/use
-            _inv(duration_ms=50000, tool_uses=10),  # 5000ms/use (5x mean ~2333)
-        ]
+            _inv(duration_ms=10_000 + 1000 * i, tool_uses=10) for i in range(9)
+        ] + [_inv(duration_ms=500_000, tool_uses=10)]
         signals = extract_signals(invocations)
         outliers = [s for s in signals if s.signal_type == SignalType.DURATION_OUTLIER]
-        assert len(outliers) >= 1
+        assert len(outliers) == 1
 
     def test_single_invocation_skipped(self) -> None:
         invocations = [_inv(duration_ms=50000, tool_uses=10)]
@@ -131,26 +143,27 @@ class TestDurationOutlierDetection:
         assert len(outliers) == 0
 
     def test_uses_active_duration_when_trace_present(self) -> None:
-        # #230: outlier detection should compare active_duration_per_tool_use.
-        # Without #230's fix, the third invocation's wall-clock 50000ms would
-        # flag as an outlier; with the fix, its active duration of 1000ms (the
-        # other 49 seconds were idle wait) puts it in line with peers.
+        # #230: outlier detection compares active_duration_per_tool_use.
+        # Wall-clock 500_000ms would flag as an IQR-outlier; active
+        # duration of ~10_000ms (rest is idle wait) puts it in line.
         from agentfluent.traces.models import SubagentTrace
 
-        normal_a = _inv(duration_ms=10000, tool_uses=10, agent_id="ag-1")
-        normal_b = _inv(duration_ms=10000, tool_uses=10, agent_id="ag-2")
-        slow_wall = _inv(duration_ms=50000, tool_uses=10, agent_id="ag-3")
+        peers = [
+            _inv(duration_ms=10_000 + 1000 * i, tool_uses=10, agent_id=f"ag-{i}")
+            for i in range(9)
+        ]
+        slow_wall = _inv(duration_ms=500_000, tool_uses=10, agent_id="ag-slow")
         slow_wall.trace = SubagentTrace(
-            agent_id="t3",
+            agent_id="t-slow",
             agent_type="pm",
             delegation_prompt="x",
-            duration_ms=50000,
-            idle_gap_ms=40000,  # active = 10000ms, same per-tool rate as peers
+            duration_ms=500_000,
+            idle_gap_ms=490_000,  # active = 10_000ms, in line with peers
         )
 
-        signals = extract_signals([normal_a, normal_b, slow_wall])
+        signals = extract_signals([*peers, slow_wall])
         outliers = [s for s in signals if s.signal_type == SignalType.DURATION_OUTLIER]
-        assert outliers == []  # Wall-clock outlier is rescued by active duration
+        assert outliers == []
 
 
 class TestExtractSignals:
@@ -198,23 +211,22 @@ class TestInvocationIdPropagation:
         assert signals[0].invocation_id == "toolu_42"
 
     def test_token_outlier_signal_carries_invocation_id(self) -> None:
-        invocations = [
-            _inv(total_tokens=1000, tool_uses=10, agent_id="ag-1"),
-            _inv(total_tokens=1000, tool_uses=10, agent_id="ag-2"),
-            _inv(total_tokens=10000, tool_uses=10, agent_id="ag-3"),
+        peers = [
+            _inv(total_tokens=1000 + 100 * i, tool_uses=10, agent_id=f"ag-{i}")
+            for i in range(9)
         ]
-        signals = extract_signals(invocations)
+        outlier_inv = _inv(total_tokens=100_000, tool_uses=10, agent_id="ag-spike")
+        signals = extract_signals([*peers, outlier_inv])
         outlier = next(s for s in signals if s.signal_type == SignalType.TOKEN_OUTLIER)
-        # Outlier rule fires for ag-3 (10x the mean, well above 2x threshold).
-        assert outlier.invocation_id == "ag-3"
+        assert outlier.invocation_id == "ag-spike"
 
     def test_duration_outlier_signal_carries_invocation_id(self) -> None:
-        invocations = [
-            _inv(duration_ms=1000, tool_uses=10, agent_id="ag-1"),
-            _inv(duration_ms=1000, tool_uses=10, agent_id="ag-2"),
-            _inv(duration_ms=10000, tool_uses=10, agent_id="ag-slow"),
+        peers = [
+            _inv(duration_ms=1000 + 100 * i, tool_uses=10, agent_id=f"ag-{i}")
+            for i in range(9)
         ]
-        signals = extract_signals(invocations)
+        slow = _inv(duration_ms=100_000, tool_uses=10, agent_id="ag-slow")
+        signals = extract_signals([*peers, slow])
         outlier = next(s for s in signals if s.signal_type == SignalType.DURATION_OUTLIER)
         assert outlier.invocation_id == "ag-slow"
 

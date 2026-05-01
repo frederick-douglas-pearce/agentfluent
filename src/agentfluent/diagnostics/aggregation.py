@@ -49,37 +49,30 @@ def _aggregation_key(rec: DiagnosticRecommendation) -> AggregationKey:
 
 
 def _compute_metric_range(signals: list[DiagnosticSignal]) -> str | None:
-    """Build ``"4.9x–8.0x above 5,064 mean"`` when signals carry ratio data.
+    """Build ``"3.2×–6.8×IQR above Q3"`` when signals carry IQR-based data.
 
     Returns ``None`` for signal types without comparable scalars (retry
     counts, permission failures) so the aggregated row falls back to a
     count-only message.
     """
-    ratios: list[float] = []
-    means: list[float] = []
+    excesses: list[float] = []
     for sig in signals:
         if sig.signal_type not in _SCALAR_METRIC_SIGNALS:
             continue
-        ratio = sig.detail.get("ratio")
-        mean = sig.detail.get("mean_value")
-        if isinstance(ratio, (int, float)):
-            ratios.append(float(ratio))
-        if isinstance(mean, (int, float)):
-            means.append(float(mean))
+        excess = sig.detail.get("excess_iqrs")
+        if isinstance(excess, (int, float)):
+            excesses.append(float(excess))
 
-    if not ratios:
+    if not excesses:
         return None
 
-    lo, hi = min(ratios), max(ratios)
+    lo, hi = min(excesses), max(excesses)
     if lo == hi:
-        range_text = f"{lo:.1f}x"
+        range_text = f"{lo:.1f}×IQR"
     else:
-        range_text = f"{lo:.1f}x–{hi:.1f}x"
+        range_text = f"{lo:.1f}×–{hi:.1f}×IQR"
 
-    if means:
-        mean_ref = sum(means) / len(means)
-        return f"{range_text} above {mean_ref:,.0f} mean"
-    return f"{range_text} above mean"
+    return f"{range_text} above Q3"
 
 
 def _max_severity(recs: list[DiagnosticRecommendation]) -> Severity:

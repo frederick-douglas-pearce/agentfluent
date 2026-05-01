@@ -18,30 +18,36 @@ from agentfluent.diagnostics.models import (
 
 def _token_outlier_pair(
     agent_type: str,
-    ratio: float,
-    mean_value: float = 5064.0,
+    excess_iqrs: float,
+    q3_value: float = 5064.0,
+    iqr_value: float = 1000.0,
     target: str = "prompt",
 ) -> tuple[DiagnosticSignal, DiagnosticRecommendation]:
+    actual = q3_value + excess_iqrs * iqr_value
     signal = DiagnosticSignal(
         signal_type=SignalType.TOKEN_OUTLIER,
         severity=Severity.WARNING,
         agent_type=agent_type,
-        message=f"Agent '{agent_type}' has high token usage ({ratio:.1f}x).",
+        message=f"Agent '{agent_type}' has high token usage ({excess_iqrs:.1f}×IQR).",
         detail={
-            "ratio": ratio,
-            "actual_value": ratio * mean_value,
-            "mean_value": mean_value,
+            "excess_iqrs": excess_iqrs,
+            "actual_value": actual,
+            "median_value": q3_value - iqr_value / 2,
+            "q3_value": q3_value,
+            "iqr_value": iqr_value,
+            "p95_value": actual,
+            "threshold_value": q3_value + 1.5 * iqr_value,
         },
     )
     rec = DiagnosticRecommendation(
         target=target,
         severity=Severity.WARNING,
         message=(
-            f"Agent '{agent_type}' has {ratio * mean_value:,.0f} tokens/tool_use, "
-            f"{ratio:.1f}x above the {mean_value:,.0f} mean."
+            f"Agent '{agent_type}' has {actual:,.0f} tokens/tool_use, "
+            f"{excess_iqrs:.1f}×IQR above Q3 of {q3_value:,.0f}."
         ),
         observation=(
-            f"Agent '{agent_type}' uses {ratio * mean_value:,.0f} tokens per call."
+            f"Agent '{agent_type}' uses {actual:,.0f} tokens per call."
         ),
         reason="High token usage suggests broad exploration.",
         action="Add more specific instructions to the agent's prompt.",
@@ -134,18 +140,18 @@ class TestAggregationKey:
 class TestMetricRange:
     def test_scalar_signals_produce_range(self) -> None:
         pairs = [
-            _token_outlier_pair("Explore", 4.9, mean_value=5064.0),
-            _token_outlier_pair("Explore", 6.7, mean_value=5064.0),
-            _token_outlier_pair("Explore", 8.0, mean_value=5064.0),
-            _token_outlier_pair("Explore", 5.2, mean_value=5064.0),
+            _token_outlier_pair("Explore", 4.9),
+            _token_outlier_pair("Explore", 6.7),
+            _token_outlier_pair("Explore", 8.0),
+            _token_outlier_pair("Explore", 5.2),
         ]
         aggregated = aggregate_recommendations(pairs)
-        assert aggregated[0].metric_range == "4.9x–8.0x above 5,064 mean"
+        assert aggregated[0].metric_range == "4.9×–8.0×IQR above Q3"
 
     def test_single_invocation_shows_point_not_range(self) -> None:
         pairs = [_token_outlier_pair("pm", 3.4)]
         aggregated = aggregate_recommendations(pairs)
-        assert aggregated[0].metric_range == "3.4x above 5,064 mean"
+        assert aggregated[0].metric_range == "3.4×IQR above Q3"
 
     def test_non_scalar_signal_has_no_range(self) -> None:
         pairs = [
@@ -171,7 +177,7 @@ class TestRepresentativeMessage:
         aggregated = aggregate_recommendations(pairs)
         msg = aggregated[0].representative_message
         assert msg.startswith(
-            "token_outlier (4.9x–8.0x above 5,064 mean):",
+            "token_outlier (4.9×–8.0×IQR above Q3):",
         )
         assert "Add more specific instructions" in msg
         # Count is in its own column — must not be duplicated in the prefix.
@@ -297,7 +303,7 @@ class TestAggregationModel:
         dumped = aggregated[0].model_dump(mode="json")
         assert dumped["agent_type"] == "pm"
         assert dumped["count"] == 1
-        assert dumped["metric_range"] == "3.4x above 5,064 mean"
+        assert dumped["metric_range"] == "3.4×IQR above Q3"
 
     def test_model_instantiates_with_minimal_fields(self) -> None:
         agg = AggregatedRecommendation(
