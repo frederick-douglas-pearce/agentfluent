@@ -1,4 +1,4 @@
-"""Verbose-mode distribution context on outlier signals (#187).
+"""Verbose-mode distribution context on outlier signals.
 
 Verbose mode appends ``[median=..., P95=..., threshold=...]`` to
 TOKEN_OUTLIER and DURATION_OUTLIER messages so users can place the
@@ -69,9 +69,7 @@ class TestVerboseSignalMessage:
             threshold=14_852,
         )
         msg = _verbose_signal_message(sig)
-        # Original ratio framing preserved.
         assert "Agent 'pm' has 21,903 units" in msg
-        # Distribution context appended.
         assert "median=4,500" in msg
         assert "P95=20,000" in msg
         assert "threshold=14,852" in msg
@@ -99,7 +97,6 @@ class TestVerboseSignalMessage:
             message="Subagent 'Explore' retried Read 5 times.",
             detail={"tool_name": "Read", "attempts": 5},
         )
-        # No distribution stats in detail; verbose path doesn't synthesize them.
         assert _verbose_signal_message(sig) == sig.message
 
     def test_outlier_missing_detail_fields_passes_through(self) -> None:
@@ -148,5 +145,4 @@ class TestDiagnosticsTableRendering:
         plain_output = _render_signals(diag, verbose=False)
         assert "median=" not in plain_output
         assert "P95=" not in plain_output
-        # Original message still present.
         assert "21,903 units" in plain_output
