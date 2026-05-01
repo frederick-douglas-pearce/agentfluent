@@ -267,6 +267,41 @@ def format_analysis_table(
     console.print(f"\n[bold]Sessions analyzed:[/bold] {result.session_count}")
 
 
+def _verbose_signal_message(sig: DiagnosticSignal) -> str:
+    """Augment outlier signals with distribution context for ``--verbose``.
+
+    Token and duration outlier ``message`` already cite the actual
+    value, the IQR-distance, and Q3. Verbose adds the rest of the
+    distribution shape: median (center), P95 (tail), and the actual
+    threshold value used. Other signal types pass through unchanged
+    because their detail dicts don't carry distribution stats.
+    """
+    from agentfluent.diagnostics.models import SignalType
+
+    if sig.signal_type not in (SignalType.TOKEN_OUTLIER, SignalType.DURATION_OUTLIER):
+        return sig.message
+
+    median = sig.detail.get("median_value")
+    p95 = sig.detail.get("p95_value")
+    threshold = sig.detail.get("threshold_value")
+    if not (
+        isinstance(median, (int, float))
+        and isinstance(p95, (int, float))
+        and isinstance(threshold, (int, float))
+    ):
+        return sig.message
+
+    def fmt(v: float) -> str:
+        if sig.signal_type == SignalType.DURATION_OUTLIER:
+            return f"{v / 1000:.1f}s"
+        return f"{v:,.0f}"
+
+    return (
+        f"{sig.message} "
+        f"[median={fmt(median)}, P95={fmt(p95)}, threshold={fmt(threshold)}]"
+    )
+
+
 def _format_diagnostics_table(
     console: Console,
     diag: DiagnosticsResult,
@@ -282,11 +317,12 @@ def _format_diagnostics_table(
         sig_table.add_column("Message")
 
         for sig in diag.signals:
+            message = _verbose_signal_message(sig) if verbose else sig.message
             sig_table.add_row(
                 escape(sig.agent_type or GLOBAL_AGENT_LABEL),
                 escape(sig.signal_type.value),
                 severity_cell(sig.severity),
-                escape(sig.message),
+                escape(message),
             )
         console.print(sig_table)
 
