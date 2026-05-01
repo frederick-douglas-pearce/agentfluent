@@ -1,12 +1,9 @@
-"""Verbose Per-Invocation Detail rendering for active vs wall duration (#230).
+"""Active vs wall duration rendering in the verbose Per-Invocation table.
 
-Regression coverage for the bug spotted during PR #234 review: dual
-``X.Xs (Y.Ys wall)`` formatting was firing for invocations with
-``trace.idle_gap_ms == 0`` because ``trace.duration_ms`` (computed from
-JSONL message timestamps) and ``inv.duration_ms`` (from the parent
-``toolUseResult.totalDurationMs``) disagree by a few milliseconds even
-when no idle gap was detected. Display logic must gate on the
-authoritative ``idle_gap_ms`` signal, not on a cross-source comparison.
+Display gates on ``idle_gap_ms`` (authoritative), not on a cross-source
+comparison of ``active_duration_ms`` vs ``duration_ms`` — the two come
+from different sources (JSONL timestamps vs parent toolUseResult) and
+disagree by ~ms even when no idle was detected.
 """
 
 from __future__ import annotations
@@ -31,7 +28,6 @@ def _trace(*, duration_ms: int, idle_gap_ms: int) -> SubagentTrace:
         delegation_prompt="x",
         duration_ms=duration_ms,
         idle_gap_ms=idle_gap_ms,
-        active_duration_ms=duration_ms - idle_gap_ms,
     )
 
 
@@ -96,28 +92,26 @@ def test_idle_gap_renders_active_wall_dual_format() -> None:
 
 
 def test_zero_idle_gap_renders_bare_duration() -> None:
-    # Regression: parent duration_ms=343_500 but trace.duration_ms=343_491
-    # (a 9ms ms-level disagreement between sources). With idle_gap_ms=0,
-    # the dual format must NOT fire — anything different would be the
-    # spurious "343.5s (343.5s wall)" rendering the fix targeted.
-    parent_ms = 343_500
+    # Regression: parent duration_ms=343_500, trace.duration_ms=343_491
+    # (~9ms cross-source disagreement). With idle_gap_ms=0 the dual
+    # format must NOT fire.
     trace = SubagentTrace(
         agent_id="abc",
         agent_type="pm",
         delegation_prompt="x",
-        duration_ms=343_491,  # Slightly < parent_ms; not real idle.
+        duration_ms=343_491,
         idle_gap_ms=0,
-        active_duration_ms=343_491,
     )
     inv = _invocation(
         "pm",
         description="no-idle",
-        parent_duration_ms=parent_ms,
+        parent_duration_ms=343_500,
         trace=trace,
     )
     output = _render(_make_result([inv]))
-    assert "343.5s" in output
-    assert "wall" not in output
+    rows = [line for line in output.splitlines() if "no-idle" in line]
+    assert any("343.5s" in r for r in rows)
+    assert all("wall" not in r for r in rows)
 
 
 def test_no_trace_renders_bare_duration() -> None:
@@ -128,8 +122,9 @@ def test_no_trace_renders_bare_duration() -> None:
         trace=None,
     )
     output = _render(_make_result([inv]))
-    assert "120.0s" in output
-    assert "wall" not in output
+    rows = [line for line in output.splitlines() if "no-trace" in line]
+    assert any("120.0s" in r for r in rows)
+    assert all("wall" not in r for r in rows)
 
 
 def test_missing_duration_renders_dash() -> None:

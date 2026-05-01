@@ -89,14 +89,12 @@ class TestAgentInvocation:
 
 
 class TestActiveDuration:
-    """`active_duration_ms` and `active_duration_per_tool_use` (#230).
-
-    Active duration delegates to a linked subagent trace; falls back
-    to the raw duration when no trace is linked.
-    """
+    """`active_duration_ms` / `active_duration_per_tool_use` delegate
+    to a linked subagent trace; fall back to raw duration when no
+    trace is linked."""
 
     @staticmethod
-    def _trace(active_ms: int | None) -> object:
+    def _trace(*, idle_gap_ms: int | None) -> object:
         from agentfluent.traces.models import SubagentTrace
 
         return SubagentTrace(
@@ -104,26 +102,27 @@ class TestActiveDuration:
             agent_type="pm",
             delegation_prompt="x",
             duration_ms=120_000,
-            idle_gap_ms=120_000 - active_ms if active_ms is not None else None,
-            active_duration_ms=active_ms,
+            idle_gap_ms=idle_gap_ms,
         )
 
     def test_no_trace_falls_back_to_duration(self) -> None:
-        inv = _full_invocation()  # No trace linked
+        inv = _full_invocation()
         assert inv.active_duration_ms is None
+        assert inv.idle_gap_ms is None
         assert inv.active_duration_per_tool_use == inv.duration_per_tool_use
 
     def test_trace_with_active_duration(self) -> None:
         inv = _full_invocation()
-        inv.trace = self._trace(active_ms=60_000)  # type: ignore[assignment]
-        assert inv.active_duration_ms == 60_000
+        inv.trace = self._trace(idle_gap_ms=60_000)  # type: ignore[assignment]
+        assert inv.idle_gap_ms == 60_000
+        assert inv.active_duration_ms == 60_000  # 120_000 - 60_000
         assert inv.active_duration_per_tool_use == 60_000 / 14
 
-    def test_trace_without_active_duration_falls_back(self) -> None:
-        # Trace exists but couldn't compute active_duration_ms (e.g.,
-        # too few paired tool calls). Fall back to raw duration.
+    def test_trace_without_idle_gap_falls_back(self) -> None:
+        # Trace exists but couldn't compute idle_gap (too few paired
+        # tool calls). active_duration_ms is None → fall back to raw.
         inv = _full_invocation()
-        inv.trace = self._trace(active_ms=None)  # type: ignore[assignment]
+        inv.trace = self._trace(idle_gap_ms=None)  # type: ignore[assignment]
         assert inv.active_duration_ms is None
         assert inv.active_duration_per_tool_use == inv.duration_per_tool_use
 
@@ -136,5 +135,5 @@ class TestActiveDuration:
             tool_uses=0,
             duration_ms=5000,
         )
-        inv.trace = self._trace(active_ms=2000)  # type: ignore[assignment]
+        inv.trace = self._trace(idle_gap_ms=3000)  # type: ignore[assignment]
         assert inv.active_duration_per_tool_use is None

@@ -232,16 +232,13 @@ def format_analysis_table(
             for inv in s.invocations:
                 tokens = format_tokens(inv.total_tokens) if inv.total_tokens else "-"
                 tools = str(inv.tool_uses) if inv.tool_uses else "-"
-                # Display "active (wall)" when the trace flagged real idle
-                # time (>0 ms). Comparing inv.active_duration_ms vs
-                # inv.duration_ms directly produces false positives — the
-                # two come from different sources (trace JSONL timestamps
-                # vs parent toolUseResult.totalDurationMs) and disagree by
-                # a few ms even when no idle was detected.
-                idle_ms = inv.trace.idle_gap_ms if inv.trace is not None else None
+                # Gate on idle_gap_ms, not (active vs duration) diff:
+                # the two come from different sources (JSONL timestamps
+                # vs parent toolUseResult) and disagree by ~ms even when
+                # no idle was detected.
                 if inv.duration_ms is None:
                     duration = "-"
-                elif idle_ms and idle_ms > 0 and inv.active_duration_ms is not None:
+                elif inv.idle_gap_ms and inv.active_duration_ms is not None:
                     duration = (
                         f"{inv.active_duration_ms / 1000:.1f}s "
                         f"({inv.duration_ms / 1000:.1f}s wall)"

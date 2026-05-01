@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import statistics
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -39,21 +40,14 @@ from agentfluent.traces.models import (
 )
 from agentfluent.traces.retry import detect_retry_sequences
 
-# Idle-gap heuristic constants (#230). A per-call gap (tool_use to
-# tool_result) is flagged as idle when:
-#   gap_ms > max(IDLE_GAP_K * median(all_gaps_in_trace), IDLE_GAP_FLOOR_MS)
-#
-# Empirical justification lives in scripts/calibration/threshold_validation.ipynb
-# Section 11. At the chosen values, all 12 obviously-stuck traces in the
-# v0.4.0 dogfood dataset are caught (100% recall). Floor anchors on the
-# prompt-cache TTL boundary; k forward-protects against future workloads
-# with higher baseline tool latency.
-#
-# The Claude Code JSONL has no structural marker for approval-pending
-# state — see anthropics/claude-code#55240 for the upstream proposal
-# that would let us replace the heuristic with structural detection.
+# Idle-gap heuristic: a per-call (tool_use → tool_result) gap counts
+# as idle when gap_ms > max(IDLE_GAP_K * median_gap_in_trace, IDLE_GAP_FLOOR_MS).
+# Calibrated in scripts/calibration/threshold_validation.ipynb §11
+# (100% recall on 12 stuck traces in v0.4.0 dogfood data). Floor
+# anchors on the 5-min prompt-cache TTL boundary; k forward-protects
+# against future workloads with higher baseline tool latency.
 IDLE_GAP_K = 10
-IDLE_GAP_FLOOR_MS = 300_000  # 5 minutes
+IDLE_GAP_FLOOR_MS = 300_000
 
 
 def _truncate_input(input_dict: dict[str, Any] | None) -> str:
@@ -131,24 +125,18 @@ def _pair_tool_calls(messages: list[SessionMessage]) -> list[SubagentToolCall]:
     blocks (in user messages) by ``tool_use_id`` and build
     ``SubagentToolCall`` entries.
 
-    ``timestamp`` is sourced from the assistant ``tool_use`` message;
-    ``result_timestamp`` from the user ``tool_result`` message. The
-    pair enables per-call elapsed-time computation, which the
-    ``_compute_idle_gap_ms`` heuristic uses to flag approval-wait
-    intervals (#230).
-
     Per-call ``Usage`` is left at default zero: the JSONL shape provides
     one ``usage`` per assistant message but a single message can carry
     multiple ``tool_use`` blocks, so faithful per-call token attribution
     is not possible. Trace-level ``usage`` is the source of truth.
     """
-    results: dict[str, tuple[ContentBlock, SessionMessage]] = {}
+    results: dict[str, tuple[ContentBlock, datetime | None]] = {}
     for msg in messages:
         if msg.type != "user":
             continue
         for block in msg.content_blocks:
             if block.type == "tool_result" and block.tool_use_id:
-                results[block.tool_use_id] = (block, msg)
+                results[block.tool_use_id] = (block, msg.timestamp)
 
     tool_calls: list[SubagentToolCall] = []
     for msg in messages:
@@ -159,10 +147,9 @@ def _pair_tool_calls(messages: list[SessionMessage]) -> list[SubagentToolCall]:
                 continue
             entry = results.get(block.id)
             if entry is not None:
-                result_block, result_msg = entry
+                result_block, result_ts = entry
                 is_error = _detect_is_error(result_block)
                 result_text = result_block.text
-                result_ts = result_msg.timestamp
             else:
                 is_error = False
                 result_text = None
@@ -183,17 +170,14 @@ def _pair_tool_calls(messages: list[SessionMessage]) -> list[SubagentToolCall]:
 def _compute_idle_gap_ms(tool_calls: list[SubagentToolCall]) -> int | None:
     """Sum per-call gaps (``tool_use`` to ``tool_result``) flagged as idle.
 
-    Per-trace self-calibrating heuristic: a gap is idle when it exceeds
-    both ``IDLE_GAP_K × median(all_gaps_in_trace)`` and the absolute
-    ``IDLE_GAP_FLOOR_MS`` (whichever is larger). Returns ``None`` when
-    fewer than two paired calls have both timestamps — too little data
-    to compute a meaningful per-trace median, and a single isolated
-    long gap can't be distinguished from "this is just how slow this
-    tool runs" without context.
+    Returns ``None`` when fewer than two paired calls have both
+    timestamps — too little data to compute a meaningful per-trace
+    median, and a single isolated long gap can't be distinguished from
+    "this is just how slow this tool runs" without context.
 
-    The JSONL has no marker for the wait condition; see the module
-    docstring's reference to anthropics/claude-code#55240 for the
-    upstream proposal that would replace this with structural detection.
+    The Claude Code JSONL has no structural marker for approval-pending
+    state; this heuristic is a workaround. See anthropics/claude-code#55240
+    for the upstream proposal that would replace it with structural detection.
     """
     gaps_ms: list[float] = []
     for tc in tool_calls:
@@ -242,13 +226,6 @@ def parse_subagent_trace(path: Path) -> SubagentTrace:
     messages = parse_session(path)
     tool_calls = _pair_tool_calls(messages)
     retry_sequences = detect_retry_sequences(tool_calls)
-    duration_ms = _compute_duration_ms(messages)
-    idle_gap_ms = _compute_idle_gap_ms(tool_calls)
-    active_duration_ms = (
-        max(duration_ms - idle_gap_ms, 0)
-        if duration_ms is not None and idle_gap_ms is not None
-        else None
-    )
 
     return SubagentTrace(
         agent_id=agent_id,
@@ -259,9 +236,8 @@ def parse_subagent_trace(path: Path) -> SubagentTrace:
         total_errors=sum(1 for tc in tool_calls if tc.is_error),
         total_retries=sum(seq.attempts - 1 for seq in retry_sequences),
         usage=_sum_usage(messages),
-        duration_ms=duration_ms,
-        idle_gap_ms=idle_gap_ms,
-        active_duration_ms=active_duration_ms,
+        duration_ms=_compute_duration_ms(messages),
+        idle_gap_ms=_compute_idle_gap_ms(tool_calls),
         source_file=path.resolve(),
         model=_first_assistant_model(messages),
     )

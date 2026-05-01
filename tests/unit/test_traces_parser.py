@@ -588,26 +588,17 @@ class TestIdleGapDetection:
         trace = parse_subagent_trace(path)
         assert trace.idle_gap_ms is None
 
-    def test_active_duration_clamped_at_zero(self, write_jsonl: WriteJSONL) -> None:
-        # Defensive: if idle_gap_ms ever exceeds duration_ms (e.g., due
-        # to overlapping calls or a future heuristic change), don't
-        # report a negative active_duration.
-        from agentfluent.traces.parser import _compute_idle_gap_ms
+    def test_active_duration_clamped_at_zero(self) -> None:
+        # If idle_gap_ms ever exceeds duration_ms (overlapping calls,
+        # future heuristic change), active_duration_ms must clamp at 0
+        # rather than going negative.
+        from agentfluent.traces.models import SubagentTrace
 
-        # Real data here: assert the parser's clamp logic via a
-        # constructed scenario — durations larger than the wall span
-        # can't happen via real JSONL, so we just exercise the public
-        # parser path and confirm the property holds in practice.
-        path = write_jsonl(
-            "agent-x.jsonl",
-            [
-                _user("go", timestamp="2026-04-21T10:00:00.000Z"),
-                *self._pair("t1", "2026-04-21T10:00:01.000Z", "2026-04-21T10:00:02.000Z"),
-                *self._pair("t2", "2026-04-21T10:00:03.000Z", "2026-04-21T10:13:03.000Z"),
-            ],
+        trace = SubagentTrace(
+            agent_id="x",
+            agent_type="pm",
+            delegation_prompt="x",
+            duration_ms=1000,
+            idle_gap_ms=5000,
         )
-        trace = parse_subagent_trace(path)
-        assert trace.active_duration_ms is not None
-        assert trace.active_duration_ms >= 0
-        # Sanity: helper is callable and returns an int when 2+ paired gaps exist.
-        assert isinstance(_compute_idle_gap_ms(trace.tool_calls), int)
+        assert trace.active_duration_ms == 0

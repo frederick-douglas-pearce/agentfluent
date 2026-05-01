@@ -107,17 +107,19 @@ class AgentInvocation(BaseModel):
         return None
 
     @property
+    def idle_gap_ms(self) -> int | None:
+        """Idle time deducted to compute ``active_duration_ms``. ``None``
+        when no trace is linked or the trace couldn't compute it."""
+        if self.trace is None:
+            return None
+        return self.trace.idle_gap_ms
+
+    @property
     def active_duration_ms(self) -> int | None:
         """Wall-clock duration with detected idle gaps subtracted.
 
-        Delegates to the linked subagent trace's ``active_duration_ms``
-        when available. Returns ``None`` when no trace is linked or the
-        trace lacked the timestamp data needed to compute idle gaps —
-        callers should fall back to ``duration_ms`` in that case.
-
-        See ``traces.parser._compute_idle_gap_ms`` for the heuristic and
-        ``scripts/calibration/threshold_validation.ipynb`` Section 11
-        for the empirical justification.
+        ``None`` when no trace is linked or the trace lacked timestamp
+        data; callers should fall back to ``duration_ms`` in that case.
         """
         if self.trace is None:
             return None
@@ -125,14 +127,8 @@ class AgentInvocation(BaseModel):
 
     @property
     def active_duration_per_tool_use(self) -> float | None:
-        """Average active duration (ms) per tool call.
-
-        Prefers the trace's ``active_duration_ms`` (idle gaps removed);
-        falls back to ``duration_per_tool_use`` (raw wall-clock) when
-        no trace is linked. Outlier detection should call this rather
-        than ``duration_per_tool_use`` to avoid attributing user-input
-        wait time to agent work (#230).
-        """
+        """Average active duration (ms) per tool call. Falls back to
+        ``duration_per_tool_use`` when no trace is linked."""
         active = self.active_duration_ms
         if active is not None and self.tool_uses and self.tool_uses > 0:
             return active / self.tool_uses

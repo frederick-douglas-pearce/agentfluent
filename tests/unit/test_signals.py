@@ -145,8 +145,7 @@ class TestDurationOutlierDetection:
             agent_type="pm",
             delegation_prompt="x",
             duration_ms=50000,
-            idle_gap_ms=40000,
-            active_duration_ms=10000,  # Same active rate as the others
+            idle_gap_ms=40000,  # active = 10000ms, same per-tool rate as peers
         )
 
         signals = extract_signals([normal_a, normal_b, slow_wall])

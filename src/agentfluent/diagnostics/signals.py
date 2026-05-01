@@ -114,12 +114,10 @@ def _extract_token_outliers(invocations: list[AgentInvocation]) -> list[Diagnost
 
 
 def _extract_duration_outliers(invocations: list[AgentInvocation]) -> list[DiagnosticSignal]:
-    """Detect invocations with unusually high duration.
+    """Detect invocations with unusually high active duration per tool call.
 
-    Uses ``active_duration_per_tool_use`` (idle gaps removed when a
-    subagent trace is linked) so user-approval wait time isn't
-    attributed to the agent. Falls back to raw ``duration_per_tool_use``
-    on invocations without trace data (#230).
+    Uses ``active_duration_per_tool_use`` so user-approval wait time
+    isn't attributed to the agent.
     """
     signals: list[DiagnosticSignal] = []
 

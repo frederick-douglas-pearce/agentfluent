@@ -19,7 +19,7 @@ from datetime import datetime
 from functools import cached_property
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from agentfluent.core.session import Usage
 
@@ -43,8 +43,6 @@ class SubagentToolCall(BaseModel):
     ``result_timestamp`` is the matching user ``tool_result`` message
     timestamp. Both Optional because: pre-trace-capture sessions, the
     pairing miss case, and programmatically-constructed instances.
-    The pair is what enables idle-gap detection (#230) — the gap
-    between them is the per-call elapsed time observable in the JSONL.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -112,19 +110,9 @@ class SubagentTrace(BaseModel):
     usage: Usage = Field(default_factory=Usage)
     duration_ms: int | None = None
     idle_gap_ms: int | None = None
-    """Sum of per-call gaps flagged as idle by the per-trace heuristic
-    in ``traces.parser._compute_idle_gap_ms`` (#230). ``None`` when no
-    paired tool calls have both timestamps; ``0`` when computable but
-    no gap met the threshold. The Claude Code JSONL has no marker for
-    the wait condition, so this is structurally a workaround — see
-    ``anthropics/claude-code#55240`` for the upstream proposal that
-    would make this unnecessary."""
-
-    active_duration_ms: int | None = None
-    """``duration_ms - idle_gap_ms`` when both are populated; ``None``
-    otherwise. Downstream consumers (e.g., outlier detection) should
-    prefer this over ``duration_ms`` to avoid attributing user-input
-    wait time to agent work."""
+    """Sum of per-call gaps flagged as idle by ``traces.parser._compute_idle_gap_ms``.
+    ``None`` when fewer than two paired tool calls have both timestamps;
+    ``0`` when computable but no gap met the threshold."""
 
     source_file: Path | None = None
 
@@ -136,6 +124,20 @@ class SubagentTrace(BaseModel):
     when the agent's ``AgentConfig`` doesn't declare a model explicitly —
     which is the common case for Claude Code subagents that inherit the
     parent session's model."""
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def active_duration_ms(self) -> int | None:
+        """Wall-clock duration with detected idle gaps subtracted.
+
+        ``None`` when ``duration_ms`` or ``idle_gap_ms`` is ``None``.
+        Clamped at zero to guard against any pathological case where
+        summed idle gaps exceed wall-clock span (overlapping calls,
+        clock skew, future heuristic changes).
+        """
+        if self.duration_ms is None or self.idle_gap_ms is None:
+            return None
+        return max(self.duration_ms - self.idle_gap_ms, 0)
 
     @cached_property
     def unique_tool_names(self) -> set[str]:
