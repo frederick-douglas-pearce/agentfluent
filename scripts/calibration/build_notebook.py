@@ -658,7 +658,7 @@ if val > mean * OUTLIER_THRESHOLD:
 is **deferred until #230 lands** — calibrating against
 `duration_ms` would mean fitting thresholds to wall-clock measurements
 that include user-approval wait time, defeating the purpose. Once
-#230's `active_duration_ms` is available, this section gets a
+`active_duration_ms` from #230 is available, this section gets a
 follow-up duration analysis using that field.
 
 ### Methods compared
