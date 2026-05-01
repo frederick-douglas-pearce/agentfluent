@@ -7,6 +7,7 @@ and duration outliers.
 from __future__ import annotations
 
 import re
+import statistics
 from collections import defaultdict
 from collections.abc import Callable
 
@@ -39,7 +40,15 @@ ERROR_REGEX = re.compile(
 # Map matched text back to severity
 _KEYWORD_SEVERITY: dict[str, Severity] = {kw.lower(): sev for kw, sev in ERROR_PATTERNS}
 
-OUTLIER_THRESHOLD = 2.0
+OUTLIER_IQR_MULTIPLIER = 1.5
+"""Tukey-style IQR multiplier: ``threshold = Q3 + k * IQR``. Calibrated
+in scripts/calibration/threshold_validation.ipynb §10."""
+
+OUTLIER_MIN_SAMPLE = 4
+"""Minimum invocations per agent type before IQR detection runs.
+``statistics.quantiles(n=4)`` requires ≥ 4 data points; below that,
+Q3/IQR aren't computable. Larger samples produce more stable estimates
+but the absolute floor is set here."""
 
 
 def _extract_error_signals(invocations: list[AgentInvocation]) -> list[DiagnosticSignal]:
@@ -80,15 +89,17 @@ def _detect_outliers(
     *,
     accessor: Callable[[AgentInvocation], float | None],
     signal_type: SignalType,
-    format_message: Callable[[AgentInvocation, float, float], str],
+    format_message: Callable[[AgentInvocation, float, float, float], str],
 ) -> list[DiagnosticSignal]:
-    """Generic per-agent-type outlier detector.
+    """Generic per-agent-type outlier detector (Tukey IQR rule).
 
-    Groups invocations by agent type, computes the mean of ``accessor``
+    Groups invocations by agent type, computes Q1/Q3/IQR of ``accessor``
     values per group, and emits a ``DiagnosticSignal`` for each value
-    exceeding ``mean * OUTLIER_THRESHOLD``. Callers supply a
-    ``format_message`` that receives ``(invocation, value, mean)`` and
-    returns the human-readable signal message.
+    exceeding ``Q3 + OUTLIER_IQR_MULTIPLIER * IQR``. Skips groups where
+    ``len(group) < OUTLIER_MIN_SAMPLE`` or where ``IQR <= 0`` (degenerate
+    distribution — can't establish "outlier" sensibly).
+
+    Callers supply ``format_message(inv, value, q3, iqr)``.
     """
     signals: list[DiagnosticSignal] = []
 
@@ -98,28 +109,43 @@ def _detect_outliers(
             by_type[inv.agent_type.lower()].append(inv)
 
     for group in by_type.values():
-        if len(group) < 2:
+        if len(group) < OUTLIER_MIN_SAMPLE:
             continue
 
         values = [v for v in (accessor(inv) for inv in group) if v is not None]
-        mean = sum(values) / len(values)
+        q1, median_val, q3 = statistics.quantiles(values, n=4)
+        iqr = q3 - q1
+        if iqr <= 0:
+            continue
+        threshold = q3 + OUTLIER_IQR_MULTIPLIER * iqr
+        # P95 as auxiliary distribution context. Tautological at very
+        # small n (becomes the max), but useful at n >= ~10.
+        sorted_vals = sorted(values)
+        p95_idx = max(0, min(len(sorted_vals) - 1, int(round(0.95 * (len(sorted_vals) - 1)))))
+        p95 = sorted_vals[p95_idx]
 
         for inv in group:
             val = accessor(inv)
-            if val is not None and val > mean * OUTLIER_THRESHOLD:
-                signals.append(DiagnosticSignal(
-                    signal_type=signal_type,
-                    severity=Severity.WARNING,
-                    agent_type=inv.agent_type,
-                    invocation_id=inv.invocation_id,
-                    message=format_message(inv, val, mean),
-                    detail={
-                        "actual_value": val,
-                        "mean_value": mean,
-                        "ratio": round(val / mean, 1),
-                        "tool_use_id": inv.tool_use_id,
-                    },
-                ))
+            if val is None or val <= threshold:
+                continue
+            excess_iqrs = (val - q3) / iqr
+            signals.append(DiagnosticSignal(
+                signal_type=signal_type,
+                severity=Severity.WARNING,
+                agent_type=inv.agent_type,
+                invocation_id=inv.invocation_id,
+                message=format_message(inv, val, q3, iqr),
+                detail={
+                    "actual_value": val,
+                    "median_value": median_val,
+                    "q3_value": q3,
+                    "iqr_value": iqr,
+                    "p95_value": p95,
+                    "threshold_value": threshold,
+                    "excess_iqrs": round(excess_iqrs, 2),
+                    "tool_use_id": inv.tool_use_id,
+                },
+            ))
 
     return signals
 
@@ -130,9 +156,9 @@ def _extract_token_outliers(invocations: list[AgentInvocation]) -> list[Diagnost
         invocations,
         accessor=lambda i: i.tokens_per_tool_use,
         signal_type=SignalType.TOKEN_OUTLIER,
-        format_message=lambda inv, val, mean: (
+        format_message=lambda inv, val, q3, iqr: (
             f"Agent '{inv.agent_type}' has {val:,.0f} tokens/tool_use, "
-            f"{val / mean:.1f}x above the {mean:,.0f} mean."
+            f"{(val - q3) / iqr:.1f}×IQR above Q3 of {q3:,.0f}."
         ),
     )
 
@@ -147,9 +173,9 @@ def _extract_duration_outliers(invocations: list[AgentInvocation]) -> list[Diagn
         invocations,
         accessor=lambda i: i.active_duration_per_tool_use,
         signal_type=SignalType.DURATION_OUTLIER,
-        format_message=lambda inv, val, mean: (
+        format_message=lambda inv, val, q3, iqr: (
             f"Agent '{inv.agent_type}' has {val / 1000:.1f}s/tool_use, "
-            f"{val / mean:.1f}x above the {mean / 1000:.1f}s mean."
+            f"{(val - q3) / iqr:.1f}×IQR above Q3 of {q3 / 1000:.1f}s."
         ),
     )
 

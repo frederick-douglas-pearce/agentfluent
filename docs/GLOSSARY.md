@@ -172,21 +172,29 @@ in USD, two decimals.
 **Short:** An invocation consumes far more tokens per tool call than the agent's
 typical run.
 
-**Detail:** Triggered when `tokens_per_tool_use` exceeds `OUTLIER_THRESHOLD` x the
-per-agent-type mean. Computed across all invocations of the same agent
-type within the analyzed sessions, so two invocations of `pm` are needed
-before any can be flagged. Indicates the agent is over-fetching context,
+**Detail:** Triggered when `tokens_per_tool_use` exceeds the Tukey IQR threshold:
+`Q3 + 1.5 × IQR` of the per-agent-type distribution (where Q3 is
+the 75th percentile and IQR = Q3 - Q1). Computed across all
+invocations of the same agent type within the analyzed sessions;
+detection requires at least `OUTLIER_MIN_SAMPLE` invocations (4)
+and IQR > 0. Indicates the agent is over-fetching context,
 exploring unfocused, or being given an ambiguous prompt.
+
+The detection method is robust to right-skewed distributions
+(which agent token usage typically is), unlike a mean-ratio rule
+that gets pulled by its own outliers. The signal `detail` carries
+distribution context (`median_value`, `q3_value`, `iqr_value`,
+`p95_value`, `threshold_value`, `excess_iqrs`).
 
 **Example:**
 
 ```
-Agent 'Explore' has 40,288 tokens/tool_use, 8.0x above the 5,064 mean.
+Agent 'Explore' has 40,288 tokens/tool_use, 7.2×IQR above Q3 of 5,064.
 ```
 
 **Severity:** warning
 
-**Threshold:** 2.0x mean (OUTLIER_THRESHOLD)
+**Threshold:** Q3 + 1.5 × IQR (Tukey rule), per-agent-type
 
 **Recommendation target:** `prompt`
 
@@ -196,12 +204,13 @@ Agent 'Explore' has 40,288 tokens/tool_use, 8.0x above the 5,064 mean.
 
 **Short:** An invocation takes far longer per tool call than the agent's typical run.
 
-**Detail:** Same threshold as `token_outlier` (`OUTLIER_THRESHOLD = 2.0x` the
-per-agent mean) but on `active_duration_per_tool_use` --
-wall-clock duration with detected idle gaps subtracted. Often
-co-occurs with `token_outlier`. When it appears alone, the agent
-is making slow tool calls (network latency, large file reads)
-rather than over-thinking.
+**Detail:** Same Tukey IQR threshold as `token_outlier` (`val > Q3 + 1.5 × IQR`)
+but on `active_duration_per_tool_use` -- wall-clock duration with
+detected idle gaps subtracted. Requires at least `OUTLIER_MIN_SAMPLE`
+invocations (4) and IQR > 0 in the per-agent-type distribution.
+Often co-occurs with `token_outlier`. When it appears alone, the
+agent is making slow tool calls (network latency, large file
+reads) rather than over-thinking.
 
 **Active vs wall-clock duration (#230).** When a tool call sits
 pending user approval -- the IDE prompts to allow a `Write`, an
@@ -222,12 +231,12 @@ would replace the heuristic with structural detection.
 **Example:**
 
 ```
-Agent 'pm' has 45.2s/tool_use, 3.1x above the 14.6s mean.
+Agent 'pm' has 45.2s/tool_use, 3.1×IQR above Q3 of 14.6s.
 ```
 
 **Severity:** warning
 
-**Threshold:** 2.0x mean (OUTLIER_THRESHOLD), computed on active_duration_per_tool_use
+**Threshold:** Q3 + 1.5 × IQR (Tukey rule), computed on active_duration_per_tool_use
 
 **Recommendation target:** `prompt`
 
