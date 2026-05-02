@@ -15,7 +15,10 @@ from agentfluent.traces.models import (
     UNKNOWN_AGENT_TYPE,
     SubagentTrace,
 )
-from agentfluent.traces.parser import parse_subagent_trace
+from agentfluent.traces.parser import (
+    ERROR_DETECTION_WINDOW_CHARS,
+    parse_subagent_trace,
+)
 from tests._builders import (
     assistant_message as _assistant,
 )
@@ -272,10 +275,10 @@ class TestIsErrorDetection:
     def test_keyword_outside_leading_window_stays_false(
         self, write_jsonl: WriteJSONL,
     ) -> None:
-        # Successful Read of a file that mentions "error" / "failed" mid-text
-        # (e.g., reading signals.py itself) must not synthesize is_error.
-        # The keyword sits past the leading detection window.
-        leading_padding = "ok " * 80  # ~240 chars of benign prefix
+        # Successful Read of a file that mentions error keywords mid-text
+        # must not synthesize is_error. Padding sized off the constant so
+        # the test self-updates if the window is tuned.
+        leading_padding = "ok " * (ERROR_DETECTION_WINDOW_CHARS // 3 + 20)
         result_text = leading_padding + "definitions of error and failed live here"
         path = write_jsonl(
             "agent-x.jsonl",

@@ -49,14 +49,9 @@ from agentfluent.traces.retry import detect_retry_sequences
 IDLE_GAP_K = 10
 IDLE_GAP_FLOOR_MS = 300_000
 
-# Window (in chars) the regex fallback in ``_detect_is_error`` searches.
 # Real error messages lead with the indicator ("Error: ...", "Permission
-# denied", "Failed to ..."); successful Reads of files that mention error
-# keywords mid-text should not synthesize ``is_error=True``. The v0.5
-# dogfood (2026-05-01) showed 2,202/3,081 (71%) of tool_results lack
-# explicit ``is_error`` and routed through this fallback, producing
-# spurious ``permission_failure`` and ``tool_error_sequence`` signals on
-# successful reads of files like signals.py and the calibration notebook.
+# denied", "Failed to ..."). Bounding the regex prevents successful Reads
+# of files that mention error keywords mid-text from synthesizing is_error.
 ERROR_DETECTION_WINDOW_CHARS = 200
 
 
