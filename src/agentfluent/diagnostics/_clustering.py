@@ -45,7 +45,7 @@ class SklearnMissingError(RuntimeError):
     """Raised when clustering is invoked but scikit-learn is not installed."""
 
 
-def _fit_kmeans(
+def fit_kmeans(
     embeddings: np.ndarray,
     n_clusters: int,
     *,
@@ -62,7 +62,7 @@ def _fit_kmeans(
     return np.asarray(km.fit_predict(embeddings))
 
 
-def _cluster_embeddings(embeddings: np.ndarray, n_samples: int) -> np.ndarray:
+def cluster_embeddings(embeddings: np.ndarray, n_samples: int) -> np.ndarray:
     """Return KMeans labels from the k that scores highest on silhouette.
 
     For n < 10, silhouette's useful k-range collapses (e.g. k_upper=1) —
@@ -71,16 +71,16 @@ def _cluster_embeddings(embeddings: np.ndarray, n_samples: int) -> np.ndarray:
     refit.
     """
     if n_samples < _SMALL_N_THRESHOLD:
-        return _fit_kmeans(embeddings, _FORCED_SMALL_K)
+        return fit_kmeans(embeddings, _FORCED_SMALL_K)
 
     k_upper = min(_SILHOUETTE_K_MAX, n_samples // 5)
     if k_upper < 2:
-        return _fit_kmeans(embeddings, _FORCED_SMALL_K)
+        return fit_kmeans(embeddings, _FORCED_SMALL_K)
 
     best_labels: np.ndarray | None = None
     best_score = -1.0
     for k in range(2, k_upper + 1):
-        labels = _fit_kmeans(embeddings, k)
+        labels = fit_kmeans(embeddings, k)
         if len(set(labels)) < 2:
             continue
         score = silhouette_score(embeddings, labels)
@@ -102,12 +102,12 @@ def _cluster_embeddings(embeddings: np.ndarray, n_samples: int) -> np.ndarray:
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            return _fit_kmeans(embeddings, _FORCED_SMALL_K)
+            return fit_kmeans(embeddings, _FORCED_SMALL_K)
 
     return best_labels
 
 
-def _mean_pairwise_cosine(cluster_embeddings: np.ndarray) -> float:
+def mean_pairwise_cosine(cluster_embeddings: np.ndarray) -> float:
     """Average pairwise cosine similarity within a cluster — our cohesion proxy."""
     if len(cluster_embeddings) < 2:
         return 1.0
@@ -118,7 +118,7 @@ def _mean_pairwise_cosine(cluster_embeddings: np.ndarray) -> float:
     return float(total)
 
 
-def _top_tfidf_terms(
+def top_tfidf_terms(
     tfidf_matrix: np.ndarray,
     member_indices: list[int],
     terms: np.ndarray,
@@ -131,7 +131,7 @@ def _top_tfidf_terms(
     return [str(terms[i]) for i in top_idx if mean_array[i] > 0]
 
 
-def _group_indices_by_label(labels: np.ndarray) -> dict[int, list[int]]:
+def group_indices_by_label(labels: np.ndarray) -> dict[int, list[int]]:
     """Single-pass grouping of sample indices by their cluster label."""
     groups: dict[int, list[int]] = defaultdict(list)
     for i, lab in enumerate(labels):
@@ -139,7 +139,7 @@ def _group_indices_by_label(labels: np.ndarray) -> dict[int, list[int]]:
     return groups
 
 
-def _all_rows_identical(tfidf_matrix: np.ndarray) -> bool:
+def all_rows_identical(tfidf_matrix: np.ndarray) -> bool:
     """Detect an anomaly: byte-identical TF-IDF rows across all members.
 
     Agent-generated prompts are probabilistic; identical rows across

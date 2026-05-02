@@ -27,6 +27,11 @@ import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+# sklearn is an optional extra; module bodies that reference these
+# names are only ever called via the SKLEARN_AVAILABLE gate. Leaving
+# the names undefined when sklearn is missing matches the established
+# pattern (see _clustering.py) — function-local attribute resolution
+# means delegation.py still imports cleanly without sklearn installed.
 try:
     import numpy as np
     from sklearn.decomposition import TruncatedSVD
@@ -39,11 +44,11 @@ from agentfluent.agents.models import WRITE_TOOLS, is_general_purpose
 from agentfluent.diagnostics._clustering import (
     SKLEARN_AVAILABLE,
     SklearnMissingError,
-    _all_rows_identical,
-    _cluster_embeddings,
-    _group_indices_by_label,
-    _mean_pairwise_cosine,
-    _top_tfidf_terms,
+    all_rows_identical,
+    cluster_embeddings,
+    group_indices_by_label,
+    mean_pairwise_cosine,
+    top_tfidf_terms,
 )
 from agentfluent.diagnostics.models import DelegationSuggestion
 
@@ -163,7 +168,7 @@ def _build_single_cluster(
     all_indices = list(range(len(candidates)))
     return DelegationCluster(
         members=list(candidates),
-        top_terms=_top_tfidf_terms(tfidf_matrix, all_indices, terms),
+        top_terms=top_tfidf_terms(tfidf_matrix, all_indices, terms),
         cohesion_score=1.0,
     )
 
@@ -193,7 +198,7 @@ def cluster_delegations(
     # Anomaly: if every row is identical, surface the upstream issue and
     # return a single cluster. Clustering algorithms below would either
     # emit confusing convergence warnings or silently produce no output.
-    if _all_rows_identical(tfidf_matrix):
+    if all_rows_identical(tfidf_matrix):
         logger.warning(
             "Delegation clustering: all %d TF-IDF rows are identical — "
             "this is unusual for real agent data. Check for duplicate "
@@ -211,24 +216,24 @@ def cluster_delegations(
         with warnings.catch_warnings():
             # TruncatedSVD can raise a RuntimeWarning on near-zero
             # variance input; the degenerate-fallback in
-            # _cluster_embeddings already handles the output path.
+            # cluster_embeddings already handles the output path.
             warnings.simplefilter("ignore", category=RuntimeWarning)
             lsa = TruncatedSVD(n_components=n_components, random_state=42)
             embeddings = lsa.fit_transform(tfidf_matrix)
     else:
         embeddings = tfidf_matrix.toarray()
 
-    labels = _cluster_embeddings(embeddings, len(candidates))
-    groups = _group_indices_by_label(labels)
+    labels = cluster_embeddings(embeddings, len(candidates))
+    groups = group_indices_by_label(labels)
 
     clusters: list[DelegationCluster] = []
     for _label, member_indices in sorted(groups.items()):
         if len(member_indices) < min_cluster_size:
             continue
         members = [candidates[i] for i in member_indices]
-        cluster_embeddings = embeddings[member_indices]
-        cohesion = _mean_pairwise_cosine(cluster_embeddings)
-        top_terms = _top_tfidf_terms(tfidf_matrix, member_indices, terms)
+        member_embeddings = embeddings[member_indices]
+        cohesion = mean_pairwise_cosine(member_embeddings)
+        top_terms = top_tfidf_terms(tfidf_matrix, member_indices, terms)
         clusters.append(
             DelegationCluster(
                 members=members,
