@@ -15,7 +15,10 @@ from agentfluent.traces.models import (
     UNKNOWN_AGENT_TYPE,
     SubagentTrace,
 )
-from agentfluent.traces.parser import parse_subagent_trace
+from agentfluent.traces.parser import (
+    ERROR_DETECTION_WINDOW_CHARS,
+    parse_subagent_trace,
+)
 from tests._builders import (
     assistant_message as _assistant,
 )
@@ -268,6 +271,38 @@ class TestIsErrorDetection:
             ],
         )
         assert parse_subagent_trace(path).tool_calls[0].is_error is False
+
+    def test_keyword_outside_leading_window_stays_false(
+        self, write_jsonl: WriteJSONL,
+    ) -> None:
+        # Successful Read of a file that mentions error keywords mid-text
+        # must not synthesize is_error. Padding sized off the constant so
+        # the test self-updates if the window is tuned.
+        leading_padding = "ok " * (ERROR_DETECTION_WINDOW_CHARS // 3 + 20)
+        result_text = leading_padding + "definitions of error and failed live here"
+        path = write_jsonl(
+            "agent-x.jsonl",
+            [
+                _user("go"),
+                _assistant([_tool_use("t1", "Read")]),
+                _user([_tool_result("t1", result_text)]),
+            ],
+        )
+        assert parse_subagent_trace(path).tool_calls[0].is_error is False
+
+    def test_short_error_with_leading_keyword_fires(
+        self, write_jsonl: WriteJSONL,
+    ) -> None:
+        # Real error messages lead with the indicator — must still fire.
+        path = write_jsonl(
+            "agent-x.jsonl",
+            [
+                _user("go"),
+                _assistant([_tool_use("t1", "Bash")]),
+                _user([_tool_result("t1", "Error: command not found: foo")]),
+            ],
+        )
+        assert parse_subagent_trace(path).tool_calls[0].is_error is True
 
 
 class TestUsageAggregation:
