@@ -36,6 +36,7 @@ import re
 from agentfluent.config.models import Severity
 from agentfluent.diagnostics.models import DiagnosticSignal, SignalType
 from agentfluent.traces.models import (
+    RESULT_SUMMARY_MAX_CHARS,
     RetrySequence,
     SubagentToolCall,
     SubagentTrace,
@@ -56,6 +57,37 @@ PERMISSION_REGEX = re.compile(
     "|".join(re.escape(k) for k in _PERMISSION_KEYWORDS),
     re.IGNORECASE,
 )
+
+# Line-number prefix on the first line of tool output (#231):
+#  - Read uses ``<n>\t<content>``
+#  - Grep uses ``<n>:<content>`` (or ``<file>:<n>:<content>``)
+# A successful read of source code that incidentally contains a
+# permission keyword (e.g., ``signals.py``'s ``ERROR_PATTERNS`` listing
+# "blocked", "permission denied") would otherwise emit a false
+# PERMISSION_FAILURE. Real read/grep errors don't carry line numbers.
+_LINE_NUMBERED_RESULT = re.compile(r"^\s*\d+[\t:]")
+
+
+def _is_false_positive_denial(result_summary: str) -> bool:
+    """Skip PERMISSION_FAILURE emission when the keyword match is
+    structurally indistinguishable from successful file content (#231).
+
+    Two empirically-grounded indicators:
+
+    1. Line-number prefix on the first line — Claude Code's Read tool's
+       output format. Real error messages don't have line numbers.
+    2. Result truncated at ``RESULT_SUMMARY_MAX_CHARS`` — the original
+       was at least 500 chars, far longer than typical denial messages
+       and consistent with file content.
+
+    Both fail open (suppression rather than spurious emission), matching
+    the trustworthiness goal: rather noise than false denials.
+    """
+    if _LINE_NUMBERED_RESULT.search(result_summary):
+        return True
+    if len(result_summary) >= RESULT_SUMMARY_MAX_CHARS:
+        return True
+    return False
 
 # Cap on the `detail.tool_calls` evidence list. The true count lives in
 # the sibling `error_count` / `retry_count` / `stuck_count` detail key.
@@ -108,6 +140,8 @@ def _extract_permission_failures(
     for i, call in enumerate(trace.tool_calls):
         match = PERMISSION_REGEX.search(call.result_summary)
         if match is None:
+            continue
+        if _is_false_positive_denial(call.result_summary):
             continue
         matches.append((i, call, match.group(0).lower()))
 
