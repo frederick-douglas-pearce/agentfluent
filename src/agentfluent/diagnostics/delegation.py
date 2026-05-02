@@ -24,28 +24,50 @@ from __future__ import annotations
 import logging
 import re
 import warnings
-from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 try:
     import numpy as np
-    from sklearn.cluster import KMeans
     from sklearn.decomposition import TruncatedSVD
     from sklearn.feature_extraction.text import TfidfVectorizer
-    from sklearn.metrics import silhouette_score
     from sklearn.metrics.pairwise import cosine_similarity
-
-    SKLEARN_AVAILABLE = True
 except ImportError:  # pragma: no cover — exercised via the install-path test
-    SKLEARN_AVAILABLE = False
+    pass
 
 from agentfluent.agents.models import WRITE_TOOLS, is_general_purpose
+from agentfluent.diagnostics._clustering import (
+    SKLEARN_AVAILABLE,
+    SklearnMissingError,
+    _all_rows_identical,
+    _cluster_embeddings,
+    _group_indices_by_label,
+    _mean_pairwise_cosine,
+    _top_tfidf_terms,
+)
 from agentfluent.diagnostics.models import DelegationSuggestion
 
 if TYPE_CHECKING:
     from agentfluent.agents.models import AgentInvocation
     from agentfluent.config.models import AgentConfig
+
+# Re-exported from _clustering so existing import paths keep working
+# (e.g., ``from agentfluent.diagnostics.delegation import SKLEARN_AVAILABLE``,
+# ``SklearnMissingError``, and ``monkeypatch.setattr(delegation, "SKLEARN_AVAILABLE", ...)``).
+__all__ = [
+    "DEFAULT_MIN_CLUSTER_SIZE",
+    "DEFAULT_MIN_SIMILARITY",
+    "MIN_TEXT_TOKENS",
+    "MODEL_HAIKU",
+    "MODEL_OPUS",
+    "MODEL_SONNET",
+    "SKLEARN_AVAILABLE",
+    "DelegationCluster",
+    "SklearnMissingError",
+    "cluster_delegations",
+    "generate_draft",
+    "suggest_delegations",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -67,11 +89,6 @@ MIN_TEXT_TOKENS = 50
 LSA_COMPONENTS = 50
 DEFAULT_MIN_CLUSTER_SIZE = 5
 DEFAULT_MIN_SIMILARITY = 0.7
-_SILHOUETTE_K_MAX = 10        # upper bound on silhouette-selected k
-_SMALL_N_THRESHOLD = 10       # below this, force k=2 without silhouette
-_FORCED_SMALL_K = 2
-_KMEANS_RANDOM_STATE = 42     # default seed for reproducible clustering
-_KMEANS_N_INIT = 10           # KMeans restarts; higher resists bad local minima
 # Confidence tier boundaries: calibrated against two real-world
 # datasets (agentfluent: 5 clusters, cohesion 0.26–0.46; codefluent:
 # 2 clusters, cohesion 0.16–0.31) in the #167 investigation. Clusters
@@ -88,7 +105,6 @@ _TOOL_READ_ONLY = frozenset(
     {"Read", "Grep", "Glob", "WebFetch", "WebSearch", "LS"},
 )
 _HEAVY_TOKEN_THRESHOLD = 20_000
-_TOP_TERMS_COUNT = 5
 _PROMPT_BODY_SNIPPET_CHARS = 500
 
 # Model tiers for draft generation. Kept as module constants so later
@@ -96,10 +112,6 @@ _PROMPT_BODY_SNIPPET_CHARS = 500
 MODEL_HAIKU = "claude-haiku-4-5"
 MODEL_SONNET = "claude-sonnet-4-6"
 MODEL_OPUS = "claude-opus-4-7"
-
-
-class SklearnMissingError(RuntimeError):
-    """Raised when clustering is invoked but scikit-learn is not installed."""
 
 
 @dataclass
@@ -138,125 +150,6 @@ def _filter_candidates(
         if is_general_purpose(inv.agent_type)
         and _combined_text_tokens(inv) >= MIN_TEXT_TOKENS
     ]
-
-
-def _fit_kmeans(
-    embeddings: np.ndarray,
-    n_clusters: int,
-    *,
-    random_state: int = _KMEANS_RANDOM_STATE,
-    n_init: int = _KMEANS_N_INIT,
-) -> np.ndarray:
-    """Fit KMeans and return labels as a concrete ndarray.
-
-    Thin wrapper that fixes the ``random_state`` / ``n_init`` defaults
-    (both tunable via kwargs) and converts sklearn's ``Any``-typed
-    ``fit_predict`` return value to an ndarray so mypy stays strict.
-    """
-    km = KMeans(n_clusters=n_clusters, random_state=random_state, n_init=n_init)
-    return np.asarray(km.fit_predict(embeddings))
-
-
-def _cluster_embeddings(embeddings: np.ndarray, n_samples: int) -> np.ndarray:
-    """Return KMeans labels from the k that scores highest on silhouette.
-
-    For n < 10, silhouette's useful k-range collapses (e.g. k_upper=1) —
-    force k=2 and do a single fit. Otherwise, sweep k and keep the
-    labels from the best-scoring fit so we avoid a redundant final-k
-    refit.
-    """
-    if n_samples < _SMALL_N_THRESHOLD:
-        return _fit_kmeans(embeddings, _FORCED_SMALL_K)
-
-    k_upper = min(_SILHOUETTE_K_MAX, n_samples // 5)
-    if k_upper < 2:
-        return _fit_kmeans(embeddings, _FORCED_SMALL_K)
-
-    best_labels: np.ndarray | None = None
-    best_score = -1.0
-    for k in range(2, k_upper + 1):
-        labels = _fit_kmeans(embeddings, k)
-        if len(set(labels)) < 2:
-            continue
-        score = silhouette_score(embeddings, labels)
-        if score > best_score:
-            best_score = score
-            best_labels = labels
-
-    # Degenerate fallback: every k collapsed to a single cluster. Rare,
-    # but possible with near-identical embeddings that survived row
-    # de-dup but lose variance after LSA. Log it so the anomaly is
-    # observable, then force k=2 and suppress the resulting
-    # convergence warning.
-    if best_labels is None:
-        logger.info(
-            "KMeans produced no multi-cluster solution for %d samples; "
-            "falling back to k=2. Input may have near-zero variance "
-            "after TF-IDF + LSA reduction.",
-            n_samples,
-        )
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            return _fit_kmeans(embeddings, _FORCED_SMALL_K)
-
-    return best_labels
-
-
-def _mean_pairwise_cosine(cluster_embeddings: np.ndarray) -> float:
-    """Average pairwise cosine similarity within a cluster — our cohesion proxy."""
-    if len(cluster_embeddings) < 2:
-        return 1.0
-    sim = cosine_similarity(cluster_embeddings)
-    # Exclude the diagonal (self-sim=1) to avoid biasing toward 1.0.
-    n = sim.shape[0]
-    total = (sim.sum() - n) / (n * n - n)
-    return float(total)
-
-
-def _top_tfidf_terms(
-    tfidf_matrix: np.ndarray,
-    member_indices: list[int],
-    terms: np.ndarray,
-    top_n: int = _TOP_TERMS_COUNT,
-) -> list[str]:
-    member_vecs = tfidf_matrix[member_indices]
-    mean_scores = member_vecs.mean(axis=0)
-    mean_array = np.asarray(mean_scores).ravel()
-    top_idx = mean_array.argsort()[::-1][:top_n]
-    return [str(terms[i]) for i in top_idx if mean_array[i] > 0]
-
-
-def _group_indices_by_label(labels: np.ndarray) -> dict[int, list[int]]:
-    """Single-pass grouping of sample indices by their cluster label."""
-    groups: dict[int, list[int]] = defaultdict(list)
-    for i, lab in enumerate(labels):
-        groups[int(lab)].append(i)
-    return groups
-
-
-def _all_rows_identical(tfidf_matrix: np.ndarray) -> bool:
-    """Detect an anomaly: byte-identical TF-IDF rows across all members.
-
-    Agent-generated prompts are probabilistic; identical rows across
-    multiple invocations is very unlikely in real data. When it does
-    happen, it usually points upstream — duplicate session records,
-    an invocation-extraction bug, or a parent agent producing
-    non-probabilistic output. Detecting this case lets us emit a clear
-    warning instead of silently producing zero clusters or sklearn
-    convergence noise.
-
-    Densifies once and compares rows to row 0 with a vectorized numpy
-    equality check. A single ``toarray()`` + broadcast is ~O(n × features);
-    faster and more predictable than a row-by-row densify loop, and
-    avoids sparse-sparse ``!=`` short-circuit quirks across scipy
-    versions.
-    """
-    if tfidf_matrix.shape[0] <= 1:
-        return True
-    # sklearn TfidfVectorizer returns a scipy sparse matrix, not a
-    # numpy ndarray — no type stubs for scipy.sparse in this project.
-    dense = tfidf_matrix.toarray()  # type: ignore[attr-defined]
-    return bool((dense == dense[0]).all())
 
 
 def _build_single_cluster(
