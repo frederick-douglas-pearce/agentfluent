@@ -269,6 +269,38 @@ class TestIsErrorDetection:
         )
         assert parse_subagent_trace(path).tool_calls[0].is_error is False
 
+    def test_keyword_outside_leading_window_stays_false(
+        self, write_jsonl: WriteJSONL,
+    ) -> None:
+        # Successful Read of a file that mentions "error" / "failed" mid-text
+        # (e.g., reading signals.py itself) must not synthesize is_error.
+        # The keyword sits past the leading detection window.
+        leading_padding = "ok " * 80  # ~240 chars of benign prefix
+        result_text = leading_padding + "definitions of error and failed live here"
+        path = write_jsonl(
+            "agent-x.jsonl",
+            [
+                _user("go"),
+                _assistant([_tool_use("t1", "Read")]),
+                _user([_tool_result("t1", result_text)]),
+            ],
+        )
+        assert parse_subagent_trace(path).tool_calls[0].is_error is False
+
+    def test_short_error_with_leading_keyword_fires(
+        self, write_jsonl: WriteJSONL,
+    ) -> None:
+        # Real error messages lead with the indicator — must still fire.
+        path = write_jsonl(
+            "agent-x.jsonl",
+            [
+                _user("go"),
+                _assistant([_tool_use("t1", "Bash")]),
+                _user([_tool_result("t1", "Error: command not found: foo")]),
+            ],
+        )
+        assert parse_subagent_trace(path).tool_calls[0].is_error is True
+
 
 class TestUsageAggregation:
     def test_sums_across_assistants(self, write_jsonl: WriteJSONL) -> None:
