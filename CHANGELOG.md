@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.5.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.4.0...v0.5.0) (2026-05-02)
+
+
+### Features
+
+* **agents:** add tester agent for fixing existing pytest failures ([#228](https://github.com/frederick-douglas-pearce/agentfluent/issues/228)) ([09c62d7](https://github.com/frederick-douglas-pearce/agentfluent/commit/09c62d7e618d0229177805fbc3c74c7c60ccb89d))
+* **cli:** distribution context on outlier signals under --verbose ([#187](https://github.com/frederick-douglas-pearce/agentfluent/issues/187)) ([#237](https://github.com/frederick-douglas-pearce/agentfluent/issues/237)) ([88fd9e9](https://github.com/frederick-douglas-pearce/agentfluent/commit/88fd9e9f48bd6fe8b1ee48a04f11c81ffd796fc4))
+* **diagnostics:** subtract idle gaps from duration for outlier detection ([#230](https://github.com/frederick-douglas-pearce/agentfluent/issues/230)) ([#234](https://github.com/frederick-douglas-pearce/agentfluent/issues/234)) ([d4ba779](https://github.com/frederick-douglas-pearce/agentfluent/commit/d4ba7799f6e74e67f38a1d6f84a2be078bb9e4f6))
+* **signals:** IQR-based outlier detection ([#186](https://github.com/frederick-douglas-pearce/agentfluent/issues/186)) + extractor consolidation ([#235](https://github.com/frederick-douglas-pearce/agentfluent/issues/235)) ([#236](https://github.com/frederick-douglas-pearce/agentfluent/issues/236)) ([c5fdc80](https://github.com/frederick-douglas-pearce/agentfluent/commit/c5fdc8045fe7681d7cb156082e690d01596d149f))
+
+
+### Bug Fixes
+
+* **diagnostics:** bound is_error regex fallback to leading 200 chars ([#238](https://github.com/frederick-douglas-pearce/agentfluent/issues/238)) ([#240](https://github.com/frederick-douglas-pearce/agentfluent/issues/240)) ([a9dee60](https://github.com/frederick-douglas-pearce/agentfluent/commit/a9dee60032e61d4519b379cf932ad7c96d8b38f5))
+* **diagnostics:** filter PERMISSION_FAILURE false positives ([#231](https://github.com/frederick-douglas-pearce/agentfluent/issues/231)) ([#239](https://github.com/frederick-douglas-pearce/agentfluent/issues/239)) ([5afe6cf](https://github.com/frederick-douglas-pearce/agentfluent/commit/5afe6cfab79700555d8fbe2f195c24a6f5c77631))
+
 ## [0.4.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.3.0...v0.4.0) (2026-04-30)
 
 
