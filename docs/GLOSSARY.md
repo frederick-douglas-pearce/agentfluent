@@ -327,6 +327,14 @@ single config change ("grant tool X"). Cross-cuts with
 the remediation surfaces are different (tool config vs. prompt
 fallback).
 
+**False-positive filter.** Two structural patterns suppress emission
+even when the keyword matches: a leading line-number prefix
+(`<n>\t...` from Read or `<n>:...` from Grep — successful tool
+output where the keyword appears in source code, not as an error),
+and a result truncated at the 500-char summary cap (file content,
+not a denial message). Both fail open — preferring suppression to
+spurious denials.
+
 **Example:**
 
 ```

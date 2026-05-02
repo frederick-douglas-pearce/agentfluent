@@ -36,6 +36,7 @@ import re
 from agentfluent.config.models import Severity
 from agentfluent.diagnostics.models import DiagnosticSignal, SignalType
 from agentfluent.traces.models import (
+    RESULT_SUMMARY_MAX_CHARS,
     RetrySequence,
     SubagentToolCall,
     SubagentTrace,
@@ -56,6 +57,19 @@ PERMISSION_REGEX = re.compile(
     "|".join(re.escape(k) for k in _PERMISSION_KEYWORDS),
     re.IGNORECASE,
 )
+
+# Match a leading line-number prefix from successful Read (``<n>\t``) or
+# Grep (``<n>:``) output. Permission-keyword hits inside such results
+# are file content, not error messages.
+_LINE_NUMBERED_RESULT = re.compile(r"^\s*\d+[\t:]")
+
+
+def _is_false_positive_denial(result_summary: str) -> bool:
+    """True when a permission keyword in ``result_summary`` is structurally
+    file content (line-numbered Read/Grep output, or truncated to the cap)."""
+    if _LINE_NUMBERED_RESULT.match(result_summary):
+        return True
+    return len(result_summary) >= RESULT_SUMMARY_MAX_CHARS
 
 # Cap on the `detail.tool_calls` evidence list. The true count lives in
 # the sibling `error_count` / `retry_count` / `stuck_count` detail key.
@@ -108,6 +122,8 @@ def _extract_permission_failures(
     for i, call in enumerate(trace.tool_calls):
         match = PERMISSION_REGEX.search(call.result_summary)
         if match is None:
+            continue
+        if _is_false_positive_denial(call.result_summary):
             continue
         matches.append((i, call, match.group(0).lower()))
 
