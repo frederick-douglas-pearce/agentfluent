@@ -58,36 +58,18 @@ PERMISSION_REGEX = re.compile(
     re.IGNORECASE,
 )
 
-# Line-number prefix on the first line of tool output (#231):
-#  - Read uses ``<n>\t<content>``
-#  - Grep uses ``<n>:<content>`` (or ``<file>:<n>:<content>``)
-# A successful read of source code that incidentally contains a
-# permission keyword (e.g., ``signals.py``'s ``ERROR_PATTERNS`` listing
-# "blocked", "permission denied") would otherwise emit a false
-# PERMISSION_FAILURE. Real read/grep errors don't carry line numbers.
+# Match a leading line-number prefix from successful Read (``<n>\t``) or
+# Grep (``<n>:``) output. Permission-keyword hits inside such results
+# are file content, not error messages.
 _LINE_NUMBERED_RESULT = re.compile(r"^\s*\d+[\t:]")
 
 
 def _is_false_positive_denial(result_summary: str) -> bool:
-    """Skip PERMISSION_FAILURE emission when the keyword match is
-    structurally indistinguishable from successful file content (#231).
-
-    Two empirically-grounded indicators:
-
-    1. Line-number prefix on the first line — Claude Code's Read tool's
-       output format. Real error messages don't have line numbers.
-    2. Result truncated at ``RESULT_SUMMARY_MAX_CHARS`` — the original
-       was at least 500 chars, far longer than typical denial messages
-       and consistent with file content.
-
-    Both fail open (suppression rather than spurious emission), matching
-    the trustworthiness goal: rather noise than false denials.
-    """
-    if _LINE_NUMBERED_RESULT.search(result_summary):
+    """True when a permission keyword in ``result_summary`` is structurally
+    file content (line-numbered Read/Grep output, or truncated to the cap)."""
+    if _LINE_NUMBERED_RESULT.match(result_summary):
         return True
-    if len(result_summary) >= RESULT_SUMMARY_MAX_CHARS:
-        return True
-    return False
+    return len(result_summary) >= RESULT_SUMMARY_MAX_CHARS
 
 # Cap on the `detail.tool_calls` evidence list. The true count lives in
 # the sibling `error_count` / `retry_count` / `stuck_count` detail key.

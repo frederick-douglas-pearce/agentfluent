@@ -1,9 +1,12 @@
 """Tests for trace-level signal extraction."""
 
+import pytest
+
 from agentfluent.config.models import Severity
 from agentfluent.diagnostics.models import SignalType
 from agentfluent.diagnostics.trace_signals import extract_trace_signals
 from agentfluent.traces.models import (
+    RESULT_SUMMARY_MAX_CHARS,
     RetrySequence,
     SubagentToolCall,
     SubagentTrace,
@@ -132,54 +135,39 @@ class TestPermissionFailure:
 
 
 class TestPermissionFailureFalsePositiveFilter:
-    """#231: skip emission when the keyword match is structurally
-    indistinguishable from successful file content. Two indicators:
-    line-number prefix (Claude Code's Read format) and result
-    truncated at RESULT_SUMMARY_MAX_CHARS."""
+    """Suppress emission on Read/Grep output that incidentally matches a keyword."""
 
     def test_line_numbered_read_does_not_fire(self) -> None:
-        # Successful Read of signals.py — first line is "1\t<content>".
-        # The full file mentions "blocked" in ERROR_PATTERNS and would
-        # otherwise emit a false PERMISSION_FAILURE.
         result = (
             '1\t"""Behavior signal extraction from agent invocations."""\n'
             '2\t\n'
             '3\tfrom agentfluent.diagnostics.signals import "blocked" keyword'
         )
-        trace = _trace(calls=[_tc(tool="Read", res=result, err=True)])
+        trace = _trace(calls=[_tc(tool="Read", res=result, err=False)])
         signals = extract_trace_signals(trace)
         perms = [s for s in signals if s.signal_type == SignalType.PERMISSION_FAILURE]
         assert perms == []
 
     def test_truncated_long_result_does_not_fire(self) -> None:
-        # Result reaching RESULT_SUMMARY_MAX_CHARS implies file content,
-        # not a denial message (real denials are short).
-        from agentfluent.traces.models import RESULT_SUMMARY_MAX_CHARS
-
         long_result = "x" * (RESULT_SUMMARY_MAX_CHARS - len("blocked")) + "blocked"
         trace = _trace(calls=[_tc(tool="Bash", res=long_result, err=True)])
         signals = extract_trace_signals(trace)
         perms = [s for s in signals if s.signal_type == SignalType.PERMISSION_FAILURE]
         assert perms == []
 
-    def test_short_denial_still_fires(self) -> None:
-        # Sanity: real denial messages — short, no line numbers — are
-        # still flagged.
-        trace = _trace(
-            calls=[_tc(tool="Read", res="Permission denied: /etc/shadow", err=True)],
-        )
+    @pytest.mark.parametrize(
+        ("result", "keyword"),
+        [
+            ("Permission denied: /etc/shadow", "permission denied"),
+            ("Operation blocked by policy.", "blocked"),
+        ],
+    )
+    def test_short_denial_still_fires(self, result: str, keyword: str) -> None:
+        trace = _trace(calls=[_tc(res=result, err=True)])
         signals = extract_trace_signals(trace)
         perms = [s for s in signals if s.signal_type == SignalType.PERMISSION_FAILURE]
         assert len(perms) == 1
-        assert perms[0].detail["matched_keyword"] == "permission denied"
-
-    def test_short_blocked_message_still_fires(self) -> None:
-        trace = _trace(
-            calls=[_tc(tool="Bash", res="Operation blocked by policy.", err=True)],
-        )
-        signals = extract_trace_signals(trace)
-        perms = [s for s in signals if s.signal_type == SignalType.PERMISSION_FAILURE]
-        assert len(perms) == 1
+        assert perms[0].detail["matched_keyword"] == keyword
 
 
 class TestErrorSequences:
