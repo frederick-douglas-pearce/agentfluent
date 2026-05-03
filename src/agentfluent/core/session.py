@@ -30,6 +30,20 @@ class Usage(BaseModel):
             + self.cache_read_input_tokens
         )
 
+    def __add__(self, other: Usage) -> Usage:
+        return Usage(
+            input_tokens=self.input_tokens + other.input_tokens,
+            output_tokens=self.output_tokens + other.output_tokens,
+            cache_creation_input_tokens=(
+                self.cache_creation_input_tokens + other.cache_creation_input_tokens
+            ),
+            cache_read_input_tokens=(
+                self.cache_read_input_tokens + other.cache_read_input_tokens
+            ),
+        )
+
+    __radd__ = __add__  # lets sum() with a Usage() start value work cleanly
+
 
 class ToolUseBlock(BaseModel):
     """A tool_use content block from an assistant message."""

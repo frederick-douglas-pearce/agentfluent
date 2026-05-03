@@ -96,15 +96,7 @@ def _detect_is_error(block: ContentBlock) -> bool:
 def _sum_usage(messages: list[SessionMessage]) -> Usage:
     """Aggregate ``Usage`` across assistant messages. User messages have
     no ``usage`` and are skipped."""
-    total = Usage()
-    for msg in messages:
-        if msg.usage is None:
-            continue
-        total.input_tokens += msg.usage.input_tokens
-        total.output_tokens += msg.usage.output_tokens
-        total.cache_creation_input_tokens += msg.usage.cache_creation_input_tokens
-        total.cache_read_input_tokens += msg.usage.cache_read_input_tokens
-    return total
+    return sum((m.usage for m in messages if m.usage is not None), Usage())
 
 
 def _compute_duration_ms(messages: list[SessionMessage]) -> int | None:

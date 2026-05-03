@@ -26,6 +26,37 @@ class TestUsage:
         usage = Usage()
         assert usage.total_tokens == 0
 
+    def test_add_sums_all_fields(self) -> None:
+        a = Usage(input_tokens=10, output_tokens=20,
+                  cache_creation_input_tokens=30, cache_read_input_tokens=40)
+        b = Usage(input_tokens=1, output_tokens=2,
+                  cache_creation_input_tokens=3, cache_read_input_tokens=4)
+        result = a + b
+        assert result.input_tokens == 11
+        assert result.output_tokens == 22
+        assert result.cache_creation_input_tokens == 33
+        assert result.cache_read_input_tokens == 44
+
+    def test_add_returns_new_instance_does_not_mutate(self) -> None:
+        a = Usage(input_tokens=10)
+        b = Usage(input_tokens=5)
+        result = a + b
+        assert a.input_tokens == 10  # operands unchanged
+        assert b.input_tokens == 5
+        assert result is not a and result is not b
+
+    def test_sum_with_zero_start(self) -> None:
+        # __radd__ lets sum() with a Usage() start work; this is the call
+        # shape used inside extract_bursts in diagnostics/parent_workload.
+        usages = [
+            Usage(input_tokens=1, output_tokens=2),
+            Usage(input_tokens=3, output_tokens=4),
+            Usage(input_tokens=5, output_tokens=6),
+        ]
+        total = sum(usages, Usage())
+        assert total.input_tokens == 9
+        assert total.output_tokens == 12
+
 
 class TestToolUseBlock:
     def test_basic(self) -> None:
