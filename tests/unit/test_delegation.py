@@ -250,13 +250,46 @@ class TestGenerateDraft:
         draft = generate_draft(self._cluster(top_terms=[]))
         assert draft.name == "custom-agent"
 
-    def test_read_only_traces_recommend_haiku(self) -> None:
+    def test_read_only_low_volume_recommends_haiku(self) -> None:
+        # Read-only tools with observable low-volume token data → "simple"
+        # tier → Haiku. Tokens stay under the 2k simple ceiling.
         members = [
-            _inv(description="d", prompt="p", trace=_trace_with_tools(["Read", "Grep"])),
+            _inv(
+                description="d", prompt="p",
+                total_tokens=500,
+                trace=_trace_with_tools(["Read", "Grep"]),
+            ),
         ] * 5
         draft = generate_draft(self._cluster(members=members))
         assert draft.model == MODEL_HAIKU
         assert draft.tools == ["Grep", "Read"]
+
+    def test_read_only_no_token_data_recommends_sonnet(self) -> None:
+        # Zero observable token/tool-call data — the unified classifier's
+        # has_observed_data guard returns "moderate" (Sonnet) rather than
+        # asserting the work is small. Pre-#185 this returned Haiku via
+        # the "all read-only" branch, which under-recommended for clusters
+        # whose actual scale was unknown.
+        members = [
+            _inv(description="d", prompt="p", trace=_trace_with_tools(["Read", "Grep"])),
+        ] * 5
+        draft = generate_draft(self._cluster(members=members))
+        assert draft.model == MODEL_SONNET
+
+    def test_read_only_moderate_tokens_recommend_sonnet(self) -> None:
+        # Acceptance criterion #3 from #185: regression guard against the
+        # agentfluent pr-tool-result over-Opus recommendation. Read-only
+        # tool usage at moderate token volume must land in "moderate" →
+        # Sonnet, not "complex" → Opus.
+        members = [
+            _inv(
+                description="d", prompt="p",
+                total_tokens=3_000,
+                trace=_trace_with_tools(["Read", "Grep", "WebFetch"]),
+            ),
+        ] * 5
+        draft = generate_draft(self._cluster(members=members))
+        assert draft.model == MODEL_SONNET
 
     def test_write_heavy_high_tokens_recommend_opus(self) -> None:
         members = [
@@ -269,8 +302,13 @@ class TestGenerateDraft:
         draft = generate_draft(self._cluster(members=members))
         assert draft.model == MODEL_OPUS
 
-    def test_default_to_sonnet(self) -> None:
-        # Mix of read + write but low tokens.
+    def test_write_tools_low_tokens_recommend_sonnet(self) -> None:
+        # Per #185 architect review: write-tool presence alone at
+        # low/moderate token volume must NOT trigger Opus — that's the
+        # over-recommendation pattern the consolidated classifier was
+        # designed to fix. 5k mean tokens is at the gate boundary
+        # (strictly NOT greater than _COMPLEX_MIN_TOKENS=5000), so this
+        # cluster lands in "moderate" → Sonnet despite write tools.
         members = [
             _inv(
                 description="d", prompt="p",
@@ -322,8 +360,10 @@ class TestGenerateDraft:
 
 
 class TestClassifyHelpers:
-    def test_mean_tokens_empty_list(self) -> None:
-        # Helper exercised indirectly via _classify_model with no token data.
+    def test_classify_model_no_observed_data_recommends_sonnet(self) -> None:
+        # When no token or tool-call data is available, the unified
+        # classifier's has_observed_data guard returns "moderate" →
+        # Sonnet rather than asserting the work is small.
         members = [_inv(total_tokens=None)] * 3
         assert _classify_model(["Write"], members) == MODEL_SONNET
 
