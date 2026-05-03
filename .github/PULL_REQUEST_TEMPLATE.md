@@ -8,8 +8,10 @@
 - [ ] New/changed behavior has test coverage
 - [ ] Manual smoke test via `uv run agentfluent ...` — required for CLI output changes
 
-## Pre-merge checklist
-- [ ] Add the `needs-security-review` label and confirm the security-review workflow passes before merging
+## Security review
+Pick one. (If "Needs review", apply the `needs-security-review` label only when the PR is dev-complete and ready to merge — the workflow runs once against the SHA at label-add time and is not re-fired by later pushes, so labeling early produces a stale review against pre-merge code.)
+- [ ] **Skip review** — no security-sensitive surface (refactor, test-only, internal logic, docs, model additions consumed only by trusted internal code).
+- [ ] **Needs review** — touches any of: `.claude/hooks/`, secret handling, `pyproject.toml`, `.github/workflows/`, CLI argument parsing, path resolution, JSONL parsing, network calls, subprocess invocation, or rendering of user-controlled strings.
 
 ## Breaking changes
 <!--

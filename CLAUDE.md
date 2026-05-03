@@ -135,6 +135,12 @@ When implementing from a PM-produced spec or issue:
 - **Bug fix branches** -- `fix/<issue-number>-short-description` (e.g., `fix/15-token-count-overflow`)
 - **Commit to feature/fix branches freely** -- push often, squash or merge to main via PR.
 
+### PR creation: replicate the template
+
+When opening a PR, read `.github/PULL_REQUEST_TEMPLATE.md` first and replicate every section in the `--body` payload. `gh pr create --body "..."` uses the supplied body **instead of** the template, not in addition to it -- skipping this step silently drops the template (CI will reject the PR via the `PR Template Check` workflow). For the **Security review** block, make a positive choice up front: tick "Skip review" only if the PR truly avoids the listed surfaces; otherwise tick "Needs review."
+
+**Do not apply the `needs-security-review` label at PR-create time.** The label triggers `.github/workflows/security-review.yml` once against the SHA at label-add time; it does not re-run on subsequent pushes. If you label early and then push more commits, those commits go unreviewed (stale verdict) -- re-reviewing requires removing and re-adding the label, paying for a second run. Wait until the PR is dev-complete (CI green, review feedback addressed, ready to merge), then apply the label so the single review covers the final state.
+
 ### Commit Messages (Conventional Commits)
 
 This project uses [Conventional Commits](https://www.conventionalcommits.org/).
