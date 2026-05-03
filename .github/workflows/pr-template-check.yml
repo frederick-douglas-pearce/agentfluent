@@ -1,0 +1,36 @@
+name: PR Template Check
+
+# Catches the silent-override footgun: `gh pr create --body "..."` replaces
+# the PR template entirely. Without this guard, an author (human or AI) can
+# easily ship a PR missing the Security review block. See #244.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+
+concurrency:
+  group: pr-template-check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  pull-requests: read
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify Security review section is present in PR body
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          body=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json body --jq .body)
+          if ! grep -qF "## Security review" <<<"$body"; then
+            echo "::error::PR body is missing the '## Security review' section."
+            echo "::error::This usually happens when 'gh pr create --body \"...\"' replaces the template."
+            echo "::error::Fix: edit the PR description and copy the missing block from .github/PULL_REQUEST_TEMPLATE.md"
+            exit 1
+          fi
+          echo "Security review section found."
