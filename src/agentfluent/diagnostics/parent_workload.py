@@ -30,9 +30,15 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
+from agentfluent.analytics.pricing import ModelPricing, compute_cost
 from agentfluent.core.session import SessionMessage, ToolUseBlock, Usage
 
 logger = logging.getLogger(__name__)
+
+# Canonical alt-model targets per tier. Kept aligned with the keys in
+# analytics/pricing.py so get_pricing() resolves them.
+_ALT_FOR_OPUS = "claude-sonnet-4-6"
+_ALT_FOR_SONNET = "claude-haiku-4-5-20251001"
 
 MIN_BURST_TOOLS = 2
 
@@ -206,3 +212,68 @@ def filter_bursts(bursts: list[ToolBurst]) -> list[ToolBurst]:
             continue
         kept.append(b)
     return kept
+
+
+def pick_alternative_model(parent_model: str) -> str:
+    """Pick the next-cheaper tier for a given parent model.
+
+    Opus → Sonnet, Sonnet → Haiku, Haiku → Haiku (already cheapest).
+    Unknown models are returned unchanged so the caller surfaces a
+    no-savings result rather than projecting against a wrong tier.
+    """
+    lowered = parent_model.lower()
+    if "opus" in lowered:
+        return _ALT_FOR_OPUS
+    if "sonnet" in lowered:
+        return _ALT_FOR_SONNET
+    if "haiku" in lowered:
+        return parent_model
+    return parent_model
+
+
+def estimate_burst_cost(
+    burst: ToolBurst,
+    *,
+    parent_pricing: ModelPricing | None,
+    alt_pricing: ModelPricing | None,
+) -> tuple[float, float]:
+    """Return ``(parent_cost_usd, savings_usd_signed)`` for one burst.
+
+    Parent cost includes cache_read at the parent's rate (the full picture
+    of what was actually spent). The alt-model projection assumes NO cache
+    benefit — cache_read tokens get reclassified as fresh input at the
+    alt model's input rate. Conservative; a long-lived subagent might
+    warm its own cache, but we don't model warmup.
+
+    Savings is signed. Negative means offloading would cost MORE than
+    staying on the parent (cache is load-bearing for this pattern). Per
+    architect review (#189), the sign is preserved — never clamped to
+    zero — so callers can render negative-savings clusters with a
+    distinct "do not offload" treatment.
+
+    When either pricing is unknown (the lookup returned ``None``), we
+    return ``(0.0, 0.0)`` and emit a debug log. Sub-issue D's caller
+    treats this as "no estimate available" rather than "free."
+    """
+    if parent_pricing is None or alt_pricing is None:
+        logger.debug(
+            "Skipping cost estimate for burst: pricing unavailable "
+            "(parent=%s alt=%s).",
+            parent_pricing is not None, alt_pricing is not None,
+        )
+        return (0.0, 0.0)
+
+    u = burst.usage
+    parent_cost = compute_cost(
+        parent_pricing,
+        u.input_tokens, u.output_tokens,
+        u.cache_creation_input_tokens, u.cache_read_input_tokens,
+    )
+    # Alt-model has no cache benefit: cache_read becomes fresh input,
+    # cache_creation drops out (a delegated subagent would re-fetch its
+    # own context, not pay to write the parent's cache).
+    effective_input = u.input_tokens + u.cache_read_input_tokens
+    alt_cost = compute_cost(
+        alt_pricing, effective_input, u.output_tokens, 0, 0,
+    )
+    return (parent_cost, parent_cost - alt_cost)
