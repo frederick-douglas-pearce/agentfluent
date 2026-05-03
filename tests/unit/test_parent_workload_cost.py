@@ -10,13 +10,25 @@ from __future__ import annotations
 
 import pytest
 
-from agentfluent.analytics.pricing import ModelPricing, get_pricing
+from agentfluent.analytics.pricing import get_pricing
 from agentfluent.core.session import Usage
 from agentfluent.diagnostics.parent_workload import (
     ToolBurst,
     estimate_burst_cost,
     pick_alternative_model,
 )
+
+# Resolve known-model pricing once at import time. The asserts here
+# also act as a sanity check that the pricing module still recognises
+# these canonical ids — if Anthropic renames one and the pricing module
+# isn't updated to match, the import-time assert fires before any test
+# silently runs against the wrong pricing.
+_OPUS = get_pricing("claude-opus-4-7")
+_SONNET = get_pricing("claude-sonnet-4-6")
+_HAIKU = get_pricing("claude-haiku-4-5-20251001")
+assert _OPUS is not None
+assert _SONNET is not None
+assert _HAIKU is not None
 
 
 def _burst(
@@ -58,15 +70,14 @@ class TestPickAlternativeModel:
         assert pick_alternative_model("claude-opus-4-5-20251101") == "claude-sonnet-4-6"
 
     def test_sonnet_routes_to_haiku(self) -> None:
-        assert (
-            pick_alternative_model("claude-sonnet-4-6")
-            == "claude-haiku-4-5-20251001"
-        )
+        # MODEL_HAIKU from delegation is the undated alias; both forms
+        # resolve to the same pricing entry via _ALIASES.
+        assert pick_alternative_model("claude-sonnet-4-6") == "claude-haiku-4-5"
 
     def test_dated_sonnet_routes_to_haiku(self) -> None:
         assert (
             pick_alternative_model("claude-sonnet-4-5-20250929")
-            == "claude-haiku-4-5-20251001"
+            == "claude-haiku-4-5"
         )
 
     def test_haiku_returns_itself(self) -> None:
@@ -100,116 +111,83 @@ class TestPickAlternativeModel:
 # ---------------------------------------------------------------------------
 
 
-def _opus() -> ModelPricing:
-    pricing = get_pricing("claude-opus-4-7")
-    assert pricing is not None
-    return pricing
-
-
-def _sonnet() -> ModelPricing:
-    pricing = get_pricing("claude-sonnet-4-6")
-    assert pricing is not None
-    return pricing
-
-
-def _haiku() -> ModelPricing:
-    pricing = get_pricing("claude-haiku-4-5-20251001")
-    assert pricing is not None
-    return pricing
-
-
 class TestEstimateBurstCost:
     def test_modest_cache_produces_positive_savings(self) -> None:
-        # Opus burst dominated by FRESH input (not cache reads). Sonnet
-        # without cache should still come out cheaper because Sonnet's
-        # input rate (3.0) is lower than Opus's (5.0).
         burst = _burst(
             input_tokens=1000, output_tokens=500,
             cache_creation_input_tokens=200,
             cache_read_input_tokens=500,
         )
         parent_cost, savings = estimate_burst_cost(
-            burst, parent_pricing=_opus(), alt_pricing=_sonnet(),
+            burst, parent_pricing=_OPUS, alt_pricing=_SONNET,
         )
         assert parent_cost > 0
         assert savings > 0
 
     def test_cache_dominated_produces_negative_savings(self) -> None:
-        # Opus burst with TINY fresh-input/output and HUGE cache_read.
-        # Cache_read on Opus is $0.50/1M; Sonnet has no cache discount
-        # so the same tokens get charged at $3.00/1M as input. Sonnet
-        # ends up MORE expensive, savings goes negative — the actionable
-        # "do not offload" signal we're preserving per architect review.
+        # Opus cache_read is $0.50/1M; Sonnet has no cache discount so
+        # the same tokens get charged at $3.00/1M as input. Sonnet ends
+        # up more expensive — the actionable "do not offload" signal.
         burst = _burst(
             input_tokens=10, output_tokens=10,
-            cache_creation_input_tokens=0,
             cache_read_input_tokens=100_000,
         )
         _parent_cost, savings = estimate_burst_cost(
-            burst, parent_pricing=_opus(), alt_pricing=_sonnet(),
+            burst, parent_pricing=_OPUS, alt_pricing=_SONNET,
         )
         assert savings < 0, "negative savings must be preserved, not clamped"
 
     def test_zero_usage_returns_zero_zero(self) -> None:
-        # An empty burst has no cost on either model.
-        burst = _burst()  # all token fields default to 0
+        burst = _burst()
         assert estimate_burst_cost(
-            burst, parent_pricing=_opus(), alt_pricing=_sonnet(),
+            burst, parent_pricing=_OPUS, alt_pricing=_SONNET,
         ) == (0.0, 0.0)
 
     def test_parent_cost_includes_cache_read(self) -> None:
-        # The "parent cost" half of the return should be the FULL picture
-        # including cache_read at the parent rate — that's what was
-        # actually spent. (The savings half is where cache_read gets
-        # reclassified for the alt projection.)
         burst = _burst(cache_read_input_tokens=1_000_000)
         parent_cost, _savings = estimate_burst_cost(
-            burst, parent_pricing=_opus(), alt_pricing=_sonnet(),
+            burst, parent_pricing=_OPUS, alt_pricing=_SONNET,
         )
         # Opus cache_read is $0.50 per 1M tokens.
         assert parent_cost == pytest.approx(0.50)
 
     def test_alt_projection_excludes_cache_creation(self) -> None:
-        # cache_creation is a parent-side cost only — a delegated subagent
-        # would re-fetch its own context, not pay to write the parent's
-        # cache. The alt-model projection drops it.
-        # Set up a burst whose ONLY non-zero usage is cache_creation,
-        # then verify savings == parent_cost (alt_cost = 0).
+        # cache_creation is a parent-side-only cost; the alt-model
+        # projection drops it (a delegated subagent would re-fetch its
+        # own context, not pay to write the parent's cache).
         burst = _burst(cache_creation_input_tokens=1_000_000)
         parent_cost, savings = estimate_burst_cost(
-            burst, parent_pricing=_opus(), alt_pricing=_sonnet(),
+            burst, parent_pricing=_OPUS, alt_pricing=_SONNET,
         )
         assert parent_cost == pytest.approx(6.25)  # Opus cache_creation rate
         assert savings == pytest.approx(parent_cost)
 
-    def test_haiku_to_haiku_zero_savings(self) -> None:
-        # Same model on both sides: parent_cost > 0 but savings should
-        # be 0 because cache_read reclassifies to input at the SAME rate
-        # cache_read pays at... wait, Haiku cache_read is $0.10 vs input
-        # $1.00, so cache_read tokens get 10x more expensive on the alt
-        # side. With ANY cache_read present, savings goes negative.
-        # This test verifies the math is honest about that even when
+    def test_haiku_to_haiku_negative_savings_from_cache_reclassification(
+        self,
+    ) -> None:
+        # Same model on both sides — but cache_read still reclassifies as
+        # fresh input under the no-cache-benefit projection. Haiku
+        # cache_read is $0.10/1M vs input $1.00/1M, so any cache_read
+        # produces a 10x cost penalty on the alt side and savings goes
+        # negative. The math is honest about reclassification even when
         # the caller "stayed put."
         burst = _burst(input_tokens=100, output_tokens=100,
                        cache_read_input_tokens=1000)
         _parent_cost, savings = estimate_burst_cost(
-            burst, parent_pricing=_haiku(), alt_pricing=_haiku(),
+            burst, parent_pricing=_HAIKU, alt_pricing=_HAIKU,
         )
-        # cache_read of 1000 tokens: Haiku input would charge 1000*1.0/1M = $0.001
-        # vs cache_read 1000*0.10/1M = $0.0001. Delta -$0.0009 swamps
-        # the no-savings input/output equality.
         assert savings < 0
 
     def test_unknown_parent_pricing_returns_zero_zero(self) -> None:
         burst = _burst(input_tokens=1000, output_tokens=500)
         assert estimate_burst_cost(
-            burst, parent_pricing=None, alt_pricing=_sonnet(),
+            burst, parent_pricing=None, alt_pricing=_SONNET,
         ) == (0.0, 0.0)
 
     def test_unknown_alt_pricing_returns_zero_zero(self) -> None:
         burst = _burst(input_tokens=1000, output_tokens=500)
         assert estimate_burst_cost(
-            burst, parent_pricing=_opus(), alt_pricing=None,
+            burst, parent_pricing=_OPUS, alt_pricing=None,
         ) == (0.0, 0.0)
 
     def test_missing_pricing_logs_at_debug(
@@ -217,7 +195,7 @@ class TestEstimateBurstCost:
     ) -> None:
         burst = _burst(input_tokens=100)
         with caplog.at_level("DEBUG", logger="agentfluent.diagnostics.parent_workload"):
-            estimate_burst_cost(burst, parent_pricing=None, alt_pricing=_sonnet())
+            estimate_burst_cost(burst, parent_pricing=None, alt_pricing=_SONNET)
         assert any(
             "pricing unavailable" in rec.message for rec in caplog.records
         )

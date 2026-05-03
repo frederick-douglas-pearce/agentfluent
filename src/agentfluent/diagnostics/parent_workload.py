@@ -32,13 +32,9 @@ from dataclasses import dataclass, field
 
 from agentfluent.analytics.pricing import ModelPricing, compute_cost
 from agentfluent.core.session import SessionMessage, ToolUseBlock, Usage
+from agentfluent.diagnostics.delegation import MODEL_HAIKU, MODEL_SONNET
 
 logger = logging.getLogger(__name__)
-
-# Canonical alt-model targets per tier. Kept aligned with the keys in
-# analytics/pricing.py so get_pricing() resolves them.
-_ALT_FOR_OPUS = "claude-sonnet-4-6"
-_ALT_FOR_SONNET = "claude-haiku-4-5-20251001"
 
 MIN_BURST_TOOLS = 2
 
@@ -215,18 +211,16 @@ def filter_bursts(bursts: list[ToolBurst]) -> list[ToolBurst]:
 
 
 def pick_alternative_model(parent_model: str) -> str:
-    """Pick the next-cheaper tier for a given parent model.
-
-    Opus → Sonnet, Sonnet → Haiku, Haiku → Haiku (already cheapest).
-    Unknown models are returned unchanged so the caller surfaces a
-    no-savings result rather than projecting against a wrong tier.
-    """
+    """Pick the next-cheaper tier; Haiku and unknowns are returned unchanged."""
     lowered = parent_model.lower()
     if "opus" in lowered:
-        return _ALT_FOR_OPUS
+        return MODEL_SONNET
     if "sonnet" in lowered:
-        return _ALT_FOR_SONNET
+        return MODEL_HAIKU
     if "haiku" in lowered:
+        # Explicit fixed-point branch (rather than falling through to the
+        # bottom-of-function "unchanged" return) — Haiku is intentionally
+        # terminal, not "unknown."
         return parent_model
     return parent_model
 
@@ -239,21 +233,15 @@ def estimate_burst_cost(
 ) -> tuple[float, float]:
     """Return ``(parent_cost_usd, savings_usd_signed)`` for one burst.
 
-    Parent cost includes cache_read at the parent's rate (the full picture
-    of what was actually spent). The alt-model projection assumes NO cache
-    benefit — cache_read tokens get reclassified as fresh input at the
-    alt model's input rate. Conservative; a long-lived subagent might
-    warm its own cache, but we don't model warmup.
-
-    Savings is signed. Negative means offloading would cost MORE than
+    Savings is signed; negative means offloading would cost MORE than
     staying on the parent (cache is load-bearing for this pattern). Per
     architect review (#189), the sign is preserved — never clamped to
     zero — so callers can render negative-savings clusters with a
     distinct "do not offload" treatment.
 
-    When either pricing is unknown (the lookup returned ``None``), we
-    return ``(0.0, 0.0)`` and emit a debug log. Sub-issue D's caller
-    treats this as "no estimate available" rather than "free."
+    When either pricing is unknown (lookup returned ``None``), returns
+    ``(0.0, 0.0)`` and emits a debug log. Callers treat that as "no
+    estimate available" rather than "free."
     """
     if parent_pricing is None or alt_pricing is None:
         logger.debug(
