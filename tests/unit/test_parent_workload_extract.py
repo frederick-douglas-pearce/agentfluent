@@ -28,7 +28,6 @@ from agentfluent.diagnostics.parent_workload import (
     MIN_BURST_TOOLS,
     ToolBurst,
     _is_real_user_text,
-    _sum_usage,
     burst_text,
     extract_bursts,
     filter_bursts,
@@ -95,25 +94,8 @@ class TestIsRealUserText:
 
 
 # ---------------------------------------------------------------------------
-# _sum_usage
-# ---------------------------------------------------------------------------
-
-
-class TestSumUsage:
-    def test_empty_list_returns_zero_usage(self) -> None:
-        result = _sum_usage([])
-        assert result.total_tokens == 0
-
-    def test_sums_all_four_fields(self) -> None:
-        a = Usage(input_tokens=10, output_tokens=20,
-                  cache_creation_input_tokens=30, cache_read_input_tokens=40)
-        b = Usage(input_tokens=1, output_tokens=2,
-                  cache_creation_input_tokens=3, cache_read_input_tokens=4)
-        result = _sum_usage([a, b])
-        assert result.input_tokens == 11
-        assert result.output_tokens == 22
-        assert result.cache_creation_input_tokens == 33
-        assert result.cache_read_input_tokens == 44
+# (Usage.__add__ is exercised indirectly via extract_bursts' usage summing;
+# direct tests for the operator live in tests/unit/test_session_models.py.)
 
 
 # ---------------------------------------------------------------------------
@@ -178,17 +160,6 @@ class TestExtractBurstsBoundaries:
         # An "I'll now do X" text-only turn between two tool_use turns
         # contributes its text to the burst's assistant_text without
         # breaking the burst.
-        msgs = [
-            _user("plan and execute"),
-            _assistant(text="planning", tools=["Read"]),
-            _user(with_tool_result=True),
-            _assistant(text="now executing"),  # text-only, no tools
-            _user(with_tool_result=False),
-            _assistant(text="done", tools=["Edit"]),
-        ]
-        # Note: we pass with_tool_result=False here intentionally — the
-        # message has no text and no tool_result, which the parser would
-        # never normally produce. Rebuild without that line for clarity:
         msgs = [
             _user("plan and execute"),
             _assistant(text="planning", tools=["Read"]),

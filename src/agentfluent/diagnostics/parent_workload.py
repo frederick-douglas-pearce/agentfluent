@@ -34,10 +34,7 @@ from agentfluent.core.session import SessionMessage, ToolUseBlock, Usage
 
 logger = logging.getLogger(__name__)
 
-# Burst-shape filters. Calibrated by sub-issue F (#189) against the
-# agentfluent dogfood dataset; defaults are conservative starting points.
 MIN_BURST_TOOLS = 2
-"""Drop 1-tool bursts. A solitary Read or Bash isn't a delegation candidate."""
 
 MAX_BURST_TOOLS = 20
 """Cap degenerate single-message mega-bursts. Without this, a 'batch refactor'
@@ -61,24 +58,50 @@ class ToolBurst:
     """
 
     preceding_user_text: str
-    """Text of the most recent real user message before the burst opened."""
-
     assistant_text: str
-    """Concatenated text content from every assistant message contributing
-    to the burst. Joined with newlines."""
-
     tool_use_blocks: list[ToolUseBlock]
-    """Tool calls in original order across the burst's constituent assistant
-    messages. NOT de-duplicated — repeated tool use IS a discriminative
-    signal that sub-issue D's TF-IDF clustering will weight."""
-
+    """Tool calls in original order. NOT de-duplicated — repeated tool use
+    IS a discriminative signal that sub-issue D's TF-IDF clustering will
+    weight."""
     usage: Usage = field(default_factory=Usage)
-    """Summed token usage across the burst's constituent assistant messages."""
-
     model: str = ""
-    """Parent-thread model id from the first contributing assistant message
-    (e.g., ``claude-opus-4-7``). All messages in a single tool loop should
-    share a model in practice; if they don't, we keep the first and log."""
+    """Model id from the first contributing assistant message. All messages
+    in a single tool loop should share a model in practice; if they don't,
+    we keep the first and log."""
+
+
+@dataclass
+class _OpenBurst:
+    """In-progress burst accumulator. Promoted to ``ToolBurst`` via
+    :meth:`finalize` once a real user message or end-of-session closes it."""
+
+    preceding_user_text: str
+    model: str = ""
+    assistant_texts: list[str] = field(default_factory=list)
+    tool_blocks: list[ToolUseBlock] = field(default_factory=list)
+    usages: list[Usage] = field(default_factory=list)
+
+    def add_assistant_message(self, msg: SessionMessage) -> None:
+        if msg.text:
+            self.assistant_texts.append(msg.text)
+        self.tool_blocks.extend(msg.tool_use_blocks)
+        if msg.usage is not None:
+            self.usages.append(msg.usage)
+
+    def add_text(self, text: str) -> None:
+        if text:
+            self.assistant_texts.append(text)
+
+    def finalize(self) -> ToolBurst | None:
+        if not self.tool_blocks:
+            return None
+        return ToolBurst(
+            preceding_user_text=self.preceding_user_text,
+            assistant_text="\n".join(t for t in self.assistant_texts if t),
+            tool_use_blocks=list(self.tool_blocks),
+            usage=sum(self.usages, Usage()),
+            model=self.model,
+        )
 
 
 def _is_real_user_text(msg: SessionMessage) -> bool:
@@ -90,107 +113,67 @@ def _is_real_user_text(msg: SessionMessage) -> bool:
     """
     if msg.type != "user":
         return False
-    has_tool_result = any(b.type == "tool_result" for b in msg.content_blocks)
-    if has_tool_result:
+    if any(b.type == "tool_result" for b in msg.content_blocks):
         return False
     return bool(msg.text.strip())
-
-
-def _sum_usage(usages: list[Usage]) -> Usage:
-    """Field-wise sum of token usage across messages."""
-    total = Usage()
-    for u in usages:
-        total.input_tokens += u.input_tokens
-        total.output_tokens += u.output_tokens
-        total.cache_creation_input_tokens += u.cache_creation_input_tokens
-        total.cache_read_input_tokens += u.cache_read_input_tokens
-    return total
 
 
 def extract_bursts(messages: list[SessionMessage]) -> list[ToolBurst]:
     """Group consecutive parent-thread tool calls into ``ToolBurst`` records.
 
     See module docstring for the boundary rule. No filtering applied here —
-    every burst observed in the message stream is returned. Use
-    :func:`filter_bursts` to drop too-small / too-large / too-short bursts
-    before clustering.
+    use :func:`filter_bursts` to drop too-small / too-large / too-short
+    bursts before clustering.
     """
     bursts: list[ToolBurst] = []
     last_real_user_text = ""
-
-    # Open-burst accumulators. None = no burst currently open.
-    cur_assistant_texts: list[str] | None = None
-    cur_tool_blocks: list[ToolUseBlock] | None = None
-    cur_usages: list[Usage] | None = None
-    cur_model: str | None = None
-    cur_preceding_user_text: str = ""
-
-    def close_burst() -> None:
-        nonlocal cur_assistant_texts, cur_tool_blocks, cur_usages, cur_model
-        if cur_tool_blocks is None or not cur_tool_blocks:
-            cur_assistant_texts = cur_tool_blocks = cur_usages = None
-            cur_model = None
-            return
-        bursts.append(
-            ToolBurst(
-                preceding_user_text=cur_preceding_user_text,
-                assistant_text="\n".join(t for t in (cur_assistant_texts or []) if t),
-                tool_use_blocks=list(cur_tool_blocks),
-                usage=_sum_usage(cur_usages or []),
-                model=cur_model or "",
-            ),
-        )
-        cur_assistant_texts = cur_tool_blocks = cur_usages = None
-        cur_model = None
+    cur: _OpenBurst | None = None
 
     for msg in messages:
         if _is_real_user_text(msg):
-            close_burst()
+            if cur is not None and (b := cur.finalize()) is not None:
+                bursts.append(b)
+            cur = None
             last_real_user_text = msg.text
             continue
 
-        if msg.type == "assistant":
-            tool_blocks = msg.tool_use_blocks
-            if not tool_blocks:
-                # Pure-text assistant turn (e.g., final answer) — doesn't
-                # extend a burst, but doesn't close one either. Some tool
-                # loops emit a text-only "I'll now do X" turn between two
-                # tool_use turns; folding that text into the burst keeps
-                # the surrounding-context signal that sub-issue D wants.
-                if cur_assistant_texts is not None and msg.text:
-                    cur_assistant_texts.append(msg.text)
-                continue
+        if msg.type != "assistant":
+            continue
 
-            if cur_tool_blocks is None:
-                cur_assistant_texts = []
-                cur_tool_blocks = []
-                cur_usages = []
-                cur_preceding_user_text = last_real_user_text
-                cur_model = msg.model or ""
-            elif msg.model and cur_model and msg.model != cur_model:
-                logger.debug(
-                    "Burst spans assistant messages with differing models "
-                    "(%r vs %r); keeping the first.",
-                    cur_model, msg.model,
-                )
+        tool_blocks = msg.tool_use_blocks
+        if not tool_blocks:
+            # Text-only assistant turn (e.g., "I'll now do X" between two
+            # tool_use turns) — fold its text into the open burst's context
+            # without breaking the run. Doesn't open a burst on its own.
+            if cur is not None:
+                cur.add_text(msg.text)
+            continue
 
-            if msg.text:
-                cur_assistant_texts.append(msg.text)  # type: ignore[union-attr]
-            cur_tool_blocks.extend(tool_blocks)
-            if msg.usage is not None:
-                cur_usages.append(msg.usage)  # type: ignore[union-attr]
+        if cur is None:
+            cur = _OpenBurst(
+                preceding_user_text=last_real_user_text,
+                model=msg.model or "",
+            )
+        elif msg.model and cur.model and msg.model != cur.model:
+            logger.debug(
+                "Burst spans assistant messages with differing models "
+                "(%r vs %r); keeping the first.",
+                cur.model, msg.model,
+            )
 
-    close_burst()
+        cur.add_assistant_message(msg)
+
+    if cur is not None and (b := cur.finalize()) is not None:
+        bursts.append(b)
     return bursts
 
 
 def burst_text(burst: ToolBurst) -> str:
     """Compose the text representation a burst contributes to TF-IDF clustering.
 
-    Joins the preceding user prompt + concatenated assistant text + the
-    flat tool-name sequence. Tool names are NOT de-duplicated: the
-    duplicate ``Read`` in ``"Bash Read Read Edit"`` is a discriminative
-    pattern signal that sub-issue D's vectorizer should be free to weight.
+    Tool names are NOT de-duplicated: the duplicate ``Read`` in ``"Bash
+    Read Read Edit"`` is a discriminative pattern signal that sub-issue
+    D's vectorizer should be free to weight.
     """
     parts = [
         burst.preceding_user_text,
@@ -205,8 +188,7 @@ def filter_bursts(bursts: list[ToolBurst]) -> list[ToolBurst]:
 
     Bursts above ``MAX_BURST_TOOLS`` are dropped (with a debug log) rather
     than truncated — a 50-tool batch is structurally different from a
-    typical workflow and shouldn't be folded into one. See sub-issue F
-    for the calibration sweep.
+    typical workflow and shouldn't be folded into one.
     """
     kept: list[ToolBurst] = []
     for b in bursts:
