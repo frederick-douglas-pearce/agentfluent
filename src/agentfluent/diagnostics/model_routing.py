@@ -30,14 +30,18 @@ import logging
 from collections import defaultdict
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel
-
-from agentfluent.agents.models import WRITE_TOOLS
 from agentfluent.analytics.pricing import compute_cost, get_pricing
 from agentfluent.config.models import Severity
-from agentfluent.diagnostics.delegation import MODEL_HAIKU, MODEL_SONNET
+from agentfluent.diagnostics._complexity import (
+    MODEL_HAIKU,
+    MODEL_SONNET,
+    AgentStats,
+    ComplexityTier,
+    classify_complexity,
+    compute_error_rate,
+    has_write_tools_in_trace,
+)
 from agentfluent.diagnostics.models import DiagnosticSignal, SignalType
-from agentfluent.diagnostics.signals import ERROR_REGEX
 
 if TYPE_CHECKING:
     from agentfluent.agents.models import AgentInvocation
@@ -45,24 +49,26 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Re-exported for tests and downstream consumers that already import
+# AgentStats / ComplexityTier / classify_complexity from this module.
+__all__ = [
+    "AgentStats",
+    "ComplexityTier",
+    "MismatchType",
+    "aggregate_agent_stats",
+    "classify_complexity",
+    "classify_model_tier",
+    "extract_model_routing_signals",
+]
 
-ComplexityTier = Literal["simple", "moderate", "complex"]
 MismatchType = Literal["overspec", "underspec"]
 
-
-# Thresholds — initial values per backlog E5-S1 guidance. Empirical
-# validation: `scripts/calibration/threshold_validation.ipynb` (#140).
-# On the v0.3.0 single-dataset calibration, every observed agent type
-# classified as "complex" — suggesting the simple/complex boundaries
-# may be set to a lighter workload than the reference dataset exhibits.
-# Kept as shipped pending multi-contributor data to tell noise from
-# signal.
 _MIN_INVOCATIONS_FOR_ANALYSIS = 3
-_SIMPLE_MAX_TOOL_CALLS = 5
-_SIMPLE_MAX_TOKENS = 2_000
-_COMPLEX_MIN_TOOL_CALLS = 10
-_COMPLEX_MIN_TOKENS = 5_000
-_COMPLEX_MIN_ERROR_RATE = 0.20
+# Complexity thresholds and the AgentStats model live in
+# diagnostics/_complexity.py — see #185 for the consolidation rationale.
+# The error-rate threshold below is reused for the underspec gate; kept
+# local here so the gate stays close to its consumer.
+_UNDERSPEC_ERROR_RATE_GATE = 0.20
 
 # Complexity tier by Claude model family. Model IDs follow the pattern
 # `claude-<family>-<version>[-<date>]`, so a prefix match covers both
@@ -87,45 +93,6 @@ def classify_model_tier(model: str) -> ComplexityTier:
         if any(model.startswith(p) for p in prefixes):
             return tier
     return "moderate"
-
-
-class AgentStats(BaseModel):
-    """Per-agent-type aggregated stats consumed by model-routing detection."""
-
-    agent_type: str
-    invocation_count: int
-    mean_tool_calls: float
-    mean_tokens: float
-    error_rate: float
-    has_write_tools: bool
-    current_model: str | None
-    """Declared model from `AgentConfig.model` — None if the agent has
-    no config or the config doesn't set a model. MVP skips None."""
-
-
-def _compute_error_rate(inv: AgentInvocation) -> float:
-    """Observed error rate for a single invocation.
-
-    Trace is preferred when linked — it counts concrete tool errors.
-    Metadata fallback scans ``output_text`` for the ERROR_REGEX keyword
-    set and divides by ``tool_uses``. Returns 0.0 when no signal is
-    available either way.
-    """
-    trace = inv.trace
-    if trace is not None and trace.tool_calls:
-        return trace.total_errors / len(trace.tool_calls)
-    tool_uses = inv.tool_uses or 0
-    if tool_uses == 0 or not inv.output_text:
-        return 0.0
-    matches = len(ERROR_REGEX.findall(inv.output_text))
-    return matches / tool_uses
-
-
-def _has_write_tools_in_trace(inv: AgentInvocation) -> bool:
-    trace = inv.trace
-    if trace is None:
-        return False
-    return bool(trace.unique_tool_names & WRITE_TOOLS)
 
 
 def _resolve_current_model(
@@ -170,8 +137,8 @@ def aggregate_agent_stats(
         canonical_name = group[0].agent_type
         tool_use_values = [i.tool_uses for i in group if i.tool_uses is not None]
         token_values = [i.total_tokens for i in group if i.total_tokens is not None]
-        error_rates = [_compute_error_rate(i) for i in group]
-        has_writes = any(_has_write_tools_in_trace(i) for i in group)
+        error_rates = [compute_error_rate(i) for i in group]
+        has_writes = any(has_write_tools_in_trace(i) for i in group)
 
         config = configs.get(key) if configs else None
         current_model = _resolve_current_model(group, config)
@@ -194,23 +161,6 @@ def aggregate_agent_stats(
             current_model=current_model,
         )
     return stats_by_type
-
-
-def classify_complexity(stats: AgentStats) -> ComplexityTier:
-    """Bin an agent's observed behavior into simple / moderate / complex."""
-    if (
-        stats.has_write_tools
-        or stats.mean_tool_calls > _COMPLEX_MIN_TOOL_CALLS
-        or stats.mean_tokens > _COMPLEX_MIN_TOKENS
-        or stats.error_rate > _COMPLEX_MIN_ERROR_RATE
-    ):
-        return "complex"
-    if (
-        stats.mean_tool_calls < _SIMPLE_MAX_TOOL_CALLS
-        and stats.mean_tokens < _SIMPLE_MAX_TOKENS
-    ):
-        return "simple"
-    return "moderate"
 
 
 def _compute_savings(
@@ -307,7 +257,7 @@ def _detect_mismatch(stats: AgentStats) -> DiagnosticSignal | None:
     if (
         complexity == "complex"
         and current_tier == "simple"
-        and stats.error_rate > _COMPLEX_MIN_ERROR_RATE
+        and stats.error_rate > _UNDERSPEC_ERROR_RATE_GATE
     ):
         return _build_mismatch_signal(
             stats, "underspec", complexity, recommended_model=MODEL_SONNET,

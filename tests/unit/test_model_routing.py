@@ -7,6 +7,7 @@ from pathlib import Path
 from agentfluent.agents.models import AgentInvocation
 from agentfluent.analytics.pricing import get_known_models
 from agentfluent.config.models import AgentConfig, Scope, Severity
+from agentfluent.diagnostics._complexity import compute_error_rate
 from agentfluent.diagnostics.delegation import (
     MODEL_HAIKU,
     MODEL_OPUS,
@@ -14,7 +15,6 @@ from agentfluent.diagnostics.delegation import (
 )
 from agentfluent.diagnostics.model_routing import (
     AgentStats,
-    _compute_error_rate,
     _compute_savings,
     aggregate_agent_stats,
     classify_complexity,
@@ -196,8 +196,25 @@ class TestClassifyComplexity:
             _stats(mean_tool_calls=2.0, mean_tokens=500.0),
         ) == "simple"
 
-    def test_complex_by_write_tools(self) -> None:
-        assert classify_complexity(_stats(has_write_tools=True)) == "complex"
+    def test_write_tools_alone_does_not_escalate(self) -> None:
+        # Per #185 architect review, has_write_tools is NOT a
+        # classification input — write-tool presence alone (without
+        # high token volume or tool-call count) must not escalate to
+        # "complex". With _stats() defaults (mean_tool_calls=3,
+        # mean_tokens=1000) the result is "simple" via the simple-tier
+        # check; under the pre-#185 unified path it would have been
+        # "complex" (the over-recommendation #185 was filed to fix).
+        assert classify_complexity(_stats(has_write_tools=True)) == "simple"
+
+    def test_high_tokens_escalates_regardless_of_write_tools(self) -> None:
+        # The token-volume threshold is the actual escalation signal.
+        # Write-tool presence is metadata, not a classifier input.
+        assert classify_complexity(
+            _stats(has_write_tools=True, mean_tokens=10_000),
+        ) == "complex"
+        assert classify_complexity(
+            _stats(has_write_tools=False, mean_tokens=10_000),
+        ) == "complex"
 
     def test_complex_by_tool_count(self) -> None:
         assert classify_complexity(_stats(mean_tool_calls=15.0)) == "complex"
@@ -354,7 +371,7 @@ class TestSignalDetailContract:
 class TestHelpers:
     def test_error_rate_zero_for_invocation_without_data(self) -> None:
         inv = _inv(tool_uses=0, output_text="")
-        assert _compute_error_rate(inv) == 0.0
+        assert compute_error_rate(inv) == 0.0
 
     def test_classify_model_tier_short_aliases(self) -> None:
         assert classify_model_tier(MODEL_HAIKU) == "simple"

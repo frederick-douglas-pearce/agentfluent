@@ -40,7 +40,7 @@ try:
 except ImportError:  # pragma: no cover — exercised via the install-path test
     pass
 
-from agentfluent.agents.models import WRITE_TOOLS, is_general_purpose
+from agentfluent.agents.models import is_general_purpose
 from agentfluent.diagnostics._clustering import (
     SKLEARN_AVAILABLE,
     SklearnMissingError,
@@ -49,6 +49,14 @@ from agentfluent.diagnostics._clustering import (
     group_indices_by_label,
     mean_pairwise_cosine,
     top_tfidf_terms,
+)
+from agentfluent.diagnostics._complexity import (
+    MODEL_HAIKU,
+    MODEL_OPUS,
+    MODEL_SONNET,
+    aggregate_cluster_stats,
+    classify_complexity,
+    recommend_model_for_complexity,
 )
 from agentfluent.diagnostics.models import DelegationSuggestion
 
@@ -106,17 +114,10 @@ DEFAULT_MIN_SIMILARITY = 0.7
 _CONFIDENCE_HIGH_SIZE = 10
 _CONFIDENCE_HIGH_COHESION = 0.50
 _CONFIDENCE_MEDIUM_COHESION = 0.35
-_TOOL_READ_ONLY = frozenset(
-    {"Read", "Grep", "Glob", "WebFetch", "WebSearch", "LS"},
-)
-_HEAVY_TOKEN_THRESHOLD = 20_000
 _PROMPT_BODY_SNIPPET_CHARS = 500
 
-# Model tiers for draft generation. Kept as module constants so later
-# releases can bump to newer Claude versions in one place.
-MODEL_HAIKU = "claude-haiku-4-5"
-MODEL_SONNET = "claude-sonnet-4-6"
-MODEL_OPUS = "claude-opus-4-7"
+# MODEL_HAIKU/SONNET/OPUS are re-exported from _complexity.py — see #185
+# for the consolidation. Pre-#185 they lived here directly.
 
 
 @dataclass
@@ -300,28 +301,16 @@ def _collect_tools_from_traces(members: list[AgentInvocation]) -> list[str]:
     return sorted(tools)
 
 
-def _mean_tokens(members: list[AgentInvocation]) -> float:
-    values = [m.total_tokens for m in members if m.total_tokens is not None]
-    if not values:
-        return 0.0
-    return sum(values) / len(values)
-
-
 def _classify_model(tools: list[str], members: list[AgentInvocation]) -> str:
-    """Pick a model tier based on the tool mix + observed token burn.
+    """Pick a model tier for a delegation cluster via the unified classifier.
 
-    - All read-only tools → haiku (cheap, fast)
-    - Contains heavy-write tools + high average tokens → opus
-    - Default → sonnet
+    Pre-#185, this used a delegation-local heuristic that could disagree
+    with model_routing's diagnostic on the same workload (see #185 for
+    the example that motivated the consolidation). Now both paths route
+    through ``classify_complexity`` in ``diagnostics/_complexity``.
     """
-    if not tools:
-        return MODEL_SONNET
-    tool_set = set(tools)
-    if tool_set and tool_set <= _TOOL_READ_ONLY:
-        return MODEL_HAIKU
-    if tool_set & WRITE_TOOLS and _mean_tokens(members) > _HEAVY_TOKEN_THRESHOLD:
-        return MODEL_OPUS
-    return MODEL_SONNET
+    stats = aggregate_cluster_stats(members, tools=tools)
+    return recommend_model_for_complexity(classify_complexity(stats))
 
 
 def _classify_confidence(cluster_size: int, cohesion: float) -> ConfidenceTier:
