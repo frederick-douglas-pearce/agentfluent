@@ -303,12 +303,13 @@ class TestGenerateDraft:
         assert draft.model == MODEL_OPUS
 
     def test_write_tools_low_tokens_recommend_sonnet(self) -> None:
-        # Per #185 architect review: write-tool presence alone at
-        # low/moderate token volume must NOT trigger Opus — that's the
-        # over-recommendation pattern the consolidated classifier was
-        # designed to fix. 5k mean tokens is at the gate boundary
-        # (strictly NOT greater than _COMPLEX_MIN_TOKENS=5000), so this
-        # cluster lands in "moderate" → Sonnet despite write tools.
+        # Per #185 architect review, write-tool presence alone must NOT
+        # trigger Opus — that's the over-recommendation pattern the
+        # consolidated classifier was designed to fix. The classifier
+        # achieves this by ignoring has_write_tools entirely and gating
+        # complexity on token volume; 5k mean_tokens (NOT strictly
+        # greater than _COMPLEX_MIN_TOKENS=5000) lands in "moderate" →
+        # Sonnet. Pre-#185 this exact case got Opus.
         members = [
             _inv(
                 description="d", prompt="p",

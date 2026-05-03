@@ -10,11 +10,6 @@ Pre-#185, the two paths diverged: model_routing classified agents into
 delegation used a separate three-branch heuristic based on tools +
 mean tokens. They could disagree on the same workload — see #185 for
 the example that motivated consolidation.
-
-Threshold calibration is in ``scripts/calibration/threshold_validation.ipynb``
-(#140); the v0.3.0 single-dataset run flagged that simple/complex
-boundaries may be set lighter than the reference dataset exhibits, but
-the values are kept pending multi-contributor data.
 """
 
 from __future__ import annotations
@@ -106,21 +101,22 @@ def has_write_tools_in_trace(inv: AgentInvocation) -> bool:
 def classify_complexity(stats: AgentStats) -> ComplexityTier:
     """Bin observed behavior into simple / moderate / complex.
 
-    ``has_write_tools`` requires a corroborating token-volume signal to
-    escalate to ``complex`` (per #185 architect review). Write-tool
-    presence alone at low/moderate volume — common on noisy delegation
-    clusters where one Edit slipped in — would otherwise over-recommend
-    Opus, which is the exact pattern #185 was filed to address.
+    ``has_write_tools`` is intentionally NOT a classification input. Per
+    #185 architect review, write-tool presence alone (without high
+    token volume or tool-call count) must not escalate to ``complex`` —
+    that's the over-recommendation pattern #185 was filed to fix. The
+    field is retained on ``AgentStats`` as observation metadata that
+    other diagnostics (or future signals) can consume; classification
+    is driven entirely by token volume, tool-call count, and error rate.
     """
     if (
-        (stats.has_write_tools and stats.mean_tokens > _COMPLEX_MIN_TOKENS)
-        or stats.mean_tool_calls > _COMPLEX_MIN_TOOL_CALLS
+        stats.mean_tool_calls > _COMPLEX_MIN_TOOL_CALLS
         or stats.mean_tokens > _COMPLEX_MIN_TOKENS
         or stats.error_rate > _COMPLEX_MIN_ERROR_RATE
     ):
         return "complex"
-    # The "simple" branch requires evidence of light work, not absence of
-    # data. A cluster with no observed tool calls AND no token data
+    # The "simple" branch requires evidence of light work, not absence
+    # of data. A cluster with no observed tool calls AND no token data
     # falls through to "moderate" so the recommendation reflects
     # uncertainty rather than asserting the work is small.
     has_observed_data = stats.mean_tool_calls > 0 or stats.mean_tokens > 0
