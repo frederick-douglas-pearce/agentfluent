@@ -304,13 +304,12 @@ def estimate_burst_cost(
     return (parent_cost, parent_cost - alt_cost)
 
 
-# --- Sub-issue D: clustering + offload candidate synthesis ----------------
-#
-# Mirrors delegation.cluster_delegations / generate_draft, but operates on
-# parent-thread bursts. The TF-IDF + LSA + KMeans pipeline is duplicated
-# (rather than extracted) per architect review for #189-D Q3: only two
-# consumers, ~30 lines each, premature abstraction. Structured as a
-# contiguous block so a future third consumer can extract cleanly.
+# Burst-cluster classification + offload-candidate synthesis. Mirrors
+# delegation.cluster_delegations / generate_draft on parent-thread bursts.
+# The TF-IDF + LSA + KMeans pipeline is duplicated rather than extracted
+# (#189-D Q3 architect review): two consumers, ~30 lines each, premature
+# abstraction. Structured as a contiguous block for future extraction if
+# a third consumer appears.
 
 DEFAULT_BURST_CLUSTER_SIZE = 5
 """Minimum bursts per cluster surfaced as an offload candidate."""
@@ -328,6 +327,11 @@ architect-review note."""
 _CONFIDENCE_HIGH_SIZE = 10
 _CONFIDENCE_HIGH_COHESION = 0.50
 _CONFIDENCE_MEDIUM_COHESION = 0.35
+
+_BURST_AGENT_TYPE = "<bursts>"
+"""Sentinel ``AgentStats.agent_type`` for burst clusters. Not user-facing;
+exists so downstream consumers (e.g., ``classify_complexity``) can detect
+burst-cluster stats vs real-agent stats if they ever need to."""
 
 
 @dataclass
@@ -471,7 +475,7 @@ def _aggregate_burst_stats(bursts: list[ToolBurst]) -> AgentStats:
     """
     if not bursts:
         return AgentStats(
-            agent_type="<bursts>",
+            agent_type=_BURST_AGENT_TYPE,
             invocation_count=0,
             mean_tool_calls=0.0,
             mean_tokens=0.0,
@@ -483,7 +487,7 @@ def _aggregate_burst_stats(bursts: list[ToolBurst]) -> AgentStats:
     token_totals = [b.usage.total_tokens for b in bursts]
     all_tools = {b.name for burst in bursts for b in burst.tool_use_blocks}
     return AgentStats(
-        agent_type="<bursts>",
+        agent_type=_BURST_AGENT_TYPE,
         invocation_count=len(bursts),
         mean_tool_calls=sum(tool_counts) / len(tool_counts),
         mean_tokens=sum(token_totals) / len(token_totals),

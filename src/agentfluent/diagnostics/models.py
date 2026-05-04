@@ -12,7 +12,7 @@ from enum import StrEnum
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from agentfluent.config.models import Severity
 
@@ -221,6 +221,29 @@ class DelegationSuggestion(BaseModel):
     not deduped). Exposed as a first-class field so cross-reference
     logic can look up the matched agent without parsing ``dedup_note``."""
 
+    def render_body(self) -> str:
+        """YAML frontmatter + tools_comment + ``---`` + prompt body.
+
+        Shared by ``yaml_draft`` here and ``OffloadCandidate.yaml_draft``,
+        which prepends a different preamble. Any frontmatter shape change
+        stays in lockstep across both consumers — the whole reason this
+        is one method instead of two.
+        """
+        frontmatter_data: dict[str, object] = {
+            "description": self.description,
+            "model": self.model,
+            "tools": self.tools,
+        }
+        frontmatter = yaml.safe_dump(
+            frontmatter_data, sort_keys=False, default_flow_style=False,
+        ).rstrip()
+        tools_comment = ""
+        if not self.tools and self.tools_note:
+            tools_comment = f"\n# tools: {self.tools_note}"
+        return (
+            "---\n" + frontmatter + tools_comment + "\n---\n\n" + self.prompt_template
+        )
+
     # ``# type: ignore[prop-decorator]`` is the documented workaround for
     # mypy not reconciling ``@computed_field`` stacked on ``@property``
     # (upstream: pydantic/pydantic#6709).
@@ -247,28 +270,7 @@ class DelegationSuggestion(BaseModel):
             preamble.append(f"# Top terms: {', '.join(self.top_terms)}")
         if self.dedup_note:
             preamble.append(f"# Note: {self.dedup_note}")
-
-        frontmatter_data: dict[str, object] = {
-            "description": self.description,
-            "model": self.model,
-            "tools": self.tools,
-        }
-        frontmatter = yaml.safe_dump(
-            frontmatter_data, sort_keys=False, default_flow_style=False,
-        ).rstrip()
-
-        tools_comment = ""
-        if not self.tools and self.tools_note:
-            tools_comment = f"\n# tools: {self.tools_note}"
-
-        return (
-            "\n".join(preamble)
-            + "\n---\n"
-            + frontmatter
-            + tools_comment
-            + "\n---\n\n"
-            + self.prompt_template
-        )
+        return "\n".join(preamble) + "\n" + self.render_body()
 
 
 class SkillScaffold(BaseModel):
@@ -279,7 +281,13 @@ class SkillScaffold(BaseModel):
     the skill scanner (#183) lands, fields will be added here additively;
     consumers that rely on ``skill_draft is None`` to mean "v0.5 didn't ship
     a skill" should switch to ``target_kind == 'skill'`` post-v0.6.
+
+    ``extra="forbid"`` is the forward-compat tripwire: a v0.6-emitted JSON
+    deserialized by a v0.5 consumer will raise instead of silently dropping
+    fields, so the migration plan can't get bypassed by accident.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class OffloadCandidate(BaseModel):
@@ -426,27 +434,8 @@ class OffloadCandidate(BaseModel):
         if self.dedup_note:
             preamble.append(f"# Dedup: {self.dedup_note}")
 
-        draft = self.subagent_draft
-        frontmatter_data: dict[str, object] = {
-            "description": draft.description,
-            "model": draft.model,
-            "tools": draft.tools,
-        }
-        frontmatter = yaml.safe_dump(
-            frontmatter_data, sort_keys=False, default_flow_style=False,
-        ).rstrip()
-
-        tools_comment = ""
-        if not draft.tools and draft.tools_note:
-            tools_comment = f"\n# tools: {draft.tools_note}"
-
         return (
-            "\n".join(preamble)
-            + "\n---\n"
-            + frontmatter
-            + tools_comment
-            + "\n---\n\n"
-            + draft.prompt_template
+            "\n".join(preamble) + "\n" + self.subagent_draft.render_body()
         )
 
 
