@@ -148,6 +148,20 @@ Near-duplicate recommendations are aggregated per `(agent, target, signal)` shap
 
 Cost numbers reflect current per-token pricing; historical sessions are priced at today's rates until [#80](https://github.com/frederick-douglas-pearce/agentfluent/issues/80) (time-series pricing) lands.
 
+### `agentfluent diff` — compare two analyze runs
+
+```bash
+agentfluent analyze --project codefluent --json > baseline.json   # before a prompt change
+# ... edit agent prompts / tools / model ...
+agentfluent analyze --project codefluent --json > current.json    # after the change
+
+agentfluent diff baseline.json current.json                       # side-by-side report
+agentfluent diff baseline.json current.json --fail-on critical    # CI gate: exit 3 only on new critical findings
+agentfluent diff baseline.json current.json --json | jq '.data.regression_detected'
+```
+
+Compares two `analyze --json` envelopes and surfaces new, resolved, and persisting recommendations (keyed by `(agent_type, target, signal_types)`), token / cost deltas, and per-agent invocation deltas. The `--fail-on {info|warning|critical|off}` flag gates exit code 3 on new findings at or above the chosen severity, so `agentfluent diff` slots into a PR check the same way a test runner does. Baselines are user-managed files — no internal cache — so re-running against an older snapshot at any time is just `agentfluent diff old.json new.json`.
+
 ### `agentfluent config-check` — score agent definitions
 
 ```bash
@@ -388,12 +402,10 @@ Five GitHub Actions workflows run automatically:
 - Agent SDK main-session MCP + tool extraction ([#112](https://github.com/frederick-douglas-pearce/agentfluent/issues/112)).
 - Per-invocation token input/output split for more accurate cost estimates ([#143](https://github.com/frederick-douglas-pearce/agentfluent/issues/143)).
 - Hosted documentation site ([#97](https://github.com/frederick-douglas-pearce/agentfluent/issues/97)).
-- Prompt regression detection (`agentfluent diff`) across agent config versions.
 - Hook coverage in the config rubric.
 
 **Future:**
 - Webapp dashboard for trend visualization
-- `agentfluent diff` — side-by-side comparison of behavior before/after a prompt change
 - Closed-loop self-improvement — use AgentFluent's diagnostic output as a feedback signal the agent itself consumes to propose config edits against its own past sessions
 - Agent ROI reporting — roll up cost, usage, and task-completion signals over time so a business can evaluate whether an optimized agent is worth continuing to run
 

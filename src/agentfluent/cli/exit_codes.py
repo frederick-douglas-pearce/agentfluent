@@ -1,10 +1,16 @@
 """Exit code invariant for AgentFluent commands.
 
+The contract below is the public CLI surface — CI consumers depend on
+these codes. Changing a code's meaning post-release is a breaking change.
+
 0 = success.
 1 = user named something specific and it's wrong (bad project slug, unknown
     session, unknown agent name, invalid scope value).
 2 = system searched and found nothing (no projects dir, project has no
     sessions, no agent definitions found).
+3 = `agentfluent diff` detected a regression at or above the
+    `--fail-on` severity threshold. Reserved for diff comparisons that
+    succeed mechanically but fail the configured CI check.
 
 `typer.BadParameter` exits 2 by Click convention for argument-level usage
 errors (e.g., `--verbose --quiet` together). That's a framework-handled
@@ -16,3 +22,4 @@ from __future__ import annotations
 EXIT_OK = 0
 EXIT_USER_ERROR = 1
 EXIT_NO_DATA = 2
+EXIT_REGRESSION = 3

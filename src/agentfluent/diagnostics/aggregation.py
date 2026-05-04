@@ -40,6 +40,7 @@ from __future__ import annotations
 import math
 from collections import defaultdict
 
+from agentfluent.config.models import SEVERITY_RANK as _SEVERITY_RANK
 from agentfluent.config.models import Severity
 from agentfluent.diagnostics.model_routing import SAVINGS_USD_KEY
 from agentfluent.diagnostics.models import (
@@ -49,12 +50,6 @@ from agentfluent.diagnostics.models import (
     DiagnosticSignal,
     SignalType,
 )
-
-_SEVERITY_RANK: dict[Severity, int] = {
-    Severity.CRITICAL: 3,
-    Severity.WARNING: 2,
-    Severity.INFO: 1,
-}
 
 # Signal types that carry comparable scalar metrics in ``detail``. Only
 # these produce a ``metric_range`` on the aggregated row.
