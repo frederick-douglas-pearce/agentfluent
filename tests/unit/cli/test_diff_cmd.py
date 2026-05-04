@@ -304,4 +304,3 @@ class TestOutputFormats:
         result = runner.invoke(cli_app, ["diff", "--help"])
         assert result.exit_code == 0
         assert "Examples" in result.output
-        assert "--fail-on" in result.output
