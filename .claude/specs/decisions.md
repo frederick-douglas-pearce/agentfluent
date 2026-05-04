@@ -242,3 +242,102 @@ Append-only log of significant trade-off decisions made during AgentFluent devel
 **Action:** Story #113 created under E3 (epic: deep-diagnostics) implementing the merge function and tests. #111's AC will be updated to reference this merge behavior.
 
 ---
+
+## D015: Quality axis — scope-fit and release timing
+
+**Date:** 2026-05-04
+**Context:** PRD brief `prd-quality-axis.md` proposes a third axis (quality) alongside cost and speed in the recommendation engine. The brief identifies three signal tiers: within-session proxies (Tier 1), local git correlation (Tier 2), and GitHub enrichment (Tier 3). v0.5 is nearly complete (5 open issues remaining: #199, #205, #215, #227, #241). v0.6 milestone has 8 open issues including deferred v0.5 items (#198 report, #201 per-session scope, #265 test consolidation) and items from offload work.
+
+**Options considered:**
+- A) Full v0.6 epic (all three tiers)
+- B) Tier-1-only as v0.6 headline alongside deferred v0.5 polish
+- C) Defer entirely to v0.7
+
+**Decision:** Option B — Tier 1 lands in v0.6 as a must-include epic. Tier 2 (local git) is scoped as a stretch story within the same epic (structurally enabled, implementation pull-in only if Tier 1 completes cleanly). Tier 3 is deferred to v0.7 as its own epic.
+
+**Rationale:**
+- v0.5 built the scaffolding this feature needs: priority ranking (#172), offload candidates (#189), calibration-sweep pattern (#260), `diff` comparison surface (#199). The infrastructure is fresh and ready.
+- The under-recommendation gap for review subagents is a credibility problem *now*. Delaying to v0.7 means an entire release cycle where AgentFluent's recommendations diverge from best-practice guidance on subagent delegation.
+- Tier 1 is zero-new-dependency: all signals come from existing JSONL session data. No git, no GitHub auth, no new data sources. This matches v0.5's "trustworthy diagnostics" foundation — extend the same data, not add new data.
+- v0.6 already has 8 open issues but they are mostly S/XS items (report export, per-session scope, test consolidation, polish). Adding a focused Tier-1 epic (~12-15 dev days) is realistic alongside those items.
+- Tier 2 as stretch avoids committing to git integration (which introduces subprocess calls, path resolution edge cases, and the question of whether AgentFluent should read git history at all). If Tier 1 ships cleanly and fast, pull in the simplest Tier-2 signal (feat-then-fix proximity). If not, cut cleanly.
+- Tier 3 (GitHub) is a separate data-source integration with auth, rate limits, and privacy considerations. It deserves its own scoping exercise, not a stretch appendage.
+
+---
+
+## D016: Quality axis — Tier-1 signal selection and sequencing
+
+**Date:** 2026-05-04
+**Context:** Five Tier-1 signals proposed in `prd-quality-axis.md` §3: (1) user mid-flight corrections, (2) file rework density, (3) plan-revise-implement loops, (4) "reviewer caught" rate, (5) stuck-loop reframing. Need to select which ship first and which are stretch.
+
+**Decision:** Ship signals (1), (2), and (4) as must-include. Defer (3) and (5).
+
+**Rationale:**
+- **(1) User mid-flight corrections** — highest-confidence quality proxy. Pattern matching on "no, do X instead" / "wait" / "actually" / "stop" in user messages is straightforward NLP. High signal-to-noise: if the user is correcting the agent frequently, that *is* a quality gap. Ships as a new `QualitySignalType` in the signal extractor.
+- **(2) File rework density** — the data already exists (tool_use blocks with file paths on Edit/Write). Counting distinct-file re-edits within a session is a simple aggregation. Strong proxy: a file edited 5+ times in one session after "feature complete" language signals the parent needed an upfront review.
+- **(4) "Reviewer caught" rate** — this is the signal that directly closes the under-recommendation gap. When architect/security-review/tester agents *do* run, measuring whether they produced substantive findings (and whether the parent acted on them) validates the recommendation. Without this signal, the quality axis has no positive evidence that review subagents help — only negative evidence that the parent struggles.
+- **(3) Plan-revise-implement loops** — requires detecting `ExitPlanMode` events and measuring the delta between plan and implementation. This is feasible but depends on plan-mode detection infrastructure that doesn't exist yet. Defer to a follow-up story.
+- **(5) Stuck-loop reframing** — the stuck-loop signal already exists as `STUCK_PATTERN`. Reframing it as a quality signal (not just efficiency) is a labeling/attribution change, not a new detection pipeline. It can be done as a small follow-up once multi-axis attribution is in place, or bundled with the axis-attribution story. Not worth a standalone story.
+
+---
+
+## D017: Quality axis — JSON schema: per-axis vector vs. synthesized-only
+
+**Date:** 2026-05-04
+**Context:** `prd-quality-axis.md` §7 item 3 asks whether the public JSON schema should expose per-axis `(cost_score, speed_score, quality_score)` or only a synthesized `priority_score` + axis label. The v0.5 `diff` work (#199) depends on schema stability for meaningful comparisons.
+
+**Decision:** Expose both. `priority_score` (synthesized float, existing field) remains the sort key. Add `axis_scores: {cost: float, speed: float, quality: float}` and `primary_axis: "cost" | "speed" | "quality"` on `AggregatedRecommendation`. `axis_scores` is the internal vector; `primary_axis` is the human-readable label.
+
+**Rationale:**
+- `diff` consumers need to compare recommendations across runs. A synthesized score hides *why* a recommendation's priority changed. If a recommendation dropped from #2 to #8 because its quality score fell, the user needs to see that — not just that the composite number changed.
+- Per-axis scores are strictly more information. Consumers who don't care can ignore them.
+- Schema stability concern is manageable: `axis_scores` is additive (new field, not changing existing fields). `primary_axis` is additive. Neither breaks existing JSON consumers. The `priority_score` formula changes (now incorporates quality), but it was documented as tunable from the start (#172 module docstring: "Calibration pass against multi-contributor data is a v0.6 follow-up").
+- The `axis_scores` dict is extensible — if v0.7+ adds a reliability axis or a maintainability axis, it's a new key, not a schema break.
+
+---
+
+## D018: Quality axis — pipeline architecture: parallel pipeline, join at recommendation layer
+
+**Date:** 2026-05-04
+**Context:** `prd-quality-axis.md` §7 item 5 asks whether to extend the offload pipeline to emit multi-axis scores, or add a parallel "quality candidates" pipeline that joins at the recommendation layer. Architect agent input recommended.
+
+**Decision:** Parallel pipeline. New `diagnostics/quality_signals.py` module emits `DiagnosticSignal` instances with new `SignalType` values (`USER_CORRECTION`, `FILE_REWORK`, `REVIEWER_CAUGHT`). These join the existing signal list in `pipeline.run_diagnostics()`. The correlator and aggregation layer consume them like any other signal. Multi-axis scoring is computed in `aggregation.py` by classifying each signal's `SignalType` into an axis (`cost`, `speed`, `quality`) and summing per-axis contributions.
+
+**Rationale:**
+- Follows the established D014 pattern: rules emit independently, composition happens at the output layer.
+- The offload pipeline (`parent_workload.py`) is cost-focused by design. Retrofitting quality scoring into it would violate single-responsibility and create coupling between cost estimation and quality heuristics.
+- Quality signals are fundamentally different from offload candidates: they don't cluster parent-thread bursts or estimate savings. They detect behavioral patterns (corrections, rework, reviewer findings) and recommend *review-style subagents*, not cheaper-model offloads.
+- New signal types flow through the existing dedup, correlation, aggregation, and priority-ranking infrastructure with minimal changes. The aggregation layer already has a `priority_score` formula — extending it with an axis classification is a focused change.
+- Architect agent should review the axis-classification mapping and the updated priority formula before implementation begins. This is flagged as a gating step on the epic.
+
+---
+
+## D019: Quality axis — calibration data availability
+
+**Date:** 2026-05-04
+**Context:** `prd-quality-axis.md` §7 item 4 asks whether enough dogfood sessions exist containing both "architect was used and caught X" and "architect was not used and X slipped through" to calibrate quality signals.
+
+**Decision:** Calibration data exists but is thin. Proceed with implementation using conservative thresholds, then run a targeted dogfood collection sprint before shipping.
+
+**Rationale:**
+- AgentFluent's own sessions have architect and security-review invocations (shipped in the project's `.claude/agents/` since v0.3). These provide "reviewer was used" positive examples.
+- Sessions *without* review subagents (pre-v0.3 sessions, CodeFluent sessions) provide the counterfactual. Whether quality issues were present can be assessed by checking for user corrections and file rework in those sessions.
+- The data is not abundant enough for statistical thresholds. Use the same approach as #260 (calibration-sweep notebook): sweep thresholds against real data, pick conservative defaults that avoid false positives, document the calibration in the notebook.
+- A dedicated "quality signal calibration" story in the epic will handle the data collection and threshold tuning. This is the same pattern as v0.5's approach to offload calibration.
+
+---
+
+## D020: Quality axis — negative recommendations and recommendation copy
+
+**Date:** 2026-05-04
+**Context:** `prd-quality-axis.md` §7 items 6 and 7 ask about recommendation copy verbosity and whether AgentFluent should recommend *removing* a subagent that shows zero quality signal.
+
+**Decisions:**
+- **Recommendation copy:** Concise with axis label. Format: "[axis] observation — action." Example: "[quality] 7 user corrections in 3 sessions — consider an architect agent for design review before implementation." No didactic explanation of why quality matters. The axis label *is* the explanation. Verbose mode can expand with evidence details.
+- **Negative recommendations (remove subagent):** Deferred. Out of scope for this epic. Reason: negative recommendations ("remove this agent") are high-risk for trust. A review subagent might catch a critical bug once per 50 runs and still be worth its cost. Recommending removal based on "zero quality signal observed in N sessions" requires establishing a baseline of expected catch rate per subagent type, which is a research question beyond this epic's scope. File as a future issue if the need becomes concrete.
+
+**Rationale:**
+- Concise copy avoids the "too didactic" risk the brief flagged. Users who run AgentFluent repeatedly will internalize the axis meaning quickly. First-time users get the axis label as a breadcrumb; `--verbose` provides the evidence trail.
+- Negative recommendations are a different product surface (removal advice vs. addition advice) with a much higher false-positive cost. Getting "add a reviewer" wrong wastes some tokens. Getting "remove a reviewer" wrong causes a quality regression. The asymmetry justifies deferral.
+
+---
