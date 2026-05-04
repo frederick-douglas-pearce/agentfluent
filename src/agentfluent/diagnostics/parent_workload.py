@@ -44,7 +44,8 @@ except ImportError:  # pragma: no cover — exercised via install-path test
     pass
 
 from agentfluent.agents.models import WRITE_TOOLS
-from agentfluent.analytics.pricing import ModelPricing, compute_cost
+from agentfluent.analytics.pricing import ModelPricing, compute_cost, get_pricing
+from agentfluent.config.models import AgentConfig
 from agentfluent.core.session import SessionMessage, ToolUseBlock, Usage
 from agentfluent.diagnostics._clustering import (
     SKLEARN_AVAILABLE,
@@ -61,8 +62,10 @@ from agentfluent.diagnostics._complexity import (
     recommend_model_for_complexity,
 )
 from agentfluent.diagnostics.delegation import (
+    DEFAULT_MIN_SIMILARITY,
     MODEL_HAIKU,
     MODEL_SONNET,
+    apply_dedup,
     synthesize_description,
     synthesize_name,
 )
@@ -654,3 +657,91 @@ def generate_offload_candidate(
         subagent_draft=subagent_draft,
         skill_draft=None,
     )
+
+
+def _pick_cluster_parent_model(cluster: BurstCluster) -> str:
+    """The parent model id observed on the cluster's bursts.
+
+    All bursts in a cluster should share a model in practice (the
+    extractor logs at debug when they don't); we use the first member's
+    model. Empty string means "unknown" — pricing lookup falls back to
+    ``None`` and the candidate ships with zero cost figures.
+    """
+    if not cluster.members:
+        return ""
+    return cluster.members[0].model or ""
+
+
+def apply_offload_dedup(
+    candidates: list[OffloadCandidate],
+    existing_configs: list[AgentConfig],
+    min_similarity: float,
+) -> list[OffloadCandidate]:
+    """Mark offload candidates whose draft overlaps an existing agent config.
+
+    Reuses ``delegation.apply_dedup`` against each candidate's
+    ``subagent_draft`` (a ``DelegationSuggestion``), then mirrors the
+    populated ``matched_agent`` and ``dedup_note`` back onto the parent
+    ``OffloadCandidate``. Single source of dedup truth — the TF-IDF
+    cosine logic lives in one place.
+
+    Candidates without a ``subagent_draft`` are passed through
+    untouched (defensive — production code always sets one).
+    """
+    if not existing_configs:
+        return candidates
+    drafts = [c.subagent_draft for c in candidates if c.subagent_draft is not None]
+    if not drafts:
+        return candidates
+    apply_dedup(drafts, existing_configs, min_similarity)
+    for candidate in candidates:
+        if candidate.subagent_draft is None:
+            continue
+        candidate.matched_agent = candidate.subagent_draft.matched_agent
+        candidate.dedup_note = candidate.subagent_draft.dedup_note
+    return candidates
+
+
+def build_offload_candidates(
+    messages: list[SessionMessage],
+    existing_configs: list[AgentConfig] | None = None,
+    *,
+    min_cluster_size: int = DEFAULT_BURST_CLUSTER_SIZE,
+    min_similarity: float = DEFAULT_MIN_SIMILARITY,
+) -> list[OffloadCandidate]:
+    """End-to-end: extract → filter → cluster → generate → dedup.
+
+    Pipeline orchestration lives here (rather than in
+    ``diagnostics/pipeline.py``) so parent-thread logic stays in one
+    module — ``run_diagnostics`` becomes a thin caller. Symmetric with
+    ``delegation.suggest_delegations`` placement.
+
+    Pricing is looked up per cluster from
+    ``cluster.members[0].model``; clusters whose model has no pricing
+    table entry ship with ``estimated_*_usd = 0.0`` and a debug log.
+    Returns ``[]`` when sklearn is missing OR no cluster meets
+    ``min_cluster_size``.
+    """
+    if not SKLEARN_AVAILABLE:
+        return []
+    bursts = filter_bursts(extract_bursts(messages))
+    clusters = cluster_bursts(bursts, min_cluster_size=min_cluster_size)
+    if not clusters:
+        return []
+    candidates: list[OffloadCandidate] = []
+    for cluster in clusters:
+        parent_model = _pick_cluster_parent_model(cluster)
+        parent_pricing = get_pricing(parent_model) if parent_model else None
+        alt_model = pick_alternative_model(parent_model)
+        alt_pricing = get_pricing(alt_model) if alt_model else None
+        candidates.append(
+            generate_offload_candidate(
+                cluster,
+                parent_model=parent_model,
+                parent_pricing=parent_pricing,
+                alt_pricing=alt_pricing,
+            ),
+        )
+    if existing_configs:
+        candidates = apply_offload_dedup(candidates, existing_configs, min_similarity)
+    return candidates

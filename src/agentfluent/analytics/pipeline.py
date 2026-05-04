@@ -57,6 +57,21 @@ class SessionAnalysis(BaseModel):
     are already captured on ``invocations[i].trace.tool_calls`` and
     not duplicated here."""
 
+    messages: list[SessionMessage] = Field(default_factory=list, exclude=True)
+    """Parsed parent-session messages. Retained so downstream
+    diagnostics — currently only #189's parent-thread offload-candidate
+    pipeline — can re-walk the session without re-parsing the JSONL.
+
+    ``exclude=True`` keeps this field out of ``model_dump`` /
+    ``model_dump_json`` output: the CLI's ``analyze --format json`` path
+    serializes the full ``AnalysisResult``, and shipping every parsed
+    message (including ``ToolUseBlock.input`` payloads — Edit/Write file
+    contents, Bash output, Read results) would bloat the JSON envelope
+    by orders of magnitude AND surface file contents the user never
+    asked for in a CLI summary. In-memory access still works for
+    diagnostics; serialization callers see only the pre-existing
+    fields."""
+
     message_count: int = 0
     user_message_count: int = 0
     assistant_message_count: int = 0
@@ -114,6 +129,7 @@ def analyze_session(
         agent_metrics=agent_metrics,
         invocations=invocations,
         mcp_tool_calls=mcp_tool_calls,
+        messages=messages,
         message_count=len(messages),
         user_message_count=_count_type(messages, "user"),
         assistant_message_count=_count_type(messages, "assistant"),

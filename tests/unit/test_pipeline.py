@@ -44,6 +44,19 @@ class TestAnalyzeSession:
         # Verify token metrics use deduplicated data
         assert result.token_metrics.api_call_count == 2
 
+    def test_messages_field_in_memory_but_excluded_from_json(
+        self, agent_session_path: Path,
+    ) -> None:
+        # In-memory: populated for downstream diagnostics (e.g., #189's
+        # parent-thread offload-candidate pipeline reads from it).
+        result = analyze_session(agent_session_path)
+        assert result.messages, "messages must populate for diagnostics consumers"
+        # JSON: excluded so `analyze --format json` doesn't dump
+        # ToolUseBlock.input payloads (file contents, bash output)
+        # the user never asked for.
+        assert "messages" not in result.model_dump(mode="json")
+        assert "messages" not in result.model_dump()
+
 
 class TestAnalyzeSessions:
     def test_multiple_sessions(

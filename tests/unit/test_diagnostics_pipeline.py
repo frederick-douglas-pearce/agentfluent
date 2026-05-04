@@ -297,6 +297,117 @@ class TestDelegationSuggestions:
         assert result.delegation_suggestions == []
 
 
+class TestOffloadCandidates:
+    """Pipeline wiring for #189's parent-thread offload-candidate path.
+    Real clustering + cost behavior is covered in
+    test_parent_workload_cluster.py; this class just confirms candidates
+    surface on DiagnosticsResult, ``parent_messages=None`` short-circuits
+    cleanly, and the sklearn-unavailable path is silently skipped.
+    """
+
+    @staticmethod
+    def _two_pattern_messages() -> list:
+        # Two distinct burst patterns × 6 each: pytest-flavored bursts and
+        # PR-review-flavored bursts. Constructed via SessionMessage so we
+        # exercise the full extract → filter → cluster path. Long-tailed
+        # text and multi-tool calls clear MIN_BURST_TOOLS and
+        # MIN_BURST_TEXT_TOKENS for both patterns.
+        from agentfluent.core.session import (
+            ContentBlock,
+            SessionMessage,
+            Usage,
+        )
+        pytest_tail = (
+            " collect coverage with pytest-cov and emit xunit results per "
+            "pytest module; use pytest fixtures and parametrize markers "
+            "to exercise the edge cases reported by pytest collectors."
+        )
+        pr_tail = (
+            " summarize the pull request diff, list changed files, "
+            "identify any regressions in the PR description, and "
+            "highlight review comments from prior reviewers."
+        )
+        messages = []
+        idx = 0
+        for kind, tail, tools in [
+            ("pytest run", pytest_tail, ["Bash", "Read", "Read"]),
+            ("pull request", pr_tail, ["Bash", "Read", "Grep"]),
+        ]:
+            for i in range(6):
+                messages.append(
+                    SessionMessage(
+                        type="user",
+                        content_blocks=[
+                            ContentBlock(
+                                type="text",
+                                text=f"do a {kind} cycle {i}{tail}",
+                            ),
+                        ],
+                    ),
+                )
+                blocks = [
+                    ContentBlock(
+                        type="text",
+                        text=f"running {kind} {i}.{tail}",
+                    ),
+                ]
+                for j, name in enumerate(tools):
+                    blocks.append(
+                        ContentBlock(
+                            type="tool_use",
+                            id=f"toolu_{idx}_{j}",
+                            name=name,
+                            input={},
+                        ),
+                    )
+                messages.append(
+                    SessionMessage(
+                        type="assistant",
+                        content_blocks=blocks,
+                        model="claude-opus-4-7",
+                        usage=Usage(input_tokens=100, output_tokens=200),
+                    ),
+                )
+                idx += 1
+        return messages
+
+    def test_no_parent_messages_yields_empty_offload_candidates(self) -> None:
+        result = run_diagnostics([], parent_messages=None)
+        assert result.offload_candidates == []
+
+    def test_empty_parent_messages_yields_empty_offload_candidates(
+        self,
+    ) -> None:
+        result = run_diagnostics([], parent_messages=[])
+        assert result.offload_candidates == []
+
+    def test_pipeline_populates_offload_candidates(self) -> None:
+        pytest.importorskip("sklearn")
+        messages = self._two_pattern_messages()
+        result = run_diagnostics([], parent_messages=messages)
+        assert len(result.offload_candidates) == 2
+        # Subagent draft is populated end-to-end.
+        for candidate in result.offload_candidates:
+            assert candidate.subagent_draft is not None
+            assert candidate.subagent_draft.cluster_size == 6
+            assert candidate.parent_model == "claude-opus-4-7"
+            assert candidate.skill_draft is None
+
+    def test_pipeline_empty_offload_when_sklearn_missing(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            "agentfluent.diagnostics.pipeline.SKLEARN_AVAILABLE", False,
+        )
+        result = run_diagnostics(
+            [], parent_messages=self._two_pattern_messages(),
+        )
+        assert result.offload_candidates == []
+        # Delegation path is also gated by the same SKLEARN flag — confirm
+        # the shared gate suppressed both, matching the docstring contract.
+        assert result.delegation_suggestions == []
+
+
 class TestModelRoutingWiring:
     """Sanity wiring check — the real model-routing logic is covered by
     test_model_routing.py. Here we just verify signals flow through

@@ -22,6 +22,7 @@ from agentfluent.agents.models import AgentInvocation
 from agentfluent.config.mcp_discovery import discover_mcp_servers
 from agentfluent.config.models import AgentConfig
 from agentfluent.config.scanner import scan_agents
+from agentfluent.core.session import SessionMessage
 from agentfluent.diagnostics.aggregation import aggregate_recommendations
 from agentfluent.diagnostics.correlator import correlate
 from agentfluent.diagnostics.delegation import (
@@ -40,8 +41,10 @@ from agentfluent.diagnostics.models import (
     DelegationSuggestion,
     DiagnosticSignal,
     DiagnosticsResult,
+    OffloadCandidate,
     SignalType,
 )
+from agentfluent.diagnostics.parent_workload import build_offload_candidates
 from agentfluent.diagnostics.signals import extract_signals
 from agentfluent.diagnostics.trace_signals import extract_trace_signals
 
@@ -168,6 +171,7 @@ def run_diagnostics(
     mcp_tool_calls: list[McpToolCall] | None = None,
     claude_config_dir: Path | None = None,
     project_dir: Path | None = None,
+    parent_messages: list[SessionMessage] | None = None,
 ) -> DiagnosticsResult:
     """Run the full diagnostics pipeline on agent invocations.
 
@@ -186,6 +190,13 @@ def run_diagnostics(
     ``analyze_session``) is non-empty. Silent-skips the whole audit
     when all three are empty — no noisy "MCP Assessment" section on
     projects that don't use MCP at all.
+
+    ``parent_messages`` enables #189's parent-thread offload-candidate
+    pipeline: when sklearn is installed AND the caller passes the
+    aggregated parsed messages, the function clusters parent-thread
+    tool-bursts and emits ``DiagnosticsResult.offload_candidates``.
+    Empty list when sklearn is missing OR ``parent_messages`` is None
+    OR no cluster met the size threshold.
     """
     signals = extract_signals(invocations)
 
@@ -252,6 +263,7 @@ def run_diagnostics(
     subagent_trace_count = sum(1 for inv in invocations if inv.trace is not None)
 
     delegation_suggestions: list[DelegationSuggestion] = []
+    offload_candidates: list[OffloadCandidate] = []
     if SKLEARN_AVAILABLE:
         delegation_suggestions = suggest_delegations(
             invocations,
@@ -260,10 +272,17 @@ def run_diagnostics(
             min_similarity=min_similarity,
         )
         _enrich_dedup_with_mismatches(delegation_suggestions, signals)
+        if parent_messages:
+            offload_candidates = build_offload_candidates(
+                parent_messages,
+                existing_configs=agent_configs or None,
+                min_similarity=min_similarity,
+            )
     else:
         logger.debug(
-            "Delegation clustering skipped: scikit-learn not installed. "
-            "Install agentfluent[clustering] to enable.",
+            "Delegation clustering and offload-candidate analysis skipped: "
+            "scikit-learn not installed. Install agentfluent[clustering] "
+            "to enable.",
         )
 
     return DiagnosticsResult(
@@ -272,4 +291,5 @@ def run_diagnostics(
         aggregated_recommendations=aggregated,
         subagent_trace_count=subagent_trace_count,
         delegation_suggestions=delegation_suggestions,
+        offload_candidates=offload_candidates,
     )

@@ -24,11 +24,11 @@ from agentfluent.diagnostics.delegation import (  # noqa: E402
     MODEL_SONNET,
     DelegationCluster,
     SklearnMissingError,
-    _apply_dedup,
     _classify_confidence,
     _classify_model,
     _collect_tools_from_traces,
     _filter_tools_by_frequency,
+    apply_dedup,
     cluster_delegations,
     generate_draft,
     suggest_delegations,
@@ -521,7 +521,7 @@ class TestDedup:
             name="pytest-runner",
             description="Runs pytest suite and reports test results",
         )]
-        result = _apply_dedup([draft], configs, min_similarity=0.3)
+        result = apply_dedup([draft], configs, min_similarity=0.3)
         assert result[0].dedup_note
         assert "pytest-runner" in result[0].dedup_note
         # `matched_agent` is populated alongside `dedup_note` so
@@ -534,7 +534,7 @@ class TestDedup:
             name="database-migrator",
             description="Manages SQL schema migrations for the payments service",
         )]
-        result = _apply_dedup([draft], configs, min_similarity=0.7)
+        result = apply_dedup([draft], configs, min_similarity=0.7)
         assert result[0].dedup_note == ""
         assert result[0].matched_agent == ""
 
@@ -544,7 +544,7 @@ class TestDedup:
             name="database-migrator",
             description="Manages SQL schema migrations for the payments service",
         )]
-        result = _apply_dedup([draft], configs, min_similarity=0.7)
+        result = apply_dedup([draft], configs, min_similarity=0.7)
         assert result[0].dedup_note == ""
 
     def test_falls_back_to_prompt_body_when_description_empty(self) -> None:
@@ -557,19 +557,19 @@ class TestDedup:
             description="",
             prompt_body="You run pytest tests and report results from the test suite.",
         )]
-        result = _apply_dedup([draft], configs, min_similarity=0.3)
+        result = apply_dedup([draft], configs, min_similarity=0.3)
         assert "pytest-runner" in result[0].dedup_note
 
     def test_empty_existing_configs_passes_through(self) -> None:
         draft = self._draft()
-        result = _apply_dedup([draft], [], min_similarity=0.7)
+        result = apply_dedup([draft], [], min_similarity=0.7)
         assert result[0].dedup_note == ""
 
     def test_all_empty_config_texts_skip_dedup(self) -> None:
         draft = self._draft()
         # Both description and prompt_body empty on every config.
         configs = [_config(name="empty1"), _config(name="empty2")]
-        result = _apply_dedup([draft], configs, min_similarity=0.7)
+        result = apply_dedup([draft], configs, min_similarity=0.7)
         assert result[0].dedup_note == ""
 
 

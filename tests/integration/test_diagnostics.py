@@ -67,3 +67,24 @@ class TestDiagnosticsPipelineReal:
             assert rec.message
             assert rec.observation
             assert rec.action
+
+    def test_offload_candidates_round_trip_via_parent_messages(
+        self, real_session_with_agents: Path,
+    ) -> None:
+        # End-to-end check that #189-E's wiring populates offload_candidates
+        # on a real session and the result JSON-round-trips. Cluster count
+        # depends on the session and may legitimately be zero, so the
+        # assertion is on shape (list + JSON-validity), not size.
+        messages = parse_session(real_session_with_agents)
+        invocations = extract_agent_invocations(messages)
+        result = run_diagnostics(invocations, parent_messages=messages)
+        assert isinstance(result.offload_candidates, list)
+        for candidate in result.offload_candidates:
+            assert candidate.subagent_draft is not None
+            assert candidate.skill_draft is None
+            assert candidate.alternative_model
+        # Same JSON-additive contract documented for the v0.5 schema.
+        rehydrated = DiagnosticsResult.model_validate(
+            result.model_dump(mode="json"),
+        )
+        assert len(rehydrated.offload_candidates) == len(result.offload_candidates)
