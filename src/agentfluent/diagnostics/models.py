@@ -333,6 +333,19 @@ class OffloadCandidate(BaseModel):
     Modal sequence by ``Counter`` of tool-name tuples; empty when cluster
     has no observed tool calls."""
 
+    tools: list[str] = Field(default_factory=list)
+    """Frequency-filtered tool list (mirrors ``subagent_draft.tools`` when
+    a subagent draft is present). Surfaced flat so the CLI compact-table
+    formatter doesn't reach across the ``subagent_draft`` boundary, which
+    would silently fall through to ``[]`` for the v0.6 ``target_kind=skill``
+    path. Other rendering surfaces (verbose YAML, JSON) read whichever
+    field they prefer; both stay in sync at construction time."""
+
+    tools_note: str = ""
+    """Diagnostic note about the ``tools`` list, mirroring
+    ``subagent_draft.tools_note``. Same surface-flat rationale as
+    ``tools`` above."""
+
     estimated_parent_tokens: int = 0
     """Sum of total tokens used across cluster bursts on the parent thread."""
 

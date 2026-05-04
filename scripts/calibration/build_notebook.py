@@ -1290,7 +1290,13 @@ if it appears in ≥ threshold fraction of cluster bursts. Sweep over
 observed-tool count."""))
 
     cells.append(code("""\
-from collections import Counter as _Counter
+# Use the shipped helper rather than reimplementing the presence filter
+# inline — keeps the calibration sweep aligned with the actual filter
+# logic used by build_offload_candidates. If the helper changes
+# (e.g. switches from presence to call-volume), the sweep automatically
+# tracks. Underscore-prefixed access is fine in calibration tooling
+# that's intentionally introspecting algorithm internals.
+from agentfluent.diagnostics.parent_workload import _filter_tools_from_bursts
 
 freq_results = []
 for threshold in [0.3, 0.5, 0.7]:
@@ -1298,11 +1304,7 @@ for threshold in [0.3, 0.5, 0.7]:
         observed = sorted({
             tub.name for b in cluster.members for tub in b.tool_use_blocks
         })
-        counts: _Counter[str] = _Counter()
-        for b in cluster.members:
-            counts.update({tub.name for tub in b.tool_use_blocks})
-        cutoff = threshold * len(cluster.members)
-        kept = sorted(t for t, n in counts.items() if n >= cutoff)
+        kept = _filter_tools_from_bursts(cluster.members, threshold=threshold)
         freq_results.append({
             "threshold": threshold,
             "cluster_idx": ci,
@@ -1344,7 +1346,7 @@ if default_clusters:
         "cohesion", ascending=False,
     )
     print(df_tiers.to_string(index=False))
-    tier_counts = _Counter(o["tier"] for o in obs)
+    tier_counts = Counter(o["tier"] for o in obs)
     print()
     for tier in ("high", "medium", "low"):
         print(f"  {tier}: {tier_counts[tier]}")

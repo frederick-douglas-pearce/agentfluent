@@ -647,6 +647,8 @@ def generate_offload_candidate(
         cohesion_score=cluster.cohesion_score,
         top_terms=list(cluster.top_terms),
         tool_sequence_summary=_tool_sequence_summary(cluster.members),
+        tools=list(subagent_draft.tools),
+        tools_note=subagent_draft.tools_note,
         estimated_parent_tokens=parent_tokens,
         estimated_parent_cost_usd=parent_cost_total,
         estimated_savings_usd=savings_total,

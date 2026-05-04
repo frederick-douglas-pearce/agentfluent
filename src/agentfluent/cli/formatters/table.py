@@ -37,6 +37,14 @@ API_RATE_FOOTNOTE = (
 
 GLOSSARY_FOOTNOTE = "See docs/GLOSSARY.md for term definitions."
 
+# Negative-savings short marker for the Offload Candidates table's Note
+# column. Single source of truth: the formatter renders it; tests assert
+# on it. The model's verbose ``cost_note`` ("parent-thread cache appears
+# load-bearing...") is a separate, longer text shown only in --verbose
+# YAML output. Keeping the short and verbose forms decoupled lets each
+# evolve independently without drifting.
+OFFLOAD_COST_MORE_NOTE = "offload would cost MORE"
+
 if TYPE_CHECKING:
     from agentfluent.analytics.pipeline import AnalysisResult
     from agentfluent.config.models import ConfigScore
@@ -534,12 +542,15 @@ def _format_offload_candidates(
 
     for cand in candidates:
         color = CONFIDENCE_COLORS.get(cand.confidence, "white")
-        draft = cand.subagent_draft
-        tools_display: str
-        if draft is not None and draft.tools:
-            tools_display = escape(", ".join(draft.tools))
-        elif draft is not None and draft.tools_note:
-            tools_display = escape(draft.tools_note)
+        # Read tools/tools_note FLAT off the candidate, mirroring how
+        # every other column reads from `OffloadCandidate` directly.
+        # Reaching into `cand.subagent_draft` here would silently fall
+        # through to "[dim]—[/dim]" for the v0.6 ``target_kind=skill``
+        # path while the rest of the row still rendered.
+        if cand.tools:
+            tools_display = escape(", ".join(cand.tools))
+        elif cand.tools_note:
+            tools_display = escape(cand.tools_note)
         else:
             tools_display = "[dim]—[/dim]"
 
@@ -558,7 +569,7 @@ def _format_offload_candidates(
             # ("parent-thread cache load-bearing...") is the same
             # warning at length and lives in the --verbose YAML
             # preamble. Duplicating it here just bloats the table.
-            note_parts.append("offload would cost MORE")
+            note_parts.append(OFFLOAD_COST_MORE_NOTE)
         if cand.dedup_note:
             note_parts.append(escape(cand.dedup_note))
         note = "; ".join(note_parts)

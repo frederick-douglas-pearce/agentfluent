@@ -10,7 +10,10 @@ from __future__ import annotations
 
 from rich.console import Console
 
-from agentfluent.cli.formatters.table import _format_offload_candidates
+from agentfluent.cli.formatters.table import (
+    OFFLOAD_COST_MORE_NOTE,
+    _format_offload_candidates,
+)
 from agentfluent.diagnostics.models import (
     DelegationSuggestion,
     DiagnosticsResult,
@@ -54,9 +57,11 @@ def _candidate(
     parent_model: str = "claude-opus-4-7",
     alternative_model: str = "claude-sonnet-4-6",
     tools: list[str] | None = None,
+    tools_note: str = "",
     dedup_note: str = "",
     matched_agent: str = "",
 ) -> OffloadCandidate:
+    resolved_tools = tools if tools is not None else ["Bash", "Read"]
     return OffloadCandidate(
         name=name,
         description=f"Handles delegations related to: {name}.",
@@ -64,7 +69,9 @@ def _candidate(
         cluster_size=cluster_size,
         cohesion_score=cohesion_score,
         top_terms=["pytest", "tests", "run"],
-        tool_sequence_summary=tools or ["Bash", "Read"],
+        tool_sequence_summary=resolved_tools,
+        tools=resolved_tools,
+        tools_note=tools_note,
         estimated_parent_tokens=estimated_parent_tokens,
         estimated_parent_cost_usd=estimated_parent_cost_usd,
         estimated_savings_usd=estimated_savings_usd,
@@ -72,7 +79,7 @@ def _candidate(
         alternative_model=alternative_model,
         cost_note=cost_note,
         target_kind="subagent",
-        subagent_draft=_draft(name=name, tools=tools, confidence=confidence),
+        subagent_draft=_draft(name=name, tools=resolved_tools, confidence=confidence),
         skill_draft=None,
         dedup_note=dedup_note,
         matched_agent=matched_agent,
@@ -139,7 +146,7 @@ class TestOffloadCandidatesSection:
         # Sign flip in the savings cell — magnitude with a `+` prefix.
         assert "+$2.50" in text
         # Short warning in the Note column.
-        assert "offload would cost MORE" in text
+        assert OFFLOAD_COST_MORE_NOTE in text
         # The verbose cost_note appears ONLY in --verbose mode.
         assert "load-bearing" not in text
         verbose_text = _render(diag, verbose=True)
