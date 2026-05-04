@@ -36,7 +36,10 @@ from agentfluent.diagnostics.mcp_assessment import (
     audit_mcp_servers,
     extract_mcp_usage,
 )
-from agentfluent.diagnostics.model_routing import extract_model_routing_signals
+from agentfluent.diagnostics.model_routing import (
+    SAVINGS_USD_KEY,
+    extract_model_routing_signals,
+)
 from agentfluent.diagnostics.models import (
     TRACE_SIGNAL_TYPES,
     DelegationSuggestion,
@@ -75,7 +78,7 @@ def _append_mismatch_phrase(
     matched_name = str(detail.get("current_model", ""))
     recommended = str(detail.get("recommended_model", ""))
     mismatch_type = str(detail.get("mismatch_type", ""))
-    savings = detail.get("estimated_savings_usd")
+    savings = detail.get(SAVINGS_USD_KEY)
     invocation_count = detail.get("invocation_count", 0)
 
     clauses = [

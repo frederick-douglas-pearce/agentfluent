@@ -41,6 +41,7 @@ import math
 from collections import defaultdict
 
 from agentfluent.config.models import Severity
+from agentfluent.diagnostics.model_routing import SAVINGS_USD_KEY
 from agentfluent.diagnostics.models import (
     TRACE_SIGNAL_TYPES,
     AggregatedRecommendation,
@@ -154,7 +155,7 @@ def _summed_savings_usd(signals: list[DiagnosticSignal]) -> float:
     for sig in signals:
         if sig.signal_type != SignalType.MODEL_MISMATCH:
             continue
-        savings = sig.detail.get("estimated_savings_usd")
+        savings = sig.detail.get(SAVINGS_USD_KEY)
         if isinstance(savings, (int, float)):
             total += float(savings)
     return total
@@ -198,7 +199,6 @@ def aggregate_recommendations(
         count = len(members)
         severity = _max_severity(recs)
         metric_range = _compute_metric_range(signals)
-        # Architect-noted: signals are in scope here, no external lookup.
         has_trace_evidence = any(
             sig.signal_type in TRACE_SIGNAL_TYPES for sig in signals
         )

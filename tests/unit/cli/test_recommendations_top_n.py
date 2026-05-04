@@ -43,6 +43,13 @@ def _agg(
     )
 
 
+# NOTE: this file is the third Console-record helper site (after
+# test_deep_diagnostics_formatting.py and test_offload_candidates_formatting.py).
+# Consolidation tracked in #265. The two helpers below differ only in
+# which formatter they invoke; both should fold into a shared
+# `render_section(formatter, ...)` once #265 lands.
+
+
 def _render(
     diag: DiagnosticsResult,
     *,

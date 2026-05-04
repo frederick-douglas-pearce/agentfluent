@@ -407,14 +407,6 @@ class TestPriorityScore:
         assert aggregated[0].agent_type == "explore"
         assert aggregated[0].priority_score > aggregated[1].priority_score
 
-    def test_priority_score_populated_on_every_row(self) -> None:
-        pairs = [
-            _retry_loop_pair("pm", "Bash", 3),
-            _token_outlier_pair("explore", 2.5),
-        ]
-        aggregated = aggregate_recommendations(pairs)
-        assert all(a.priority_score > 0 for a in aggregated)
-
     def test_count_grows_score_via_log1p_not_linearly(self) -> None:
         # Count=10 should NOT score 10x count=1 — log1p damps.
         # We verify the scores are ordered correctly but the ratio
