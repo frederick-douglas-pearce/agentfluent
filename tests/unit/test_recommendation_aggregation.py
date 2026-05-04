@@ -314,3 +314,124 @@ class TestAggregationModel:
         )
         assert agg.count == 1
         assert agg.metric_range is None
+        assert agg.priority_score == 0.0
+
+
+def _model_mismatch_pair(
+    agent_type: str,
+    estimated_savings_usd: float,
+    invocation_count: int = 5,
+) -> tuple[DiagnosticSignal, DiagnosticRecommendation]:
+    signal = DiagnosticSignal(
+        signal_type=SignalType.MODEL_MISMATCH,
+        severity=Severity.WARNING,
+        agent_type=agent_type,
+        message=f"Overspec'd model: {agent_type} runs on opus.",
+        detail={
+            "mismatch_type": "overspec",
+            "current_model": "claude-opus-4-7",
+            "recommended_model": "claude-haiku-4-5",
+            "complexity_tier": "simple",
+            "invocation_count": invocation_count,
+            "estimated_savings_usd": estimated_savings_usd,
+        },
+    )
+    rec = DiagnosticRecommendation(
+        target="model",
+        severity=Severity.WARNING,
+        message=f"Switch '{agent_type}' to Haiku — saves ~${estimated_savings_usd:.2f}.",
+        observation=f"'{agent_type}' is overspec'd on Opus.",
+        reason="Simple workload doesn't justify Opus pricing.",
+        action="Update the agent's frontmatter to model: claude-haiku-4-5.",
+        agent_type=agent_type,
+        signal_types=[SignalType.MODEL_MISMATCH],
+    )
+    return signal, rec
+
+
+def _stuck_pattern_pair(
+    agent_type: str,
+    severity: Severity = Severity.WARNING,
+) -> tuple[DiagnosticSignal, DiagnosticRecommendation]:
+    signal = DiagnosticSignal(
+        signal_type=SignalType.STUCK_PATTERN,
+        severity=severity,
+        agent_type=agent_type,
+        message=f"Subagent '{agent_type}' got stuck after 5 retries.",
+        detail={"stuck_count": 5, "tool_calls": []},
+    )
+    rec = DiagnosticRecommendation(
+        target="prompt",
+        severity=severity,
+        message=f"Add fallback guidance to '{agent_type}'.",
+        observation="Stuck after 5 retries.",
+        reason="No recovery guidance.",
+        action="Add explicit fallback paths.",
+        agent_type=agent_type,
+        signal_types=[SignalType.STUCK_PATTERN],
+    )
+    return signal, rec
+
+
+class TestPriorityScore:
+    """Priority scoring (#172). Severity dominates; trace evidence and
+    cost impact serve as tiebreakers within a severity tier."""
+
+    def test_severity_dominates_count(self) -> None:
+        # 1 critical vs 100 warnings: critical wins despite the count.
+        critical_pair = _retry_loop_pair("pm", "Bash", 5, severity=Severity.CRITICAL)
+        warning_pairs = [_token_outlier_pair(f"a{i}", 2.0) for i in range(100)]
+        # Use distinct agent_types so the warnings stay across rows;
+        # otherwise they'd aggregate into one row with count=100.
+        aggregated = aggregate_recommendations([critical_pair, *warning_pairs])
+        # First row by priority desc must be the critical, regardless
+        # of its count of 1.
+        assert aggregated[0].severity == Severity.CRITICAL
+
+    def test_trace_evidence_outranks_metadata_at_same_severity(self) -> None:
+        # Two warnings: one carries trace-level STUCK_PATTERN, the
+        # other is a metadata-only TOKEN_OUTLIER. Same count (1).
+        # Trace one wins via the W_TRACE boost.
+        trace_pair = _stuck_pattern_pair("pm")
+        metadata_pair = _token_outlier_pair("explore", 2.0)
+        aggregated = aggregate_recommendations([trace_pair, metadata_pair])
+        assert aggregated[0].agent_type == "pm"
+        assert aggregated[0].priority_score > aggregated[1].priority_score
+
+    def test_higher_savings_outranks_lower_within_same_severity(self) -> None:
+        # Two MODEL_MISMATCH warnings; the larger-savings one ranks
+        # higher (cost impact is a same-severity tiebreaker).
+        big_pair = _model_mismatch_pair("explore", 50.0)
+        small_pair = _model_mismatch_pair("pm", 5.0)
+        aggregated = aggregate_recommendations([big_pair, small_pair])
+        assert aggregated[0].agent_type == "explore"
+        assert aggregated[0].priority_score > aggregated[1].priority_score
+
+    def test_count_grows_score_via_log1p_not_linearly(self) -> None:
+        # Count=10 should NOT score 10x count=1 — log1p damps.
+        # We verify the scores are ordered correctly but the ratio
+        # is bounded (log1p(10) / log1p(1) ≈ 3.46).
+        single = _token_outlier_pair("a", 2.0)
+        many = [_token_outlier_pair("b", 2.0) for _ in range(10)]
+        aggregated = aggregate_recommendations([single, *many])
+        single_row = next(a for a in aggregated if a.agent_type == "a")
+        many_row = next(a for a in aggregated if a.agent_type == "b")
+        assert many_row.count == 10
+        assert single_row.count == 1
+        # Bounded growth: many's score is less than 10× single's score.
+        assert many_row.priority_score < 10 * single_row.priority_score
+        # But strictly higher.
+        assert many_row.priority_score > single_row.priority_score
+
+    def test_aggregated_list_sorted_by_priority_desc(self) -> None:
+        pairs = [
+            _retry_loop_pair("pm", "Bash", 3, severity=Severity.CRITICAL),
+            _token_outlier_pair("explore", 2.0),  # warning, no trace
+            _stuck_pattern_pair("architect"),     # warning, trace
+            _model_mismatch_pair("plan", 25.0),   # warning, savings
+        ]
+        aggregated = aggregate_recommendations(pairs)
+        scores = [a.priority_score for a in aggregated]
+        assert scores == sorted(scores, reverse=True)
+        # Critical first.
+        assert aggregated[0].severity == Severity.CRITICAL

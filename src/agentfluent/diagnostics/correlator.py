@@ -15,6 +15,7 @@ from agentfluent.diagnostics.builtin_actions import (
     BuiltinConcern,
     builtin_recommendation,
 )
+from agentfluent.diagnostics.model_routing import SAVINGS_USD_KEY
 from agentfluent.diagnostics.models import (
     DiagnosticRecommendation,
     DiagnosticSignal,
@@ -506,7 +507,7 @@ class ModelRoutingRule:
         recommended_model = str(detail.get("recommended_model", ""))
         complexity = str(detail.get("complexity_tier", "moderate"))
         invocation_count = detail.get("invocation_count", 0)
-        savings = detail.get("estimated_savings_usd")
+        savings = detail.get(SAVINGS_USD_KEY)
 
         observation = signal.message
         reason = (

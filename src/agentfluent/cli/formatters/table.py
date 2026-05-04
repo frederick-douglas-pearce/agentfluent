@@ -127,8 +127,14 @@ def format_analysis_table(
     *,
     verbose: bool = False,
     show_diagnostics: bool = False,
+    top_n: int = 5,
 ) -> None:
-    """Render analyze output: token, cost, tool, agent, and diagnostics tables."""
+    """Render analyze output: token, cost, tool, agent, and diagnostics tables.
+
+    ``top_n`` controls the "Top N priority fixes" summary block that
+    renders above the Recommendations table (#172). 0 disables the
+    summary; the full table still renders.
+    """
     tm = result.token_metrics
     am = result.agent_metrics
     tlm = result.tool_metrics
@@ -269,7 +275,9 @@ def format_analysis_table(
     diag = result.diagnostics
     if diag:
         if show_diagnostics:
-            _format_diagnostics_table(console, diag, verbose=verbose)
+            _format_diagnostics_table(
+                console, diag, verbose=verbose, top_n=top_n,
+            )
         else:
             _format_diagnostics_summary(console, diag)
 
@@ -315,8 +323,16 @@ def _format_diagnostics_table(
     diag: DiagnosticsResult,
     *,
     verbose: bool = False,
+    top_n: int = 5,
 ) -> None:
-    """Render diagnostic signals and recommendations tables."""
+    """Render diagnostic signals and recommendations tables.
+
+    ``top_n`` controls the "Top priority fixes" summary block that
+    renders above the aggregated Recommendations table (#172). The
+    summary is suppressed in ``--verbose`` (the unaggregated raw table
+    is shown instead) and when ``top_n == 0`` or no aggregated rows
+    exist.
+    """
     if diag.signals:
         sig_table = Table(title="Diagnostic Signals", show_header=True)
         sig_table.add_column("Agent", style="cyan")
@@ -352,15 +368,19 @@ def _format_diagnostics_table(
             )
         console.print(rec_table)
     elif diag.aggregated_recommendations:
+        _format_top_recommendations(console, diag, top_n=top_n)
+
         rec_table = Table(title="Recommendations", show_header=True)
+        rec_table.add_column("#", style="dim", justify="right")
         rec_table.add_column("Agent", style="cyan")
         rec_table.add_column("Target")
         rec_table.add_column("Severity")
         rec_table.add_column("Count", justify="right")
         rec_table.add_column("Recommendation")
 
-        for agg in diag.aggregated_recommendations:
+        for idx, agg in enumerate(diag.aggregated_recommendations, start=1):
             rec_table.add_row(
+                str(idx),
                 escape(agg.agent_type or GLOBAL_AGENT_LABEL),
                 escape(agg.target),
                 severity_cell(agg.severity),
@@ -374,6 +394,42 @@ def _format_diagnostics_table(
     _format_offload_candidates(console, diag, verbose=verbose)
 
     console.print(GLOSSARY_FOOTNOTE, style="dim")
+
+
+def _format_top_recommendations(
+    console: Console,
+    diag: DiagnosticsResult,
+    *,
+    top_n: int,
+) -> None:
+    """Render a compact "Top N priority fixes" block above the full table.
+
+    Each row uses the same index that appears in the full
+    Recommendations table's leading ``#`` column, so users can scan the
+    summary and find the matching detail row by number. Suppressed when
+    ``top_n == 0`` or no aggregated rows exist.
+
+    Format: ``  N. [severity] agent (count×): representative_message``.
+    The aggregated list is already sorted by ``priority_score`` desc
+    (see ``aggregation.aggregate_recommendations``), so the top N rows
+    are the top N priorities by definition.
+    """
+    if top_n <= 0:
+        return
+    aggs = diag.aggregated_recommendations
+    if not aggs:
+        return
+    shown = min(top_n, len(aggs))
+
+    console.print(f"\n[bold]Top {shown} priority fixes[/bold]")
+    for idx, agg in enumerate(aggs[:shown], start=1):
+        severity = severity_cell(agg.severity)
+        agent = escape(agg.agent_type or GLOBAL_AGENT_LABEL)
+        count_suffix = f" ({agg.count}×)" if agg.count > 1 else ""
+        message = escape(agg.representative_message)
+        console.print(
+            f"  {idx}. {severity} [cyan]{agent}[/cyan]{count_suffix}: {message}",
+        )
 
 
 def _format_deep_diagnostics(

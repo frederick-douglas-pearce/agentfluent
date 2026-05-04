@@ -52,6 +52,7 @@ logger = logging.getLogger(__name__)
 # Re-exported for tests and downstream consumers that already import
 # AgentStats / ComplexityTier / classify_complexity from this module.
 __all__ = [
+    "SAVINGS_USD_KEY",
     "AgentStats",
     "ComplexityTier",
     "MismatchType",
@@ -62,6 +63,14 @@ __all__ = [
 ]
 
 MismatchType = Literal["overspec", "underspec"]
+
+# Producer/consumer contract: this module emits ``MODEL_MISMATCH``
+# signals carrying ``estimated_savings_usd`` in their ``detail`` dict.
+# Three consumers read that key — ``correlator.ModelRoutingRule``,
+# ``pipeline._append_mismatch_phrase``, and ``aggregation._summed_savings_usd``.
+# Sharing the constant prevents silent drift if any consumer typos
+# the key (the dict-get fallback would degrade output without raising).
+SAVINGS_USD_KEY = "estimated_savings_usd"
 
 _MIN_INVOCATIONS_FOR_ANALYSIS = 3
 # Complexity thresholds and the AgentStats model live in
@@ -228,7 +237,7 @@ def _build_mismatch_signal(
             "mean_tool_calls": stats.mean_tool_calls,
             "mean_tokens": stats.mean_tokens,
             "error_rate": stats.error_rate,
-            "estimated_savings_usd": savings,
+            SAVINGS_USD_KEY: savings,
             "current_cost_usd": current_cost,
         },
     )

@@ -46,6 +46,23 @@ class SignalType(StrEnum):
     MCP_MISSING_SERVER = "mcp_missing_server"
 
 
+# Signal types emitted by the trace-level extractor. Used by the dedup
+# pass (``pipeline._dedup_error_patterns``) to identify agent_types
+# whose metadata ERROR_PATTERN signals can be safely suppressed in
+# favor of more-specific trace evidence; also used by the priority
+# scorer (``aggregation``) as the trace-evidence boost. Lives here
+# rather than in ``pipeline.py`` so ``aggregation`` can import it
+# without a circular dependency.
+TRACE_SIGNAL_TYPES: frozenset[SignalType] = frozenset(
+    {
+        SignalType.TOOL_ERROR_SEQUENCE,
+        SignalType.RETRY_LOOP,
+        SignalType.PERMISSION_FAILURE,
+        SignalType.STUCK_PATTERN,
+    },
+)
+
+
 class DiagnosticSignal(BaseModel):
     """A single behavior signal detected in agent invocation data."""
 
@@ -157,6 +174,14 @@ class AggregatedRecommendation(BaseModel):
     observation/reason/action/signal_types from each source recommendation
     (not denormalized onto the aggregated row). ``--verbose`` re-renders
     this list as the unaggregated view."""
+
+    priority_score: float = 0.0
+    """Composite priority score (#172). Combines severity, occurrence
+    count, cost impact (for ``target='model'`` MODEL_MISMATCH recs),
+    and trace-evidence boost. Computed in
+    ``aggregation.aggregate_recommendations``; the default Recommendations
+    table is sorted by this value descending. See ``aggregation.py``
+    module docstring for the formula and weight rationale."""
 
 
 class DelegationSuggestion(BaseModel):
