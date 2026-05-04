@@ -142,6 +142,14 @@ def analyze(
             "agentfluent[clustering]."
         ),
     ),
+    top_n: int = typer.Option(
+        5,
+        "--top-n",
+        help=(
+            "Number of top-priority recommendations to summarize above the "
+            "Recommendations table. Pass 0 to disable the summary block."
+        ),
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output."),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Show summary only."),
 ) -> None:
@@ -232,4 +240,5 @@ def analyze(
     else:
         format_analysis_table(
             console, result, verbose=verbose, show_diagnostics=diagnostics,
+            top_n=top_n,
         )

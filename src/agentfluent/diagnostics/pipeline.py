@@ -38,6 +38,7 @@ from agentfluent.diagnostics.mcp_assessment import (
 )
 from agentfluent.diagnostics.model_routing import extract_model_routing_signals
 from agentfluent.diagnostics.models import (
+    TRACE_SIGNAL_TYPES,
     DelegationSuggestion,
     DiagnosticSignal,
     DiagnosticsResult,
@@ -50,17 +51,12 @@ from agentfluent.diagnostics.trace_signals import extract_trace_signals
 
 logger = logging.getLogger(__name__)
 
-# Signal types emitted by the trace-level extractor. Used by the dedup
-# pass to identify agent_types whose metadata ERROR_PATTERN signals can
-# be safely suppressed in favor of more-specific trace evidence.
-TRACE_SIGNAL_TYPES: frozenset[SignalType] = frozenset(
-    {
-        SignalType.TOOL_ERROR_SEQUENCE,
-        SignalType.RETRY_LOOP,
-        SignalType.PERMISSION_FAILURE,
-        SignalType.STUCK_PATTERN,
-    },
-)
+# ``TRACE_SIGNAL_TYPES`` is re-exported from ``diagnostics.models`` for
+# back-compat with consumers that import it from this module
+# (``cli/formatters/table.py``, ``tests/unit/test_diagnostics_pipeline.py``,
+# ``diagnostics/__init__.py``). Definition lives in ``models.py`` to
+# avoid a circular import for ``aggregation.py``'s priority scorer.
+__all__ = ["TRACE_SIGNAL_TYPES", "run_diagnostics"]
 
 
 def _append_mismatch_phrase(
