@@ -341,3 +341,65 @@ Append-only log of significant trade-off decisions made during AgentFluent devel
 - Negative recommendations are a different product surface (removal advice vs. addition advice) with a much higher false-positive cost. Getting "add a reviewer" wrong wastes some tokens. Getting "remove a reviewer" wrong causes a quality regression. The asymmetry justifies deferral.
 
 ---
+
+## D021: Quality axis — priority-score composition: annotations approach
+
+**Date:** 2026-05-04
+**Context:** D017 added `axis_scores` and `primary_axis` to the JSON schema but did not specify how per-axis scores compose into the single `priority_score` that `aggregation.py` and the `diff` module depend on. The architect review on #268 identified this as a blocking gap: story #272 cannot be implemented without a defined formula. Three approaches were evaluated: (a) `max(per_axis_scores.values())`, (b) weighted sum across axes, (c) annotations approach — keep the existing single formula and add a quality-evidence additive term.
+
+**Decision:** Annotations approach. The existing `_compute_priority_score` formula in `aggregation.py` (lines 159-171) gains one new additive term:
+
+```
+priority_score = severity_rank * W_SEVERITY
+              + log1p(count) * W_COUNT
+              + summed_savings_usd * W_COST
+              + has_trace_evidence * W_TRACE
+              + quality_evidence_factor * W_QUALITY  # NEW
+```
+
+Per-axis scores (`axis_scores`) and `primary_axis` are computed as **post-hoc annotations** from each recommendation's contributing signal types, not as inputs to the priority formula. The axis classification mapping (one signal type to one axis) determines which signals contribute to which axis score. `primary_axis` is the axis with the highest per-axis score for that recommendation.
+
+`quality_evidence_factor` is a simple indicator: `1.0` if any contributing signal is quality-typed (`USER_CORRECTION`, `FILE_REWORK`, `REVIEWER_CAUGHT`), with an optional boost for high correction rates or strong reviewer-caught evidence. The exact value and `W_QUALITY` weight are deferred to story #274 (calibration) for tuning against real data. Initial conservative default: `W_QUALITY = 5.0` (same magnitude as `W_TRACE`).
+
+**Completes:** D017 (which defined the schema but not the formula).
+
+**Rationale:**
+- **Minimal disruption.** Existing cost/speed-only recommendations with no quality signals get `quality_evidence_factor = 0`, so their `priority_score` values do not change. This is critical for `diff` comparison semantics (see below).
+- **`diff` stability.** The `diff` module (`diff/compute.py`) computes `priority_score_delta = current - baseline` for persisting recommendations. With the annotations approach, a diff between a pre-quality and post-quality baseline shows zero `priority_score_delta` for recommendations that have no quality signals. New quality-axis recommendations appear as "new" entries. The first post-upgrade diff is clean and useful for regression detection. Under the full-decomposition alternative, *every* persisting recommendation would show a nonzero delta, making the first diff useless.
+- **Calibration-cheap.** One new weight (`W_QUALITY`) to tune, not three separate per-axis scoring regimes each needing their own calibration pass.
+- **Forward-extensible.** If calibration data shows the single-formula approach doesn't rank quality recommendations high enough, the formula can be refactored to full axis decomposition in v0.7. The `axis_scores` annotations are already in the schema (D017), so the data is available for post-hoc analysis of whether the single formula is adequate.
+- **Closes the under-recommendation gap.** Quality signals now contribute to the composite score via the new term. A recommendation driven purely by `USER_CORRECTION` signals will have `quality_evidence_factor > 0`, boosting it above recommendations with the same severity/count but no quality evidence. Combined with the axis attribution in CLI output (D020), users see *why* the recommendation fired.
+
+**Rejected alternatives:**
+- **`max(per_axis_scores.values())`:** Proposed in story #272's implementation notes. Rejected because it determines a recommendation's priority entirely by its strongest axis, which could re-rank the entire list in surprising ways (a low-cost recommendation with incidental quality evidence would outrank a high-cost recommendation). The max approach also requires defining how per-axis scores are computed from the existing weights, which reintroduces the decomposition problem.
+- **Weighted sum across axes:** Requires choosing inter-axis weights (how much is 1 unit of quality worth relative to 1 unit of cost?), which is a three-axis calibration problem with no data to inform it. Deferred until calibration data exists.
+- **Per-axis threshold with independent surfacing:** Fundamentally different UX (recommendations appear in axis-specific sections rather than a single priority list). Out of scope for this epic; could be a v0.7 display option.
+
+**Reference:** Architect review on #268 (concern #1) recommended this approach. D017 defined the schema shape that this decision completes.
+
+---
+
+## D022: Quality axis — single-axis signal classification (no cross-cutting)
+
+**Date:** 2026-05-04
+**Context:** Story #272's implementation notes proposed that `ERROR_PATTERN`, `PERMISSION_FAILURE`, and `MCP_MISSING_SERVER` are "cross-cutting" signals that "contribute to all axes at reduced weight." The architect review on #268 (concern #3) identified that the mechanics of cross-cutting classification are unspecified: it is unclear whether three synthetic signals are emitted, whether the weight reduction applies to the priority formula, or how it interacts with aggregation grouping (which keys on `signal_types`).
+
+**Decision:** Drop cross-cutting classification for Tier 1. Every `SignalType` maps to exactly one axis:
+
+- **Cost:** `TOKEN_OUTLIER`, `MODEL_MISMATCH`, `MCP_UNUSED_SERVER`
+- **Speed:** `DURATION_OUTLIER`, `RETRY_LOOP`, `STUCK_PATTERN`, `TOOL_ERROR_SEQUENCE`, `ERROR_PATTERN`, `PERMISSION_FAILURE`, `MCP_MISSING_SERVER`
+- **Quality:** `USER_CORRECTION`, `FILE_REWORK`, `REVIEWER_CAUGHT`
+
+The mapping is a module-level constant dict `SIGNAL_AXIS_MAP: dict[SignalType, Axis]` in `aggregation.py`. `ERROR_PATTERN`, `PERMISSION_FAILURE`, and `MCP_MISSING_SERVER` are classified as speed (operational health signals; speed is the closest existing axis).
+
+**Rationale:**
+- **Simplicity.** One signal, one axis. No mechanics to define for reduced-weight multi-axis contribution. No interaction with the aggregation grouping key.
+- **No calibration data for cross-cutting weights.** We have no empirical basis for deciding how much an `ERROR_PATTERN` should contribute to cost vs. speed vs. quality. Single-axis classification is an honest reflection of our current knowledge.
+- **Aggregation clarity.** `AggregatedRecommendation.axis_scores` is computed by summing contributions from signals classified to each axis. With single-axis classification, each signal's contribution goes to exactly one bucket. The `primary_axis` is always deterministic.
+- **Reversible.** If v0.7 calibration data shows that `ERROR_PATTERN` should contribute to quality (e.g., error patterns that a review subagent would catch), changing the mapping is a one-line edit to `SIGNAL_AXIS_MAP`. The `Axis` enum and `axis_scores` dict accommodate this without schema changes.
+
+**Amends:** D018, which described "summing per-axis contributions" without specifying single-axis vs. cross-cutting. This decision pins the classification to single-axis.
+
+**Reference:** Architect review on #268 (concern #3).
+
+---
