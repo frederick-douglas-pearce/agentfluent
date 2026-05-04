@@ -286,6 +286,11 @@ class TestDelegationSuggestions:
         result = run_diagnostics(self._GP_INVS)
         assert len(result.delegation_suggestions) >= 1
 
+    def test_skipped_reason_is_none_when_suggestions_present(self) -> None:
+        pytest.importorskip("sklearn")
+        result = run_diagnostics(self._GP_INVS)
+        assert result.delegation_suggestions_skipped_reason is None
+
     def test_pipeline_empty_suggestions_when_sklearn_missing(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -295,6 +300,40 @@ class TestDelegationSuggestions:
         # Silent skip — no raise, no suggestions, other output intact.
         result = run_diagnostics(self._GP_INVS)
         assert result.delegation_suggestions == []
+        assert (
+            result.delegation_suggestions_skipped_reason
+            == "sklearn_not_installed"
+        )
+
+    def test_skipped_reason_insufficient_invocations(self) -> None:
+        pytest.importorskip("sklearn")
+        # Two GP invocations is well under DEFAULT_MIN_CLUSTER_SIZE.
+        result = run_diagnostics(self._GP_INVS[:2])
+        assert result.delegation_suggestions == []
+        assert (
+            result.delegation_suggestions_skipped_reason
+            == "insufficient_invocations"
+        )
+
+    def test_skipped_reason_no_clusters_above_min_size(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # GP invocation count is above min_cluster_size, so the pipeline
+        # commits to running suggest_delegations. Monkeypatch it to return
+        # [] — this is the union of "no clusters formed" and "all drafts
+        # were deduped against existing configs," both of which the
+        # public reason field collapses to ``no_clusters_above_min_size``.
+        pytest.importorskip("sklearn")
+        monkeypatch.setattr(
+            "agentfluent.diagnostics.pipeline.suggest_delegations",
+            lambda *args, **kwargs: [],
+        )
+        result = run_diagnostics(self._GP_INVS)
+        assert result.delegation_suggestions == []
+        assert (
+            result.delegation_suggestions_skipped_reason
+            == "no_clusters_above_min_size"
+        )
 
 
 class TestOffloadCandidates:

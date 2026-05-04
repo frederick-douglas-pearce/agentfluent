@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Literal
 
 from agentfluent.agents.models import AgentInvocation
 from agentfluent.config.mcp_discovery import discover_mcp_servers
@@ -29,6 +30,7 @@ from agentfluent.diagnostics.delegation import (
     DEFAULT_MIN_CLUSTER_SIZE,
     DEFAULT_MIN_SIMILARITY,
     SKLEARN_AVAILABLE,
+    count_clusterable_invocations,
     suggest_delegations,
 )
 from agentfluent.diagnostics.mcp_assessment import (
@@ -262,15 +264,28 @@ def run_diagnostics(
     subagent_trace_count = sum(1 for inv in invocations if inv.trace is not None)
 
     delegation_suggestions: list[DelegationSuggestion] = []
+    delegation_skipped_reason: (
+        Literal[
+            "sklearn_not_installed",
+            "insufficient_invocations",
+            "no_clusters_above_min_size",
+        ]
+        | None
+    ) = None
     offload_candidates: list[OffloadCandidate] = []
     if SKLEARN_AVAILABLE:
-        delegation_suggestions = suggest_delegations(
-            invocations,
-            existing_configs=agent_configs or None,
-            min_cluster_size=min_cluster_size,
-            min_similarity=min_similarity,
-        )
-        _enrich_dedup_with_mismatches(delegation_suggestions, signals)
+        if count_clusterable_invocations(invocations) < min_cluster_size:
+            delegation_skipped_reason = "insufficient_invocations"
+        else:
+            delegation_suggestions = suggest_delegations(
+                invocations,
+                existing_configs=agent_configs or None,
+                min_cluster_size=min_cluster_size,
+                min_similarity=min_similarity,
+            )
+            _enrich_dedup_with_mismatches(delegation_suggestions, signals)
+            if not delegation_suggestions:
+                delegation_skipped_reason = "no_clusters_above_min_size"
         if parent_messages:
             offload_candidates = build_offload_candidates(
                 parent_messages,
@@ -278,6 +293,7 @@ def run_diagnostics(
                 min_similarity=min_similarity,
             )
     else:
+        delegation_skipped_reason = "sklearn_not_installed"
         logger.debug(
             "Delegation clustering and offload-candidate analysis skipped: "
             "scikit-learn not installed. Install agentfluent[clustering] "
@@ -290,5 +306,6 @@ def run_diagnostics(
         aggregated_recommendations=aggregated,
         subagent_trace_count=subagent_trace_count,
         delegation_suggestions=delegation_suggestions,
+        delegation_suggestions_skipped_reason=delegation_skipped_reason,
         offload_candidates=offload_candidates,
     )

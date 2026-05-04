@@ -80,6 +80,7 @@ __all__ = [
     "DelegationCluster",
     "SklearnMissingError",
     "cluster_delegations",
+    "count_clusterable_invocations",
     "generate_draft",
     "suggest_delegations",
 ]
@@ -168,6 +169,16 @@ def _filter_candidates(
         if is_general_purpose(inv.agent_type)
         and _combined_text_tokens(inv) >= MIN_TEXT_TOKENS
     ]
+
+
+def count_clusterable_invocations(invocations: list[AgentInvocation]) -> int:
+    """Count general-purpose invocations eligible for clustering.
+
+    Public surface used by the diagnostics pipeline to distinguish
+    "insufficient invocations" from "clustering produced nothing" when
+    populating ``delegation_suggestions_skipped_reason``.
+    """
+    return len(_filter_candidates(invocations))
 
 
 def _build_single_cluster(
