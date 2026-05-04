@@ -29,7 +29,7 @@ from typing import Any
 
 from agentfluent.core.parser import parse_session
 from agentfluent.core.session import ContentBlock, SessionMessage, Usage
-from agentfluent.diagnostics.signals import ERROR_REGEX
+from agentfluent.diagnostics.signals import detect_is_error_from_text
 from agentfluent.traces.discovery import AGENT_FILENAME_PATTERN
 from agentfluent.traces.models import (
     INPUT_SUMMARY_MAX_CHARS,
@@ -48,11 +48,6 @@ from agentfluent.traces.retry import detect_retry_sequences
 # against future workloads with higher baseline tool latency.
 IDLE_GAP_K = 10
 IDLE_GAP_FLOOR_MS = 300_000
-
-# Real error messages lead with the indicator ("Error: ...", "Permission
-# denied", "Failed to ..."). Bounding the regex prevents successful Reads
-# of files that mention error keywords mid-text from synthesizing is_error.
-ERROR_DETECTION_WINDOW_CHARS = 200
 
 
 def _truncate_input(input_dict: dict[str, Any] | None) -> str:
@@ -80,17 +75,13 @@ def _detect_is_error(block: ContentBlock) -> bool:
     """Detect whether a tool_result block represents an error.
 
     Explicit ``is_error`` field is authoritative when present (True or
-    False). When missing, fall back to regex-matching the *leading*
-    ``ERROR_DETECTION_WINDOW_CHARS`` of the result text against
-    ``ERROR_PATTERNS`` keywords (case-insensitive). The leading-window
-    bound prevents successful Reads of files that mention error
-    keywords mid-text from synthesizing ``is_error=True``.
+    False). When missing, fall back to ``detect_is_error_from_text``
+    (shared helper bounded by ``ERROR_DETECTION_WINDOW_CHARS``; see
+    #238 / #241 for the FP-defense rationale).
     """
     if block.is_error is not None:
         return block.is_error
-    if not block.text:
-        return False
-    return bool(ERROR_REGEX.search(block.text[:ERROR_DETECTION_WINDOW_CHARS]))
+    return detect_is_error_from_text(block.text)
 
 
 def _sum_usage(messages: list[SessionMessage]) -> Usage:

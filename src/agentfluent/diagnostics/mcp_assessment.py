@@ -38,7 +38,7 @@ from pydantic import BaseModel, ConfigDict
 from agentfluent.config.models import Severity
 from agentfluent.core.session import index_tool_results_by_id
 from agentfluent.diagnostics.models import DiagnosticSignal, SignalType
-from agentfluent.diagnostics.signals import ERROR_REGEX
+from agentfluent.diagnostics.signals import detect_is_error_from_text
 
 if TYPE_CHECKING:
     from agentfluent.agents.models import AgentInvocation
@@ -154,7 +154,12 @@ def extract_mcp_calls_from_messages(
             elif explicit_error is False:
                 is_error = False
             else:
-                is_error = bool(ERROR_REGEX.search(result_text))
+                # Bounded leading-window match (#241): full-text matches
+                # produced ~86% FPs against agentfluent and ~63% against
+                # codefluent because GitHub MCP responses, Playwright
+                # snapshots, etc. embed error keywords in successful
+                # bodies. Shared helper with traces.parser (#238).
+                is_error = detect_is_error_from_text(result_text)
             calls.append(
                 McpToolCall(
                     server_name=server, tool_name=tool, is_error=is_error,
