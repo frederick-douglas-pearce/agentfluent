@@ -17,7 +17,11 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
+"""v2 (#227): ``token_metrics.by_model`` is a list of objects (each with
+``origin``: parent or subagent), not a dict keyed by model. The diff
+module reads both shapes via a compatibility shim, but new envelopes
+always emit v2."""
 
 CommandName = Literal[
     "list-projects", "list-sessions", "analyze", "config-check", "diff",

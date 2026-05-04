@@ -78,13 +78,15 @@ class TestGlossaryFooterOnConfigCheck:
         assert "GLOSSARY" not in json.dumps(payload)
 
 
-class TestCostByModelLabelClarification:
-    """#188 stretch: Cost by Model table title is scoped to parent session."""
+class TestCostByModelTableShape:
+    """#227 (Phase 2): Cost by Model table covers parent + subagent rows.
 
-    def test_table_title_names_parent_session(self) -> None:
-        # Direct formatter test: the fixture sessions used by the CLI smoke
-        # tests don't populate by_model, so the table only renders when
-        # constructed explicitly.
+    Phase 1 (#188) renamed the table to "— Parent Session" and added a
+    "subagent tokens are not broken out" footer note. Phase 2 closes
+    the gap, so the title drops the qualifier and the footer goes away.
+    """
+
+    def test_table_title_drops_parent_session_qualifier(self) -> None:
         from io import StringIO
 
         from rich.console import Console
@@ -100,17 +102,19 @@ class TestCostByModelLabelClarification:
 
         result = AnalysisResult(
             token_metrics=TokenMetrics(
-                input_tokens=100,
-                output_tokens=200,
-                total_cost=0.50,
-                by_model={
-                    "claude-opus-4-7": ModelTokenBreakdown(
-                        model="claude-opus-4-7",
-                        input_tokens=100,
-                        output_tokens=200,
-                        cost=0.50,
+                input_tokens=300,
+                output_tokens=350,
+                total_cost=0.75,
+                by_model=[
+                    ModelTokenBreakdown(
+                        model="claude-opus-4-7", origin="parent",
+                        input_tokens=100, output_tokens=200, cost=0.50,
                     ),
-                },
+                    ModelTokenBreakdown(
+                        model="claude-haiku-4-5-20251001", origin="subagent",
+                        input_tokens=200, output_tokens=150, cost=0.25,
+                    ),
+                ],
             ),
             tool_metrics=ToolMetrics(),
             agent_metrics=AgentMetrics(),
@@ -123,5 +127,11 @@ class TestCostByModelLabelClarification:
             verbose=True,
         )
         out = buf.getvalue()
-        assert "Cost by Model — Parent Session" in out
-        assert "Subagent tokens are not broken out" in out
+        assert "Cost by Model" in out
+        # Phase 1 qualifier and footer are gone now that subagents land
+        # in the table directly.
+        assert "Parent Session" not in out
+        assert "Subagent tokens are not broken out" not in out
+        # Origin column surfaces both rows.
+        assert "parent" in out
+        assert "subagent" in out

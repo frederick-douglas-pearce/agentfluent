@@ -218,7 +218,10 @@ def _diff_token_metrics(
     baseline_cache = float(baseline_tm.get("cache_efficiency", 0.0) or 0.0)
     current_cache = float(current_tm.get("cache_efficiency", 0.0) or 0.0)
 
-    by_model = _diff_by_model(baseline_tm.get("by_model") or {}, current_tm.get("by_model") or {})
+    by_model = _diff_by_model(
+        baseline_tm.get("by_model") or [],
+        current_tm.get("by_model") or [],
+    )
 
     return TokenMetricsDelta(
         baseline_total_tokens=baseline_total_tokens,
@@ -246,15 +249,49 @@ def _sum_token_components(d: dict[str, Any]) -> int:
     )
 
 
+def _normalize_by_model(
+    raw: dict[str, Any] | list[Any],
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """Coerce a ``by_model`` payload to ``{(model, origin): row}``.
+
+    Schema v2 (#227) emits a list of rows with an ``origin`` field. The
+    pre-#227 schema (v1) emitted a dict keyed by model name with no
+    ``origin`` field; for cross-version diffs we treat those rows as
+    parent-origin so legacy saved envelopes remain comparable. Rows
+    without a ``model`` field are dropped — defensive guard against
+    user-edited JSON.
+    """
+    if isinstance(raw, dict):
+        # Legacy v1: dict keyed by model name; everything is parent.
+        return {
+            (model, "parent"): (row if isinstance(row, dict) else {})
+            for model, row in raw.items()
+        }
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in raw:
+        if not isinstance(row, dict):
+            continue
+        model = row.get("model")
+        if not isinstance(model, str):
+            continue
+        origin = row.get("origin", "parent")
+        if not isinstance(origin, str):
+            origin = "parent"
+        out[(model, origin)] = row
+    return out
+
+
 def _diff_by_model(
-    baseline: dict[str, Any],
-    current: dict[str, Any],
+    baseline: dict[str, Any] | list[Any],
+    current: dict[str, Any] | list[Any],
 ) -> list[ModelTokenDelta]:
-    models = sorted(set(baseline.keys()) | set(current.keys()))
+    baseline_map = _normalize_by_model(baseline)
+    current_map = _normalize_by_model(current)
+    keys = sorted(set(baseline_map.keys()) | set(current_map.keys()))
     deltas: list[ModelTokenDelta] = []
-    for model in models:
-        b = baseline.get(model) or {}
-        c = current.get(model) or {}
+    for model, origin in keys:
+        b = baseline_map.get((model, origin)) or {}
+        c = current_map.get((model, origin)) or {}
         b_tokens = _sum_token_components(b)
         c_tokens = _sum_token_components(c)
         b_cost = float(b.get("cost", 0.0) or 0.0)
@@ -262,6 +299,7 @@ def _diff_by_model(
         deltas.append(
             ModelTokenDelta(
                 model=model,
+                origin=origin,
                 baseline_total_tokens=b_tokens,
                 current_total_tokens=c_tokens,
                 total_tokens_delta=c_tokens - b_tokens,

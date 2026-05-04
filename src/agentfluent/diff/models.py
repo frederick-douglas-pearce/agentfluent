@@ -58,9 +58,16 @@ class RecommendationDelta(BaseModel):
 
 
 class ModelTokenDelta(BaseModel):
-    """Per-model token / cost delta inside :class:`TokenMetricsDelta`."""
+    """Per-(model, origin) token / cost delta inside :class:`TokenMetricsDelta`.
+
+    ``origin`` distinguishes parent vs subagent rows (#227). Defaults
+    to ``"parent"`` so legacy v1 envelopes (which had no origin field)
+    diff cleanly under the compatibility shim in
+    :func:`agentfluent.diff.compute._diff_by_model`.
+    """
 
     model: str
+    origin: str = "parent"
     baseline_total_tokens: int = 0
     current_total_tokens: int = 0
     total_tokens_delta: int = 0

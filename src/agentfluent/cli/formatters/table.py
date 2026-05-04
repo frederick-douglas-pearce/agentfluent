@@ -154,24 +154,26 @@ def format_analysis_table(
 
     if tm.by_model and (verbose or len(tm.by_model) > 1):
         model_table = Table(
-            title="Cost by Model — Parent Session (API rate)",
-            show_header=True,
+            title="Cost by Model (API rate)", show_header=True,
         )
         model_table.add_column("Model", style="cyan")
+        model_table.add_column("Origin")
         model_table.add_column("Tokens", justify="right")
         model_table.add_column("Cost", justify="right")
-        for model_name, breakdown in sorted(tm.by_model.items()):
+        # Group rows by (model, origin); parent first, then subagent
+        # within each model so the table reads top-down by source.
+        sorted_rows = sorted(
+            tm.by_model,
+            key=lambda b: (b.model, 0 if b.origin == "parent" else 1),
+        )
+        for breakdown in sorted_rows:
             model_table.add_row(
-                model_name,
+                breakdown.model,
+                breakdown.origin,
                 format_tokens(breakdown.total_tokens),
                 format_cost(breakdown.cost),
             )
         console.print(model_table)
-        console.print(
-            "Subagent tokens are not broken out by model here — "
-            "see Agent Invocations for per-agent totals.",
-            style="dim",
-        )
 
     if tlm.total_tool_calls > 0:
         tool_table = Table(title="Tool Usage", show_header=True)
