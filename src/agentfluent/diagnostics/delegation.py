@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 import re
 import warnings
+from collections import Counter
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -70,6 +71,7 @@ if TYPE_CHECKING:
 __all__ = [
     "DEFAULT_MIN_CLUSTER_SIZE",
     "DEFAULT_MIN_SIMILARITY",
+    "DEFAULT_TOOL_FREQUENCY_THRESHOLD",
     "MIN_TEXT_TOKENS",
     "MODEL_HAIKU",
     "MODEL_OPUS",
@@ -115,6 +117,16 @@ _CONFIDENCE_HIGH_SIZE = 10
 _CONFIDENCE_HIGH_COHESION = 0.50
 _CONFIDENCE_MEDIUM_COHESION = 0.35
 _PROMPT_BODY_SNIPPET_CHARS = 500
+
+# Frequency threshold for the per-tool inclusion filter. A tool is
+# kept on the draft's `tools` list only if it appears in at least this
+# fraction of the cluster's member traces (presence-based, NOT call-
+# count-based — one member running `Bash` 50 times still counts as a
+# single member). Default 0.5 per #184 architect review: presence
+# gives the least-privilege answer in every uneven-call-volume case
+# (the exact pathology #184 was filed to fix). Calibration sweep is
+# tracked in `scripts/calibration/threshold_validation.ipynb` (#140).
+DEFAULT_TOOL_FREQUENCY_THRESHOLD = 0.5
 
 # MODEL_HAIKU/SONNET/OPUS are re-exported from _complexity.py — see #185
 # for the consolidation. Pre-#185 they lived here directly.
@@ -293,12 +305,50 @@ def _synthesize_prompt(top_terms: list[str], members: list[AgentInvocation]) -> 
     )
 
 
-def _collect_tools_from_traces(members: list[AgentInvocation]) -> list[str]:
-    tools: set[str] = set()
+def _tool_presence_counts(members: list[AgentInvocation]) -> Counter[str]:
+    """Per-tool count of how many cluster members used that tool at least once.
+
+    Shared primitive for ``_collect_tools_from_traces`` (sort the keys)
+    and ``_filter_tools_by_frequency`` (apply the cutoff). Members
+    without a linked trace contribute nothing here, but still count in
+    the denominator at the filter site — see ``_filter_tools_by_frequency``.
+    """
+    counts: Counter[str] = Counter()
     for m in members:
         if m.trace is not None:
-            tools.update(m.trace.unique_tool_names)
-    return sorted(tools)
+            counts.update(m.trace.unique_tool_names)
+    return counts
+
+
+def _collect_tools_from_traces(members: list[AgentInvocation]) -> list[str]:
+    """Sorted union of every tool observed across the cluster's traces."""
+    return sorted(_tool_presence_counts(members))
+
+
+def _filter_tools_by_frequency(
+    members: list[AgentInvocation],
+    *,
+    threshold: float = DEFAULT_TOOL_FREQUENCY_THRESHOLD,
+) -> list[str]:
+    """Keep tools used in at least ``threshold`` fraction of cluster members.
+
+    Presence-based: a tool counts once per member that used it,
+    regardless of call volume within that member. This is the
+    least-privilege answer when call volume is uneven (one member
+    running ``Bash`` 50 times shouldn't keep ``Bash`` on the draft for
+    a 5-member cluster where 4 members never touched it). See #184 for
+    the architect-reviewed rationale.
+
+    Members without a linked trace are still counted in the denominator
+    — they contribute zero observed tools, which lowers every tool's
+    presence ratio. That's intentional: a half-traced cluster shouldn't
+    over-recommend tools based on the observed half.
+    """
+    if not members:
+        return []
+    counts = _tool_presence_counts(members)
+    cutoff = threshold * len(members)
+    return sorted(t for t, c in counts.items() if c >= cutoff)
 
 
 def _classify_model(tools: list[str], members: list[AgentInvocation]) -> str:
@@ -322,17 +372,32 @@ def _classify_confidence(cluster_size: int, cohesion: float) -> ConfidenceTier:
 
 
 def generate_draft(cluster: DelegationCluster) -> DelegationSuggestion:
-    """Synthesize a draft subagent definition from a cluster."""
-    tools = _collect_tools_from_traces(cluster.members)
-    tools_note = (
-        "" if tools
-        else "# run with newer session data for tool recommendations"
-    )
+    """Synthesize a draft subagent definition from a cluster.
+
+    ``tools`` is the frequency-filtered list (presence in
+    ``DEFAULT_TOOL_FREQUENCY_THRESHOLD`` of members) — the
+    least-privilege set used in the YAML frontmatter. ``tools_observed``
+    is the full union; users widening the draft can consult it. See
+    #184 for the rationale and architect review.
+    """
+    tools_observed = _collect_tools_from_traces(cluster.members)
+    tools = _filter_tools_by_frequency(cluster.members)
+    if not tools_observed:
+        tools_note = "# run with newer session data for tool recommendations"
+    elif not tools:
+        tools_note = (
+            f"# no tool used in >="
+            f"{int(DEFAULT_TOOL_FREQUENCY_THRESHOLD * 100)}% of cluster members "
+            f"— see tools_observed for the unfiltered list"
+        )
+    else:
+        tools_note = ""
     return DelegationSuggestion(
         name=_synthesize_name(cluster.top_terms),
         description=_synthesize_description(cluster.top_terms),
         model=_classify_model(tools, cluster.members),
         tools=tools,
+        tools_observed=tools_observed,
         tools_note=tools_note,
         prompt_template=_synthesize_prompt(cluster.top_terms, cluster.members),
         confidence=_classify_confidence(len(cluster.members), cluster.cohesion_score),

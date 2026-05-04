@@ -180,12 +180,22 @@ class DelegationSuggestion(BaseModel):
     """Recommended Claude model ID (haiku / sonnet / opus)."""
 
     tools: list[str] = Field(default_factory=list)
-    """Union of tools observed in the cluster's subagent traces. Empty
-    when no traces were linked to the member invocations."""
+    """Filtered tool list for the draft's frontmatter — tools used in at
+    least ``DEFAULT_TOOL_FREQUENCY_THRESHOLD`` (50%) of cluster members.
+    The full observed union lives on ``tools_observed`` for reference.
+    Empty when no traces were linked to the member invocations OR when
+    no tool met the threshold (see ``tools_note``)."""
+
+    tools_observed: list[str] = Field(default_factory=list)
+    """Full union of tools observed across the cluster's subagent
+    traces, before frequency filtering. Surfaced so users can widen the
+    draft's ``tools`` list manually if the filter was too aggressive."""
 
     tools_note: str = ""
-    """Diagnostic note when ``tools`` cannot be derived (e.g., older
-    sessions lacking trace capture)."""
+    """Diagnostic note about the ``tools`` field. Populated when no
+    traces were linked (older sessions) OR when traces were linked but
+    no tool met the frequency threshold — in the latter case, the note
+    points the user at ``tools_observed`` to review what was filtered."""
 
     prompt_template: str
     """Draft prompt scaffold anchored on the cluster's top terms."""

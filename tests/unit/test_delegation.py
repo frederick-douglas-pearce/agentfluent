@@ -18,6 +18,7 @@ from agentfluent.agents.models import AgentInvocation  # noqa: E402
 from agentfluent.config.models import AgentConfig, Scope  # noqa: E402
 from agentfluent.diagnostics import delegation  # noqa: E402
 from agentfluent.diagnostics.delegation import (  # noqa: E402
+    DEFAULT_TOOL_FREQUENCY_THRESHOLD,
     MODEL_HAIKU,
     MODEL_OPUS,
     MODEL_SONNET,
@@ -27,6 +28,7 @@ from agentfluent.diagnostics.delegation import (  # noqa: E402
     _classify_confidence,
     _classify_model,
     _collect_tools_from_traces,
+    _filter_tools_by_frequency,
     cluster_delegations,
     generate_draft,
     suggest_delegations,
@@ -359,6 +361,53 @@ class TestGenerateDraft:
         draft = generate_draft(self._cluster(members=members, cohesion=0.28))
         assert draft.confidence == "low"
 
+    def test_draft_tools_filtered_observed_populated_separately(self) -> None:
+        # End-to-end: incidental Bash from one member appears in
+        # tools_observed (so the user can see what was filtered) but
+        # is excluded from tools (the YAML frontmatter list).
+        members = [
+            _inv(description="d", prompt="p", trace=_trace_with_tools(["Read", "Bash"])),
+            _inv(description="d", prompt="p", trace=_trace_with_tools(["Read"])),
+            _inv(description="d", prompt="p", trace=_trace_with_tools(["Read"])),
+            _inv(description="d", prompt="p", trace=_trace_with_tools(["Read"])),
+            _inv(description="d", prompt="p", trace=_trace_with_tools(["Read"])),
+        ]
+        draft = generate_draft(self._cluster(members=members))
+        assert draft.tools == ["Read"]
+        assert draft.tools_observed == ["Bash", "Read"]
+        assert draft.tools_note == ""
+
+    def test_draft_no_filter_survivors_populates_tools_note(self) -> None:
+        # Every member uses a different tool — observed union is
+        # non-empty but no tool meets the 50% threshold. The note
+        # should point users at tools_observed for the unfiltered list.
+        members = [
+            _inv(description="d", prompt="p", trace=_trace_with_tools(["Read"])),
+            _inv(description="d", prompt="p", trace=_trace_with_tools(["Bash"])),
+            _inv(description="d", prompt="p", trace=_trace_with_tools(["Edit"])),
+            _inv(description="d", prompt="p", trace=_trace_with_tools(["Grep"])),
+        ]
+        draft = generate_draft(self._cluster(members=members))
+        assert draft.tools == []
+        assert draft.tools_observed == ["Bash", "Edit", "Grep", "Read"]
+        assert "tools_observed" in draft.tools_note
+        assert "50%" in draft.tools_note
+
+    def test_yaml_draft_renders_filtered_tools_only(self) -> None:
+        # The frontmatter `tools:` line in the YAML must reflect the
+        # filtered list, not the observed union — the entire point of
+        # #184 is least-privilege drafts.
+        members = [
+            _inv(description="d", prompt="p", trace=_trace_with_tools(["Read", "Bash"])),
+        ] + [
+            _inv(description="d", prompt="p", trace=_trace_with_tools(["Read"]))
+            for _ in range(4)
+        ]
+        draft = generate_draft(self._cluster(members=members))
+        assert "- Read" in draft.yaml_draft
+        # Bash is in tools_observed but not in the rendered frontmatter.
+        assert "- Bash" not in draft.yaml_draft
+
 
 class TestClassifyHelpers:
     def test_classify_model_no_observed_data_recommends_sonnet(self) -> None:
@@ -378,6 +427,75 @@ class TestClassifyHelpers:
             _inv(trace=_trace_with_tools(["Grep", "Bash"])),
         ]
         assert _collect_tools_from_traces(members) == ["Bash", "Grep", "Read"]
+
+    def test_filter_drops_tool_below_threshold(self) -> None:
+        # Read appears in 4/5 members (0.8) → kept at threshold 0.5.
+        # Bash appears in 1/5 members (0.2) → dropped — the exact
+        # incidental-tool pathology #184 was filed to fix.
+        members = [
+            _inv(trace=_trace_with_tools(["Read", "Bash"])),
+            _inv(trace=_trace_with_tools(["Read"])),
+            _inv(trace=_trace_with_tools(["Read"])),
+            _inv(trace=_trace_with_tools(["Read"])),
+            _inv(trace=_trace_with_tools(["Edit"])),
+        ]
+        assert _filter_tools_by_frequency(members) == ["Read"]
+
+    def test_filter_keeps_tool_at_exact_threshold(self) -> None:
+        # Tool present in exactly threshold-fraction of members survives
+        # — `>=` not `>` is the documented contract.
+        members = [
+            _inv(trace=_trace_with_tools(["Grep"])),
+            _inv(trace=_trace_with_tools(["Grep"])),
+            _inv(trace=_trace_with_tools(["Read"])),
+            _inv(trace=_trace_with_tools(["Read"])),
+        ]
+        assert _filter_tools_by_frequency(members, threshold=0.5) == ["Grep", "Read"]
+
+    def test_filter_call_volume_does_not_inflate_presence(self) -> None:
+        # One member runs Bash 50 times; presence is still 1/5 → dropped.
+        # This is the case where a count-based threshold would have
+        # kept Bash; presence-based correctly rejects it.
+        bash_heavy_trace = SubagentTrace(
+            agent_id="agent-x",
+            agent_type="general-purpose",
+            delegation_prompt="",
+            tool_calls=[
+                SubagentToolCall(tool_name="Bash", input_summary="x", result_summary="ok")
+                for _ in range(50)
+            ],
+        )
+        members = [
+            _inv(trace=bash_heavy_trace),
+            _inv(trace=_trace_with_tools(["Read"])),
+            _inv(trace=_trace_with_tools(["Read"])),
+            _inv(trace=_trace_with_tools(["Read"])),
+            _inv(trace=_trace_with_tools(["Read"])),
+        ]
+        assert _filter_tools_by_frequency(members) == ["Read"]
+
+    def test_filter_untraced_members_lower_denominator(self) -> None:
+        # 2/4 members traced, both used Read → presence 2/4 = 0.5 → kept.
+        # If untraced members were excluded, ratio would be 2/2 = 1.0;
+        # this confirms the documented "untraced members count in
+        # denominator" behavior.
+        members = [
+            _inv(trace=_trace_with_tools(["Read", "Grep"])),
+            _inv(trace=_trace_with_tools(["Read"])),
+            _inv(trace=None),
+            _inv(trace=None),
+        ]
+        # Read: 2/4 = 0.5 → kept. Grep: 1/4 = 0.25 → dropped.
+        assert _filter_tools_by_frequency(members) == ["Read"]
+
+    def test_filter_no_traces_returns_empty(self) -> None:
+        members = [_inv(trace=None)] * 5
+        assert _filter_tools_by_frequency(members) == []
+
+    def test_default_threshold_is_half(self) -> None:
+        # Lock the architect-approved default; calibration may revisit
+        # but the constant is the contract for #189-D's draft synthesis.
+        assert DEFAULT_TOOL_FREQUENCY_THRESHOLD == 0.5
 
 
 class TestDedup:
