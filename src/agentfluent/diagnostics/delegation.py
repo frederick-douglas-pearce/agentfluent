@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 import re
 import warnings
+from collections import Counter
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -304,19 +305,24 @@ def _synthesize_prompt(top_terms: list[str], members: list[AgentInvocation]) -> 
     )
 
 
-def _collect_tools_from_traces(members: list[AgentInvocation]) -> list[str]:
-    """Sorted union of every tool observed across the cluster's traces.
+def _tool_presence_counts(members: list[AgentInvocation]) -> Counter[str]:
+    """Per-tool count of how many cluster members used that tool at least once.
 
-    The unfiltered list — surfaced on ``DelegationSuggestion.tools_observed``
-    so users can see what was filtered out. ``generate_draft`` runs
-    ``_filter_tools_by_frequency`` on top of this for the actual
-    frontmatter ``tools`` list.
+    Shared primitive for ``_collect_tools_from_traces`` (sort the keys)
+    and ``_filter_tools_by_frequency`` (apply the cutoff). Members
+    without a linked trace contribute nothing here, but still count in
+    the denominator at the filter site — see ``_filter_tools_by_frequency``.
     """
-    tools: set[str] = set()
+    counts: Counter[str] = Counter()
     for m in members:
         if m.trace is not None:
-            tools.update(m.trace.unique_tool_names)
-    return sorted(tools)
+            counts.update(m.trace.unique_tool_names)
+    return counts
+
+
+def _collect_tools_from_traces(members: list[AgentInvocation]) -> list[str]:
+    """Sorted union of every tool observed across the cluster's traces."""
+    return sorted(_tool_presence_counts(members))
 
 
 def _filter_tools_by_frequency(
@@ -340,16 +346,9 @@ def _filter_tools_by_frequency(
     """
     if not members:
         return []
-    tool_member_counts: dict[str, int] = {}
-    for m in members:
-        if m.trace is None:
-            continue
-        for tool_name in m.trace.unique_tool_names:
-            tool_member_counts[tool_name] = tool_member_counts.get(tool_name, 0) + 1
+    counts = _tool_presence_counts(members)
     cutoff = threshold * len(members)
-    return sorted(
-        tool for tool, count in tool_member_counts.items() if count >= cutoff
-    )
+    return sorted(t for t, c in counts.items() if c >= cutoff)
 
 
 def _classify_model(tools: list[str], members: list[AgentInvocation]) -> str:
