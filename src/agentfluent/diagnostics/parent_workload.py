@@ -28,11 +28,48 @@ with no text — that's structural, not a human turn.
 from __future__ import annotations
 
 import logging
+import warnings
+from collections import Counter
 from dataclasses import dataclass, field
+from typing import Literal
 
+# sklearn is an optional extra; the cluster_bursts/generate_offload_candidate
+# code paths gate on SKLEARN_AVAILABLE. Pre-existing extract/cost helpers
+# don't need sklearn — they keep working without the extra installed.
+try:
+    import numpy as np
+    from sklearn.decomposition import TruncatedSVD
+    from sklearn.feature_extraction.text import TfidfVectorizer
+except ImportError:  # pragma: no cover — exercised via install-path test
+    pass
+
+from agentfluent.agents.models import WRITE_TOOLS
 from agentfluent.analytics.pricing import ModelPricing, compute_cost
 from agentfluent.core.session import SessionMessage, ToolUseBlock, Usage
-from agentfluent.diagnostics.delegation import MODEL_HAIKU, MODEL_SONNET
+from agentfluent.diagnostics._clustering import (
+    SKLEARN_AVAILABLE,
+    SklearnMissingError,
+    all_rows_identical,
+    cluster_embeddings,
+    group_indices_by_label,
+    mean_pairwise_cosine,
+    top_tfidf_terms,
+)
+from agentfluent.diagnostics._complexity import (
+    AgentStats,
+    classify_complexity,
+    recommend_model_for_complexity,
+)
+from agentfluent.diagnostics.delegation import (
+    MODEL_HAIKU,
+    MODEL_SONNET,
+    synthesize_description,
+    synthesize_name,
+)
+from agentfluent.diagnostics.models import (
+    DelegationSuggestion,
+    OffloadCandidate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -265,3 +302,351 @@ def estimate_burst_cost(
         alt_pricing, effective_input, u.output_tokens, 0, 0,
     )
     return (parent_cost, parent_cost - alt_cost)
+
+
+# --- Sub-issue D: clustering + offload candidate synthesis ----------------
+#
+# Mirrors delegation.cluster_delegations / generate_draft, but operates on
+# parent-thread bursts. The TF-IDF + LSA + KMeans pipeline is duplicated
+# (rather than extracted) per architect review for #189-D Q3: only two
+# consumers, ~30 lines each, premature abstraction. Structured as a
+# contiguous block so a future third consumer can extract cleanly.
+
+DEFAULT_BURST_CLUSTER_SIZE = 5
+"""Minimum bursts per cluster surfaced as an offload candidate."""
+
+LSA_COMPONENTS = 50
+"""Mirrors ``delegation.LSA_COMPONENTS``. Calibration sweep tracked in
+``scripts/calibration/threshold_validation.ipynb`` (#140)."""
+
+_TOOL_FREQUENCY_THRESHOLD = 0.5
+"""Same default as ``delegation.DEFAULT_TOOL_FREQUENCY_THRESHOLD`` (#184).
+Local copy rather than import because the burst path may calibrate
+independently — sub-issue F's notebook explicitly checks this. See #184
+architect-review note."""
+
+_CONFIDENCE_HIGH_SIZE = 10
+_CONFIDENCE_HIGH_COHESION = 0.50
+_CONFIDENCE_MEDIUM_COHESION = 0.35
+
+
+@dataclass
+class BurstCluster:
+    """A KMeans cluster of similar parent-thread bursts.
+
+    Internal type. ``OffloadCandidate`` (in ``diagnostics/models.py``) is
+    the cross-boundary Pydantic counterpart that downstream consumers see.
+    """
+
+    members: list[ToolBurst]
+    top_terms: list[str]
+    cohesion_score: float
+
+
+def _require_sklearn() -> None:
+    if not SKLEARN_AVAILABLE:
+        raise SklearnMissingError(
+            "Install agentfluent[clustering] to enable parent-thread "
+            "offload-candidate analysis.",
+        )
+
+
+def _build_single_burst_cluster(
+    bursts: list[ToolBurst],
+    tfidf_matrix: np.ndarray,
+    terms: np.ndarray,
+) -> BurstCluster:
+    """All-rows-identical fallback. Mirrors delegation's ``_build_single_cluster``.
+    Cohesion is 1.0 by definition since every member shares the same vector."""
+    all_indices = list(range(len(bursts)))
+    return BurstCluster(
+        members=list(bursts),
+        top_terms=top_tfidf_terms(tfidf_matrix, all_indices, terms),
+        cohesion_score=1.0,
+    )
+
+
+def cluster_bursts(
+    bursts: list[ToolBurst],
+    *,
+    min_cluster_size: int = DEFAULT_BURST_CLUSTER_SIZE,
+) -> list[BurstCluster]:
+    """Group similar parent-thread bursts via TF-IDF + LSA + KMeans.
+
+    Mirrors ``delegation.cluster_delegations`` operating on ``ToolBurst``
+    records and ``burst_text``. ``filter_bursts`` is applied internally to
+    drop too-small / too-large / sub-token-floor bursts.
+
+    Raises ``SklearnMissingError`` when scikit-learn is not installed.
+    Returns ``[]`` when fewer than ``min_cluster_size`` bursts survive
+    filtering, or when no KMeans cluster met ``min_cluster_size``.
+    """
+    _require_sklearn()
+
+    candidates = filter_bursts(bursts)
+    if len(candidates) < min_cluster_size:
+        return []
+
+    texts = [burst_text(b) for b in candidates]
+    tfidf = TfidfVectorizer(stop_words="english", max_features=500)
+    tfidf_matrix = tfidf.fit_transform(texts)
+    terms = tfidf.get_feature_names_out()
+
+    if all_rows_identical(tfidf_matrix):
+        logger.warning(
+            "Burst clustering: all %d TF-IDF rows are identical — "
+            "this is unusual for real parent-thread data. Check for "
+            "duplicate burst records or upstream extraction bugs.",
+            tfidf_matrix.shape[0],
+        )
+        return [_build_single_burst_cluster(candidates, tfidf_matrix, terms)]
+
+    n_components = min(
+        LSA_COMPONENTS, tfidf_matrix.shape[1] - 1, len(candidates) - 1,
+    )
+    if n_components >= 2:
+        with warnings.catch_warnings():
+            # TruncatedSVD can warn on near-zero variance; the
+            # degenerate-fallback in cluster_embeddings handles output.
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            lsa = TruncatedSVD(n_components=n_components, random_state=42)
+            embeddings = lsa.fit_transform(tfidf_matrix)
+    else:
+        embeddings = tfidf_matrix.toarray()
+
+    labels = cluster_embeddings(embeddings, len(candidates))
+    groups = group_indices_by_label(labels)
+
+    clusters: list[BurstCluster] = []
+    for _label, member_indices in sorted(groups.items()):
+        if len(member_indices) < min_cluster_size:
+            continue
+        members = [candidates[i] for i in member_indices]
+        member_embeddings = embeddings[member_indices]
+        cohesion = mean_pairwise_cosine(member_embeddings)
+        cluster_top_terms = top_tfidf_terms(tfidf_matrix, member_indices, terms)
+        clusters.append(
+            BurstCluster(
+                members=members,
+                top_terms=cluster_top_terms,
+                cohesion_score=cohesion,
+            ),
+        )
+    return clusters
+
+
+def _collect_tools_from_bursts(bursts: list[ToolBurst]) -> list[str]:
+    """Sorted union of every tool name observed across the cluster's bursts."""
+    return sorted({b.name for burst in bursts for b in burst.tool_use_blocks})
+
+
+def _filter_tools_from_bursts(
+    bursts: list[ToolBurst],
+    *,
+    threshold: float = _TOOL_FREQUENCY_THRESHOLD,
+) -> list[str]:
+    """Keep tools used in at least ``threshold`` fraction of cluster bursts.
+
+    Presence-based, mirroring ``delegation._filter_tools_by_frequency``: a
+    tool counts once per burst it appears in, regardless of call volume
+    within that burst. See #184 for the architect-reviewed rationale.
+    """
+    if not bursts:
+        return []
+    counts: Counter[str] = Counter()
+    for burst in bursts:
+        counts.update({b.name for b in burst.tool_use_blocks})
+    cutoff = threshold * len(bursts)
+    return sorted(t for t, c in counts.items() if c >= cutoff)
+
+
+def _aggregate_burst_stats(bursts: list[ToolBurst]) -> AgentStats:
+    """Build ``AgentStats`` for ``classify_complexity`` from a burst cluster.
+
+    ``error_rate`` defaults to 0.0 — bursts don't carry paired
+    ``tool_result.is_error`` data today (the extractor only captures
+    ``tool_use_blocks`` from assistant messages). If dogfood shows
+    error-prone clusters being misclassified as moderate, the extractor
+    can be extended in a follow-up to capture per-tool error counts.
+    """
+    if not bursts:
+        return AgentStats(
+            agent_type="<bursts>",
+            invocation_count=0,
+            mean_tool_calls=0.0,
+            mean_tokens=0.0,
+            error_rate=0.0,
+            has_write_tools=False,
+            current_model=None,
+        )
+    tool_counts = [len(b.tool_use_blocks) for b in bursts]
+    token_totals = [b.usage.total_tokens for b in bursts]
+    all_tools = {b.name for burst in bursts for b in burst.tool_use_blocks}
+    return AgentStats(
+        agent_type="<bursts>",
+        invocation_count=len(bursts),
+        mean_tool_calls=sum(tool_counts) / len(tool_counts),
+        mean_tokens=sum(token_totals) / len(token_totals),
+        error_rate=0.0,
+        has_write_tools=bool(all_tools & WRITE_TOOLS),
+        current_model=None,
+    )
+
+
+def _tool_sequence_summary(bursts: list[ToolBurst]) -> list[str]:
+    """The most common tool sequence across the cluster, in original order.
+
+    Picks the modal sequence by ``Counter`` of tool-name tuples. Ties are
+    broken by insertion order (Counter.most_common is stable on equal
+    counts). Returns an empty list when no burst has tool calls.
+    """
+    if not bursts:
+        return []
+    sequences = [
+        tuple(b.name for b in burst.tool_use_blocks)
+        for burst in bursts
+        if burst.tool_use_blocks
+    ]
+    if not sequences:
+        return []
+    most_common, _ = Counter(sequences).most_common(1)[0]
+    return list(most_common)
+
+
+def _classify_confidence(
+    cluster_size: int, cohesion: float,
+) -> Literal["high", "medium", "low"]:
+    """Same boundaries as ``delegation._classify_confidence``."""
+    if (
+        cluster_size >= _CONFIDENCE_HIGH_SIZE
+        and cohesion >= _CONFIDENCE_HIGH_COHESION
+    ):
+        return "high"
+    if cohesion >= _CONFIDENCE_MEDIUM_COHESION:
+        return "medium"
+    return "low"
+
+
+def _synthesize_burst_prompt(
+    top_terms: list[str], members: list[ToolBurst],
+) -> str:
+    """Burst-specific prompt scaffold.
+
+    Uses ``preceding_user_text[:120]`` from up to two members as
+    "Example user requests observed" — the ToolBurst analogue of
+    delegation's ``AgentInvocation.description``. Per architect review
+    for #189-D Q2: keep ``_synthesize_prompt`` private to delegation
+    (members type differs); write this sibling for bursts.
+    """
+    terms_list = ", ".join(top_terms[:3]) if top_terms else "this task"
+    examples = [
+        m.preceding_user_text[:120].strip()
+        for m in members[:2]
+        if m.preceding_user_text and m.preceding_user_text.strip()
+    ]
+    examples_block = ""
+    if examples:
+        examples_block = "\n\nExample user requests observed:\n" + "\n".join(
+            f"- {e}" for e in examples
+        )
+    return (
+        f"You handle recurring parent-thread workflows involving "
+        f"{terms_list}.\n\n"
+        "Scope your work to the specific request the parent agent "
+        "delegated. Return concise, structured output."
+        f"{examples_block}"
+    )
+
+
+def _build_subagent_draft(
+    cluster: BurstCluster, recommended_model: str,
+) -> DelegationSuggestion:
+    tools = _filter_tools_from_bursts(cluster.members)
+    tools_observed = _collect_tools_from_bursts(cluster.members)
+    if not tools_observed:
+        tools_note = "# no tool data captured from bursts"
+    elif not tools:
+        tools_note = (
+            f"# no tool used in >="
+            f"{int(_TOOL_FREQUENCY_THRESHOLD * 100)}% of cluster bursts "
+            f"— see tools_observed for the unfiltered list"
+        )
+    else:
+        tools_note = ""
+    return DelegationSuggestion(
+        name=synthesize_name(cluster.top_terms),
+        description=synthesize_description(cluster.top_terms),
+        model=recommended_model,
+        tools=tools,
+        tools_observed=tools_observed,
+        tools_note=tools_note,
+        prompt_template=_synthesize_burst_prompt(
+            cluster.top_terms, cluster.members,
+        ),
+        confidence=_classify_confidence(
+            len(cluster.members), cluster.cohesion_score,
+        ),
+        cluster_size=len(cluster.members),
+        cohesion_score=cluster.cohesion_score,
+        top_terms=list(cluster.top_terms),
+    )
+
+
+def generate_offload_candidate(
+    cluster: BurstCluster,
+    *,
+    parent_model: str,
+    parent_pricing: ModelPricing | None,
+    alt_pricing: ModelPricing | None,
+) -> OffloadCandidate:
+    """Synthesize an ``OffloadCandidate`` from a clustered group of bursts.
+
+    Aggregates parent-thread cost and signed savings across the cluster's
+    bursts (negative savings is preserved per #189-C — actionable signal).
+    Builds a ``DelegationSuggestion`` as the ``subagent_draft`` so the YAML
+    rendering surface stays consistent with the existing delegation flow.
+    Sub-issue E populates ``matched_agent`` / ``dedup_note`` afterward.
+    """
+    alt_model = pick_alternative_model(parent_model)
+
+    parent_tokens = 0
+    parent_cost_total = 0.0
+    savings_total = 0.0
+    for b in cluster.members:
+        parent_tokens += b.usage.total_tokens
+        parent_cost, savings_signed = estimate_burst_cost(
+            b, parent_pricing=parent_pricing, alt_pricing=alt_pricing,
+        )
+        parent_cost_total += parent_cost
+        savings_total += savings_signed
+
+    cost_note = ""
+    if savings_total < 0:
+        cost_note = (
+            "Offloading would increase cost — parent-thread cache appears "
+            "load-bearing for this pattern. Consider keeping on parent."
+        )
+
+    stats = _aggregate_burst_stats(cluster.members)
+    recommended_model = recommend_model_for_complexity(classify_complexity(stats))
+
+    subagent_draft = _build_subagent_draft(cluster, recommended_model)
+
+    return OffloadCandidate(
+        name=subagent_draft.name,
+        description=subagent_draft.description,
+        confidence=subagent_draft.confidence,
+        cluster_size=len(cluster.members),
+        cohesion_score=cluster.cohesion_score,
+        top_terms=list(cluster.top_terms),
+        tool_sequence_summary=_tool_sequence_summary(cluster.members),
+        estimated_parent_tokens=parent_tokens,
+        estimated_parent_cost_usd=parent_cost_total,
+        estimated_savings_usd=savings_total,
+        parent_model=parent_model,
+        alternative_model=alt_model,
+        cost_note=cost_note,
+        target_kind="subagent",
+        subagent_draft=subagent_draft,
+        skill_draft=None,
+    )

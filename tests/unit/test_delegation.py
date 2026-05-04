@@ -237,7 +237,7 @@ class TestGenerateDraft:
     ) -> DelegationCluster:
         # Use `is None` rather than `or` so an explicitly-empty
         # `top_terms=[]` reaches the cluster (needed to exercise the
-        # fallback-name path in _synthesize_name).
+        # fallback-name path in synthesize_name).
         return DelegationCluster(
             members=members if members is not None else [_inv(description="d", prompt="p")] * 10,
             top_terms=top_terms if top_terms is not None else ["pytest", "tests", "run"],

@@ -271,6 +271,185 @@ class DelegationSuggestion(BaseModel):
         )
 
 
+class SkillScaffold(BaseModel):
+    """v0.6 placeholder for a skill-scaffold draft.
+
+    Intentionally empty in v0.5 — schema reservation only. ``OffloadCandidate``
+    serializes ``skill_draft: null`` for every candidate this release. Once
+    the skill scanner (#183) lands, fields will be added here additively;
+    consumers that rely on ``skill_draft is None`` to mean "v0.5 didn't ship
+    a skill" should switch to ``target_kind == 'skill'`` post-v0.6.
+    """
+
+
+class OffloadCandidate(BaseModel):
+    """A parent-thread workload pattern that could move to a cheaper subagent.
+
+    Produced by the parent-thread offload-candidate pipeline (#189) which
+    clusters ``ToolBurst`` records on the parent (typically Opus) thread,
+    estimates the cost delta against a cheaper alternative model, and
+    synthesizes a copy-paste-ready subagent draft. Peer concept to
+    ``DelegationSuggestion`` — that one comes from clustering existing
+    ``general-purpose`` delegations; this one comes from clustering the
+    parent thread's own tool-using turns.
+
+    ``estimated_savings_usd`` is **signed**: negative means offloading
+    would cost MORE than staying on the parent (cache is load-bearing for
+    this pattern). Per architect review for #189-C, the sign is preserved
+    rather than clamped — the negative case is the most actionable signal
+    this feature can produce. ``cost_note`` is populated when negative
+    with a CLI-render-ready warning.
+    """
+
+    name: str
+    """Kebab-case suggested subagent name synthesized from top terms."""
+
+    description: str
+    """One-line description synthesized from top terms."""
+
+    confidence: Literal["high", "medium", "low"]
+    """Confidence tier based on cluster size + cohesion (same boundaries
+    as ``DelegationSuggestion``)."""
+
+    cluster_size: int
+    """Number of bursts in the cluster."""
+
+    cohesion_score: float
+    """Mean pairwise cosine similarity within the cluster's TF-IDF vectors."""
+
+    top_terms: list[str] = Field(default_factory=list)
+    """Top TF-IDF terms characterizing the cluster."""
+
+    tool_sequence_summary: list[str] = Field(default_factory=list)
+    """Most common tool sequence across the cluster (in order, not deduped).
+    Modal sequence by ``Counter`` of tool-name tuples; empty when cluster
+    has no observed tool calls."""
+
+    estimated_parent_tokens: int = 0
+    """Sum of total tokens used across cluster bursts on the parent thread."""
+
+    estimated_parent_cost_usd: float = 0.0
+    """Aggregate parent-thread cost (USD) of the cluster's bursts at the
+    parent model's pricing. ``0.0`` when pricing was unavailable."""
+
+    estimated_savings_usd: float = 0.0
+    """Signed savings (USD) projected if the cluster's work moved to
+    ``alternative_model``. NEGATIVE means offloading would cost more —
+    see ``cost_note``. ``0.0`` when pricing unavailable."""
+
+    parent_model: str = ""
+    """Model id observed on the cluster's parent-thread bursts."""
+
+    alternative_model: str
+    """Recommended cheaper-tier model id (e.g., ``claude-sonnet-4-6``)."""
+
+    cost_note: str = ""
+    """Populated when ``estimated_savings_usd`` is negative — explains
+    that offloading would increase cost (parent-thread cache is
+    load-bearing) and recommends keeping the work on the parent."""
+
+    target_kind: Literal["subagent", "skill"] = "subagent"
+    """Always ``"subagent"`` in v0.5; ``"skill"`` reserved for v0.6 once
+    skill scanner #183 lands."""
+
+    subagent_draft: DelegationSuggestion | None = None
+    """Populated when ``target_kind == "subagent"`` (always in v0.5).
+    Reuses ``DelegationSuggestion`` so the YAML draft shape stays
+    consistent between this feature and the existing delegation
+    suggestions."""
+
+    skill_draft: SkillScaffold | None = None
+    """Always ``None`` in v0.5. Field shape reserved for v0.6."""
+
+    matched_agent: str = ""
+    """Name of an existing ``AgentConfig`` whose description overlaps this
+    candidate's draft above the dedup threshold. Populated by sub-issue E."""
+
+    dedup_note: str = ""
+    """Non-empty when the candidate overlaps an existing agent. Populated
+    by sub-issue E."""
+
+    # ``# type: ignore[prop-decorator]`` mirrors ``DelegationSuggestion`` —
+    # mypy + pydantic ``@computed_field`` interaction (pydantic/pydantic#6709).
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def yaml_draft(self) -> str:
+        """Copy-paste-ready subagent block with offload-specific context.
+
+        Builds an offload-flavored preamble (savings, parent → alt model,
+        cost_note when negative) on top of the ``subagent_draft``'s
+        frontmatter + prompt body. Does NOT delegate to
+        ``DelegationSuggestion.yaml_draft`` — that one's preamble is
+        about delegation patterns; this one needs to communicate the
+        parent-thread offload framing and the dollar figure that
+        motivates the change.
+        """
+        if self.subagent_draft is None:
+            return ""
+
+        preamble: list[str] = [
+            f"# Suggested subagent (parent-thread offload candidate): {self.name}",
+        ]
+        if self.confidence == "low":
+            preamble.append("# REVIEW BEFORE USE — low confidence cluster")
+        preamble.append(
+            f"# Confidence: {self.confidence} "
+            f"({self.cluster_size} bursts, {self.cohesion_score:.2f} cohesion)",
+        )
+        if self.parent_model:
+            preamble.append(
+                f"# Parent model: {self.parent_model} "
+                f"→ recommended: {self.alternative_model}",
+            )
+        else:
+            preamble.append(f"# Recommended model: {self.alternative_model}")
+        if self.estimated_parent_tokens:
+            preamble.append(
+                f"# Parent-thread cost: ${self.estimated_parent_cost_usd:.4f} "
+                f"({self.estimated_parent_tokens:,} tokens)",
+            )
+        # Signed savings: positive renders as a savings figure, negative
+        # renders as the actionable "do not offload" signal.
+        if self.estimated_savings_usd >= 0:
+            preamble.append(
+                f"# Estimated savings: ${self.estimated_savings_usd:.4f}",
+            )
+        else:
+            preamble.append(
+                f"# Estimated cost change: +${-self.estimated_savings_usd:.4f} "
+                f"(offloading would cost MORE)",
+            )
+        if self.cost_note:
+            preamble.append(f"# Note: {self.cost_note}")
+        if self.top_terms:
+            preamble.append(f"# Top terms: {', '.join(self.top_terms)}")
+        if self.dedup_note:
+            preamble.append(f"# Dedup: {self.dedup_note}")
+
+        draft = self.subagent_draft
+        frontmatter_data: dict[str, object] = {
+            "description": draft.description,
+            "model": draft.model,
+            "tools": draft.tools,
+        }
+        frontmatter = yaml.safe_dump(
+            frontmatter_data, sort_keys=False, default_flow_style=False,
+        ).rstrip()
+
+        tools_comment = ""
+        if not draft.tools and draft.tools_note:
+            tools_comment = f"\n# tools: {draft.tools_note}"
+
+        return (
+            "\n".join(preamble)
+            + "\n---\n"
+            + frontmatter
+            + tools_comment
+            + "\n---\n\n"
+            + draft.prompt_template
+        )
+
+
 class DiagnosticsResult(BaseModel):
     """Complete diagnostics output for a session or set of sessions."""
 
@@ -292,3 +471,9 @@ class DiagnosticsResult(BaseModel):
 
     delegation_suggestions: list[DelegationSuggestion] = Field(default_factory=list)
     """Draft subagent definitions proposed by the clustering pipeline."""
+
+    # v0.5: added offload_candidates (#189). Wired up in sub-issue E.
+    offload_candidates: list[OffloadCandidate] = Field(default_factory=list)
+    """Parent-thread offload candidates surfaced by the burst-clustering
+    pipeline (#189). Empty list when sklearn isn't installed or no
+    cluster met ``min_cluster_size``."""
