@@ -260,7 +260,7 @@ def cluster_delegations(
 _SLUG_STRIP_RE = re.compile(r"[^a-z0-9-]")
 
 
-def _synthesize_name(top_terms: list[str]) -> str:
+def synthesize_name(top_terms: list[str]) -> str:
     """Build a kebab-case agent name from the top TF-IDF terms.
 
     Prefers the first two terms when available; otherwise falls back to
@@ -276,7 +276,7 @@ def _synthesize_name(top_terms: list[str]) -> str:
     return f"{cleaned[0]}-{cleaned[1]}"
 
 
-def _synthesize_description(top_terms: list[str]) -> str:
+def synthesize_description(top_terms: list[str]) -> str:
     if not top_terms:
         return "Handles a recurring delegation pattern."
     terms_list = ", ".join(top_terms[:3])
@@ -393,8 +393,8 @@ def generate_draft(cluster: DelegationCluster) -> DelegationSuggestion:
     else:
         tools_note = ""
     return DelegationSuggestion(
-        name=_synthesize_name(cluster.top_terms),
-        description=_synthesize_description(cluster.top_terms),
+        name=synthesize_name(cluster.top_terms),
+        description=synthesize_description(cluster.top_terms),
         model=_classify_model(tools, cluster.members),
         tools=tools,
         tools_observed=tools_observed,
