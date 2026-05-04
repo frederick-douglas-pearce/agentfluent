@@ -271,27 +271,26 @@ def _render_regression_footer(console: Console, result: DiffResult) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _signed_int(value: int) -> str:
+def _signed(value: float, formatted_abs: str) -> str:
+    """Wrap a pre-formatted magnitude in red (+) / green (-) markup.
+
+    Positive deltas are red because in the diff context they represent
+    growth in undesirable metrics (cost, regressions); zero is uncolored.
+    """
     if value > 0:
-        return f"[red]+{value:,}[/red]"
+        return f"[red]+{formatted_abs}[/red]"
     if value < 0:
-        return f"[green]{value:,}[/green]"
-    return "0"
+        return f"[green]-{formatted_abs}[/green]"
+    return formatted_abs
+
+
+def _signed_int(value: int) -> str:
+    return _signed(value, f"{abs(value):,}")
 
 
 def _signed_cost(value: float) -> str:
-    formatted = format_cost(abs(value))
-    if value > 0:
-        return f"[red]+{formatted}[/red]"
-    if value < 0:
-        return f"[green]-{formatted}[/green]"
-    return formatted
+    return _signed(value, format_cost(abs(value)))
 
 
 def _signed_float(value: float, *, precision: int, suffix: str = "") -> str:
-    fmt = f"{abs(value):.{precision}f}{suffix}"
-    if value > 0:
-        return f"[red]+{fmt}[/red]"
-    if value < 0:
-        return f"[green]-{fmt}[/green]"
-    return f"{abs(value):.{precision}f}{suffix}"
+    return _signed(value, f"{abs(value):.{precision}f}{suffix}")

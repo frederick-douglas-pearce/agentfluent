@@ -43,6 +43,16 @@ class Severity(StrEnum):
     CRITICAL = "critical"
 
 
+SEVERITY_RANK: dict[Severity, int] = {
+    Severity.INFO: 1,
+    Severity.WARNING: 2,
+    Severity.CRITICAL: 3,
+}
+"""Numeric ordering for ``Severity`` comparisons. ``StrEnum`` provides no
+intrinsic ordering, so consumers that need >= / <= comparisons (priority
+scoring, ``--fail-on`` thresholds) look up integers here."""
+
+
 class AgentConfig(BaseModel):
     """Parsed agent definition from a `.md` file.
 

@@ -34,12 +34,11 @@ def load_envelope(path: Path) -> dict[str, Any]:
     operates on dicts so it doesn't need to round-trip through the full
     ``AnalysisResult`` model and stay coupled to optional fields.
     """
-    if not path.exists():
-        msg = f"File not found: {path}"
-        raise EnvelopeLoadError(msg)
-
     try:
         text = path.read_text(encoding="utf-8")
+    except FileNotFoundError as e:
+        msg = f"File not found: {path}"
+        raise EnvelopeLoadError(msg) from e
     except OSError as e:
         msg = f"Could not read {path}: {e}"
         raise EnvelopeLoadError(msg) from e

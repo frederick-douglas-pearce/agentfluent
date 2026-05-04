@@ -15,25 +15,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from agentfluent.config.models import Severity
+from agentfluent.config.models import SEVERITY_RANK, Severity
 from agentfluent.diagnostics.models import SignalType
 from agentfluent.diff.models import (
     AgentTypeDelta,
+    DeltaStatus,
     DiffResult,
     ModelTokenDelta,
     RecommendationDelta,
     TokenMetricsDelta,
 )
-
-# Severity ranking for `--fail-on` threshold checks. Mirrors the
-# ordering implied by config.models.Severity but pinned numerically here
-# so the comparison is explicit.
-_SEVERITY_RANK: dict[Severity, int] = {
-    Severity.INFO: 1,
-    Severity.WARNING: 2,
-    Severity.CRITICAL: 3,
-}
-
 
 type RecKey = tuple[str | None, str, frozenset[SignalType]]
 """Mirrors ``diagnostics.aggregation.AggregationKey``. Re-declared
@@ -59,17 +50,18 @@ def compute_diff(
     token_delta = _diff_token_metrics(baseline, current)
     agent_deltas = _diff_agent_metrics(baseline, current)
 
-    new_count = sum(1 for r in rec_deltas if r.status == "new")
-    resolved_count = sum(1 for r in rec_deltas if r.status == "resolved")
-    persisting_count = sum(1 for r in rec_deltas if r.status == "persisting")
-
+    new_count = resolved_count = persisting_count = 0
+    threshold = SEVERITY_RANK[fail_on] if fail_on is not None else None
     regression = False
-    if fail_on is not None:
-        threshold = _SEVERITY_RANK[fail_on]
-        regression = any(
-            r.status == "new" and _SEVERITY_RANK[r.severity] >= threshold
-            for r in rec_deltas
-        )
+    for r in rec_deltas:
+        if r.status == "new":
+            new_count += 1
+            if threshold is not None and SEVERITY_RANK[r.severity] >= threshold:
+                regression = True
+        elif r.status == "resolved":
+            resolved_count += 1
+        else:
+            persisting_count += 1
 
     return DiffResult(
         new_count=new_count,
@@ -149,14 +141,16 @@ def _coerce_signal_type(value: Any) -> SignalType:
 
 def _make_delta(
     key: RecKey,
-    status: str,
+    status: DeltaStatus,
     *,
     baseline: dict[str, Any] | None,
     current: dict[str, Any] | None,
 ) -> RecommendationDelta:
     agent_type, target, signal_set = key
     sample = current if current is not None else baseline
-    assert sample is not None  # one side is always present  # noqa: S101
+    if sample is None:
+        msg = "_make_delta requires at least one of baseline or current"
+        raise ValueError(msg)
 
     baseline_count = int((baseline or {}).get("count", 0) or 0)
     current_count = int((current or {}).get("count", 0) or 0)
@@ -167,7 +161,7 @@ def _make_delta(
     representative = str(sample.get("representative_message", ""))
 
     return RecommendationDelta(
-        status=status,  # type: ignore[arg-type]
+        status=status,
         agent_type=agent_type,
         target=target,
         signal_types=sorted(signal_set, key=lambda s: s.value),
@@ -195,8 +189,6 @@ _STATUS_ORDER = {"new": 0, "persisting": 1, "resolved": 2}
 
 
 def _delta_sort_key(delta: RecommendationDelta) -> tuple[int, float, str, str]:
-    # Within each status group, highest current priority first; ties broken
-    # by agent_type then target for stable, human-friendly ordering.
     return (
         _STATUS_ORDER[delta.status],
         -delta.current_priority_score,
@@ -217,8 +209,8 @@ def _diff_token_metrics(
     baseline_tm = baseline.get("token_metrics") or {}
     current_tm = current.get("token_metrics") or {}
 
-    baseline_total_tokens = _total_tokens(baseline_tm)
-    current_total_tokens = _total_tokens(current_tm)
+    baseline_total_tokens = _sum_token_components(baseline_tm)
+    current_total_tokens = _sum_token_components(current_tm)
 
     baseline_cost = float(baseline_tm.get("total_cost", 0.0) or 0.0)
     current_cost = float(current_tm.get("total_cost", 0.0) or 0.0)
@@ -242,24 +234,15 @@ def _diff_token_metrics(
     )
 
 
-def _total_tokens(tm: dict[str, Any]) -> int:
-    # ``TokenMetrics.total_tokens`` is a ``@property``, not a serialized
-    # field — Pydantic's ``model_dump`` skips it. Reconstruct from the
-    # four token components which DO serialize.
+def _sum_token_components(d: dict[str, Any]) -> int:
+    # ``TokenMetrics.total_tokens`` and ``ModelTokenBreakdown.total_tokens``
+    # are ``@property`` accessors; Pydantic's ``model_dump`` skips them.
+    # Reconstruct from the four serialized fields shared by both shapes.
     return (
-        int(tm.get("input_tokens", 0) or 0)
-        + int(tm.get("output_tokens", 0) or 0)
-        + int(tm.get("cache_creation_input_tokens", 0) or 0)
-        + int(tm.get("cache_read_input_tokens", 0) or 0)
-    )
-
-
-def _model_total_tokens(breakdown: dict[str, Any]) -> int:
-    return (
-        int(breakdown.get("input_tokens", 0) or 0)
-        + int(breakdown.get("output_tokens", 0) or 0)
-        + int(breakdown.get("cache_creation_input_tokens", 0) or 0)
-        + int(breakdown.get("cache_read_input_tokens", 0) or 0)
+        int(d.get("input_tokens", 0) or 0)
+        + int(d.get("output_tokens", 0) or 0)
+        + int(d.get("cache_creation_input_tokens", 0) or 0)
+        + int(d.get("cache_read_input_tokens", 0) or 0)
     )
 
 
@@ -272,8 +255,8 @@ def _diff_by_model(
     for model in models:
         b = baseline.get(model) or {}
         c = current.get(model) or {}
-        b_tokens = _model_total_tokens(b)
-        c_tokens = _model_total_tokens(c)
+        b_tokens = _sum_token_components(b)
+        c_tokens = _sum_token_components(c)
         b_cost = float(b.get("cost", 0.0) or 0.0)
         c_cost = float(c.get("cost", 0.0) or 0.0)
         deltas.append(
