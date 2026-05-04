@@ -391,8 +391,6 @@ class TestOffloadCandidates:
             assert candidate.subagent_draft is not None
             assert candidate.subagent_draft.cluster_size == 6
             assert candidate.parent_model == "claude-opus-4-7"
-            # JSON round-trip — same contract as DelegationSuggestion;
-            # sub-issue F's CLI wiring depends on it.
             assert candidate.skill_draft is None
 
     def test_pipeline_empty_offload_when_sklearn_missing(
