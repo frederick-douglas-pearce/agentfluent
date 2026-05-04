@@ -57,6 +57,19 @@ class SessionAnalysis(BaseModel):
     are already captured on ``invocations[i].trace.tool_calls`` and
     not duplicated here."""
 
+    messages: list[SessionMessage] = Field(default_factory=list)
+    """Parsed parent-session messages. Retained so downstream
+    diagnostics — currently only #189's parent-thread offload-candidate
+    pipeline — can re-walk the session without re-parsing the JSONL.
+
+    **Memory tradeoff.** The dominant cost is ``ToolUseBlock.input``
+    payloads (Edit/Write file contents, Bash output, large Read
+    results) carried on assistant messages. Typical session sizes are
+    fine; large ``--latest N`` runs over heavy sessions can grow
+    proportionally. v0.6 follow-up if profiling proves it: extract
+    bursts during ``analyze_session`` and store ``bursts: list[ToolBurst]``
+    here instead, dropping ``input`` dicts at parse time."""
+
     message_count: int = 0
     user_message_count: int = 0
     assistant_message_count: int = 0
@@ -114,6 +127,7 @@ def analyze_session(
         agent_metrics=agent_metrics,
         invocations=invocations,
         mcp_tool_calls=mcp_tool_calls,
+        messages=messages,
         message_count=len(messages),
         user_message_count=_count_type(messages, "user"),
         assistant_message_count=_count_type(messages, "assistant"),

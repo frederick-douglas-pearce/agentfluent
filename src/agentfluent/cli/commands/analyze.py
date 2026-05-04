@@ -194,6 +194,7 @@ def analyze(
 
     all_invocations = [inv for s in result.sessions for inv in s.invocations]
     all_mcp_calls = [c for s in result.sessions for c in s.mcp_tool_calls]
+    all_messages = [m for s in result.sessions for m in s.messages]
 
     if all_invocations and diagnostics:
         # `project_info.path` is the ~/.claude/projects/<slug>/ dir, not
@@ -216,6 +217,7 @@ def analyze(
             mcp_tool_calls=all_mcp_calls,
             claude_config_dir=config_dir,
             project_dir=project_disk_path,
+            parent_messages=all_messages,
         )
     elif result.agent_metrics.total_invocations == 0 and diagnostics:
         err_console.print(

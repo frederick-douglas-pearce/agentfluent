@@ -419,7 +419,7 @@ def _config_text(config: AgentConfig) -> str:
     return config.prompt_body[:_PROMPT_BODY_SNIPPET_CHARS]
 
 
-def _apply_dedup(
+def apply_dedup(
     drafts: list[DelegationSuggestion],
     existing_configs: list[AgentConfig],
     min_similarity: float,
@@ -476,5 +476,5 @@ def suggest_delegations(
         return []
     drafts = [generate_draft(c) for c in clusters]
     if existing_configs:
-        drafts = _apply_dedup(drafts, existing_configs, min_similarity)
+        drafts = apply_dedup(drafts, existing_configs, min_similarity)
     return drafts
