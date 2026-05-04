@@ -19,7 +19,9 @@ from typing import Any, Literal
 
 SCHEMA_VERSION = "1"
 
-CommandName = Literal["list-projects", "list-sessions", "analyze", "config-check"]
+CommandName = Literal[
+    "list-projects", "list-sessions", "analyze", "config-check", "diff",
+]
 
 
 def format_json_output(command: CommandName, data: Any) -> str:
