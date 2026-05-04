@@ -37,6 +37,14 @@ API_RATE_FOOTNOTE = (
 
 GLOSSARY_FOOTNOTE = "See docs/GLOSSARY.md for term definitions."
 
+# Negative-savings short marker for the Offload Candidates table's Note
+# column. Single source of truth: the formatter renders it; tests assert
+# on it. The model's verbose ``cost_note`` ("parent-thread cache appears
+# load-bearing...") is a separate, longer text shown only in --verbose
+# YAML output. Keeping the short and verbose forms decoupled lets each
+# evolve independently without drifting.
+OFFLOAD_COST_MORE_NOTE = "offload would cost MORE"
+
 if TYPE_CHECKING:
     from agentfluent.analytics.pipeline import AnalysisResult
     from agentfluent.config.models import ConfigScore
@@ -363,6 +371,7 @@ def _format_diagnostics_table(
 
     _format_deep_diagnostics(console, diag, verbose=verbose)
     _format_delegation_suggestions(console, diag, verbose=verbose)
+    _format_offload_candidates(console, diag, verbose=verbose)
 
     console.print(GLOSSARY_FOOTNOTE, style="dim")
 
@@ -486,6 +495,99 @@ def _format_delegation_suggestions(
         for sug in suggestions:
             console.print()
             console.print(escape(sug.yaml_draft))
+
+
+def _format_offload_candidates(
+    console: Console,
+    diag: DiagnosticsResult,
+    *,
+    verbose: bool,
+) -> None:
+    """Render the "Offload Candidates" section (#189).
+
+    Compact table by default sorted by ``estimated_savings_usd``
+    descending — biggest dollar wins first; negative-savings rows
+    (offloading would cost MORE than staying on the parent because
+    the parent-thread cache is load-bearing) sink to the bottom.
+    Verbose adds the offload-flavored ``yaml_draft`` (parent → alt
+    model preamble + cost note + frontmatter + prompt) below each row.
+
+    Negative-savings rendering:
+      - savings cell: ``[red]+$X.XX[/red]`` (positive magnitude with a
+        ``+`` mnemonic for "this many additional dollars")
+      - Note column: includes ``"offload would cost MORE"`` so the
+        sign-flip in the savings cell isn't easy to misread
+      The same phrasing appears in the model's ``yaml_draft`` preamble,
+      so terminology stays consistent across compact + verbose views.
+
+    All JSONL/trace-derived strings (name, tools, cost_note, dedup_note)
+    pass through ``escape`` before hitting Rich.
+    """
+    candidates = sorted(
+        diag.offload_candidates,
+        key=lambda c: c.estimated_savings_usd,
+        reverse=True,
+    )
+    if not candidates:
+        return
+
+    console.print("\n[bold]Offload Candidates[/bold]")
+    cand_table = Table(show_header=True, title_style="")
+    cand_table.add_column("Name", style="cyan")
+    cand_table.add_column("Confidence")
+    cand_table.add_column("Cluster size", justify="right")
+    cand_table.add_column("Tools")
+    cand_table.add_column("Est. savings", justify="right")
+    cand_table.add_column("Note")
+
+    for cand in candidates:
+        color = CONFIDENCE_COLORS.get(cand.confidence, "white")
+        # Read tools/tools_note FLAT off the candidate, mirroring how
+        # every other column reads from `OffloadCandidate` directly.
+        # Reaching into `cand.subagent_draft` here would silently fall
+        # through to "[dim]—[/dim]" for the v0.6 ``target_kind=skill``
+        # path while the rest of the row still rendered.
+        if cand.tools:
+            tools_display = escape(", ".join(cand.tools))
+        elif cand.tools_note:
+            tools_display = escape(cand.tools_note)
+        else:
+            tools_display = "[dim]—[/dim]"
+
+        # Signed savings with a sign-aware visual cue. Negatives flip
+        # to "+$X.XX" magnitude in red; the Note column carries the
+        # "cost MORE" warning so the meaning isn't lost on a quick scan.
+        savings = cand.estimated_savings_usd
+        if savings >= 0:
+            savings_display = f"${savings:.2f}"
+        else:
+            savings_display = f"[red]+${-savings:.2f}[/red]"
+
+        note_parts: list[str] = []
+        if savings < 0:
+            # Short marker only — the model's verbose `cost_note`
+            # ("parent-thread cache load-bearing...") is the same
+            # warning at length and lives in the --verbose YAML
+            # preamble. Duplicating it here just bloats the table.
+            note_parts.append(OFFLOAD_COST_MORE_NOTE)
+        if cand.dedup_note:
+            note_parts.append(escape(cand.dedup_note))
+        note = "; ".join(note_parts)
+
+        cand_table.add_row(
+            escape(cand.name),
+            f"[{color}]{cand.confidence}[/{color}]",
+            str(cand.cluster_size),
+            tools_display,
+            savings_display,
+            note,
+        )
+    console.print(cand_table)
+
+    if verbose:
+        for cand in candidates:
+            console.print()
+            console.print(escape(cand.yaml_draft))
 
 
 def _format_diagnostics_summary(console: Console, diag: DiagnosticsResult) -> None:

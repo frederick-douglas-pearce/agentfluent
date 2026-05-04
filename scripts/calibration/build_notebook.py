@@ -153,13 +153,18 @@ projects = list(discover_projects(base_path=projects_root))
 print(f"Projects: {len(projects)}")
 
 all_invocations = []
+all_messages = []
 for p in projects:
     paths = [s.path for s in p.sessions]
     result = analyze_sessions(paths)
     for s in result.sessions:
         all_invocations.extend(s.invocations)
+        # Retained on SessionAnalysis after #189 sub-issue E for the
+        # parent-thread offload-candidate calibration in section 11.
+        all_messages.extend(s.messages)
 
-print(f"Total invocations: {len(all_invocations)}")"""))
+print(f"Total invocations: {len(all_invocations)}")
+print(f"Total parent-thread messages: {len(all_messages)}")"""))
 
     cells.append(code("""\
 df_inv = pd.DataFrame([
@@ -1135,6 +1140,273 @@ running tools is minimized.
   Phase 2 ships, using `active_duration_per_tool_use` from
   `AgentInvocation`.
 """))
+
+    cells.append(md(r"""## 11 · Parent-thread offload calibration
+
+**Issue:** [#189](https://github.com/frederick-douglas-pearce/agentfluent/issues/189)
+sub-issue F.
+
+`#189` adds a new diagnostic — parent-thread offload candidates —
+that clusters tool-use bursts on the **parent** (typically Opus)
+thread, projects per-cluster cost against a cheaper alternative model,
+and emits a copy-paste-ready subagent draft per surviving cluster.
+
+The plumbing landed in sub-issues A–E. This section sweeps the
+threshold knobs against my `~/.claude/projects/` data so the v0.5
+release defaults are documented against at least one real corpus.
+
+**Single-dataset caveat applies.** Results below come from one
+contributor's project history. A second contributor's data may shift
+the picture, especially the confidence-tier thresholds (the architect
+review for sub-issue F flagged that parent-thread bursts have shorter
+text + stronger tool-name signal than delegation prompts, so reusing
+delegation's confidence boundaries is a hypothesis, not a verified fit).
+
+### Sweep dimensions
+
+| Constant | Default | Sweep range |
+|---|---|---|
+| `MIN_BURST_TOOLS` | 2 | {2, 3, 4} |
+| `MAX_BURST_TOOLS` | 20 | {10, 15, 20, 30} |
+| `MIN_BURST_TEXT_TOKENS` | 30 | {20, 30, 50, 75} |
+| `min_cluster_size` (function arg, default `DEFAULT_BURST_CLUSTER_SIZE`) | 5 | {3, 5, 8, 10} |
+| `_TOOL_FREQUENCY_THRESHOLD` (presence-based tool filter) | 0.5 | {0.3, 0.5, 0.7} |
+| Confidence tiers (high/medium/low boundaries) | reuse delegation's | qualitative — observe cohesion distribution |
+
+### Success criterion (PRD #3)
+
+At defaults: at least one cluster with cohesion ≥ 0.35, size ≥ 5, top
+terms passing eyeball review on the agentfluent project's own data.
+
+If defaults produce zero clusters, the architect-approved fallback is
+to drop `min_cluster_size` to 3 in the calibration's own validation
+*without* changing the shipped default — `DEFAULT_BURST_CLUSTER_SIZE
+= 5` is the algorithmic-rigor floor; loosening it based on one
+contributor's session-volume profile would degrade output for every
+other user."""))
+
+    cells.append(code("""\
+from agentfluent.diagnostics.parent_workload import (
+    DEFAULT_BURST_CLUSTER_SIZE,
+    MAX_BURST_TOOLS,
+    MIN_BURST_TEXT_TOKENS,
+    MIN_BURST_TOOLS,
+    burst_text,
+    cluster_bursts,
+    extract_bursts,
+    filter_bursts,
+)
+
+print(f"Total parent-thread messages loaded: {len(all_messages)}")
+raw_bursts = extract_bursts(all_messages)
+filtered_bursts = filter_bursts(raw_bursts)
+print(f"Bursts pre-filter: {len(raw_bursts)}")
+print(f"Bursts post-filter (defaults: MIN_TOOLS={MIN_BURST_TOOLS}, "
+      f"MAX_TOOLS={MAX_BURST_TOOLS}, MIN_TEXT={MIN_BURST_TEXT_TOKENS}): "
+      f"{len(filtered_bursts)}")
+if filtered_bursts:
+    sizes = [len(b.tool_use_blocks) for b in filtered_bursts]
+    print(f"Tool-call counts per burst: min={min(sizes)}, "
+          f"median={sorted(sizes)[len(sizes)//2]}, max={max(sizes)}")
+    text_lens = [len(burst_text(b).split()) for b in filtered_bursts]
+    print(f"Burst-text tokens: min={min(text_lens)}, "
+          f"median={sorted(text_lens)[len(text_lens)//2]}, max={max(text_lens)}")"""))
+
+    cells.append(md(r"""### 11.1 — Filter sweep
+
+For each (`MIN_BURST_TOOLS`, `MAX_BURST_TOOLS`, `MIN_BURST_TEXT_TOKENS`)
+triple, count surviving bursts. The shipped defaults must keep enough
+bursts for clustering to find recurring patterns; too-tight filtering
+drops everything and the feature emits empty output."""))
+
+    cells.append(code("""\
+filter_results = []
+for min_tools in [2, 3, 4]:
+    for max_tools in [10, 15, 20, 30]:
+        for min_text in [20, 30, 50, 75]:
+            kept = []
+            for b in raw_bursts:
+                n = len(b.tool_use_blocks)
+                if n < min_tools or n > max_tools:
+                    continue
+                if len(burst_text(b).split()) < min_text:
+                    continue
+                kept.append(b)
+            filter_results.append({
+                "MIN_BURST_TOOLS": min_tools,
+                "MAX_BURST_TOOLS": max_tools,
+                "MIN_BURST_TEXT_TOKENS": min_text,
+                "surviving_bursts": len(kept),
+            })
+df_filters = pd.DataFrame(filter_results)
+default_row = df_filters[
+    (df_filters["MIN_BURST_TOOLS"] == MIN_BURST_TOOLS)
+    & (df_filters["MAX_BURST_TOOLS"] == MAX_BURST_TOOLS)
+    & (df_filters["MIN_BURST_TEXT_TOKENS"] == MIN_BURST_TEXT_TOKENS)
+]
+print("Default settings produce:", default_row["surviving_bursts"].iloc[0], "bursts")
+print()
+print("Top-10 most permissive combos:")
+print(df_filters.sort_values("surviving_bursts", ascending=False).head(10).to_string(index=False))"""))
+
+    cells.append(md(r"""### 11.2 — Cluster-size sweep
+
+Hold filters at default; sweep `min_cluster_size` and observe how
+many clusters survive. The architect-approved fallback (drop to 3)
+applies only when defaults yield zero — we keep the shipped default
+at 5 regardless."""))
+
+    cells.append(code("""\
+cluster_size_results = []
+for mcs in [3, 5, 8, 10]:
+    clusters = cluster_bursts(filtered_bursts, min_cluster_size=mcs)
+    cohesions = [c.cohesion_score for c in clusters]
+    cluster_size_results.append({
+        "min_cluster_size": mcs,
+        "clusters": len(clusters),
+        "min_cohesion": min(cohesions) if cohesions else None,
+        "median_cohesion": (
+            sorted(cohesions)[len(cohesions)//2] if cohesions else None
+        ),
+        "max_cohesion": max(cohesions) if cohesions else None,
+    })
+df_mcs = pd.DataFrame(cluster_size_results)
+print(df_mcs.to_string(index=False))
+print()
+default_clusters = cluster_bursts(
+    filtered_bursts, min_cluster_size=DEFAULT_BURST_CLUSTER_SIZE,
+)
+print(f"At shipped default (min_cluster_size={DEFAULT_BURST_CLUSTER_SIZE}): "
+      f"{len(default_clusters)} clusters")
+for c in default_clusters:
+    print(f"  size={len(c.members)}, cohesion={c.cohesion_score:.2f}, "
+          f"top_terms={c.top_terms[:5]}")"""))
+
+    cells.append(md(r"""### 11.3 — Tool-frequency-threshold sweep
+
+The presence-based tool filter (#184) keeps a tool on the draft only
+if it appears in ≥ threshold fraction of cluster bursts. Sweep over
+{0.3, 0.5, 0.7} and report the per-cluster draft-tool count vs the
+observed-tool count."""))
+
+    cells.append(code("""\
+# Use the shipped helper rather than reimplementing the presence filter
+# inline — keeps the calibration sweep aligned with the actual filter
+# logic used by build_offload_candidates. If the helper changes
+# (e.g. switches from presence to call-volume), the sweep automatically
+# tracks. Underscore-prefixed access is fine in calibration tooling
+# that's intentionally introspecting algorithm internals.
+from agentfluent.diagnostics.parent_workload import _filter_tools_from_bursts
+
+freq_results = []
+for threshold in [0.3, 0.5, 0.7]:
+    for ci, cluster in enumerate(default_clusters):
+        observed = sorted({
+            tub.name for b in cluster.members for tub in b.tool_use_blocks
+        })
+        kept = _filter_tools_from_bursts(cluster.members, threshold=threshold)
+        freq_results.append({
+            "threshold": threshold,
+            "cluster_idx": ci,
+            "cluster_size": len(cluster.members),
+            "observed_tools": len(observed),
+            "kept_tools": len(kept),
+            "kept": ", ".join(kept[:6]),
+        })
+df_freq = pd.DataFrame(freq_results)
+if not df_freq.empty:
+    print(df_freq.to_string(index=False))"""))
+
+    cells.append(md(r"""### 11.4 — Confidence-tier observations
+
+Reuses delegation's tier boundaries as the starting point
+(high: size ≥ 10 AND cohesion ≥ 0.50; medium: cohesion ≥ 0.35; low
+otherwise). The architect-review hypothesis: parent-thread bursts have
+shorter text and stronger tool-name signal than delegation prompts, so
+real cohesion may sit higher and the boundaries may need tightening
+once we have multi-contributor data. The cell below dumps the actual
+distribution so the v0.6 calibration pass has a baseline to compare
+against."""))
+
+    cells.append(code("""\
+if default_clusters:
+    obs = [
+        {
+            "size": len(c.members),
+            "cohesion": round(c.cohesion_score, 3),
+            "tier": (
+                "high" if len(c.members) >= 10 and c.cohesion_score >= 0.50
+                else "medium" if c.cohesion_score >= 0.35
+                else "low"
+            ),
+        }
+        for c in default_clusters
+    ]
+    df_tiers = pd.DataFrame(obs).sort_values(
+        "cohesion", ascending=False,
+    )
+    print(df_tiers.to_string(index=False))
+    tier_counts = Counter(o["tier"] for o in obs)
+    print()
+    for tier in ("high", "medium", "low"):
+        print(f"  {tier}: {tier_counts[tier]}")
+else:
+    print("No clusters at defaults — fall through to section 11.5 to "
+          "validate at min_cluster_size=3.")"""))
+
+    cells.append(md(r"""### 11.5 — Dogfood verification (PRD criterion #3)
+
+End-to-end pipeline run on the loaded session data using the public
+`build_offload_candidates` orchestrator. This is the same code path
+that powers `agentfluent analyze --diagnostics`. Reports the count,
+top 3 candidates by signed savings, and whether the v0.5 success
+criterion (≥1 cluster with cohesion ≥ 0.35, size ≥ 5) is met."""))
+
+    cells.append(code("""\
+from agentfluent.diagnostics.parent_workload import build_offload_candidates
+
+candidates = build_offload_candidates(all_messages)
+print(f"Candidates surfaced at shipped defaults: {len(candidates)}")
+for cand in sorted(
+    candidates, key=lambda c: c.estimated_savings_usd, reverse=True,
+)[:3]:
+    sign_indicator = "+" if cand.estimated_savings_usd >= 0 else "−"
+    print(
+        f"  {cand.name}: {cand.confidence}, size={cand.cluster_size}, "
+        f"cohesion={cand.cohesion_score:.2f}, "
+        f"savings={sign_indicator}${abs(cand.estimated_savings_usd):.2f} "
+        f"(parent={cand.parent_model} → alt={cand.alternative_model})"
+    )
+
+# PRD criterion #3 check.
+qualifying = [
+    c for c in candidates
+    if c.cohesion_score >= 0.35 and c.cluster_size >= 5
+]
+print()
+print(f"PRD #3 (≥1 cluster with cohesion ≥ 0.35, size ≥ 5): "
+      f"{'PASS' if qualifying else 'FAIL — see fallback below'}")
+if not qualifying:
+    fallback = build_offload_candidates(all_messages, min_cluster_size=3)
+    print(f"At min_cluster_size=3 (validation only — NOT the shipped "
+          f"default): {len(fallback)} candidates")
+    for cand in fallback[:3]:
+        print(f"  {cand.name}: size={cand.cluster_size}, "
+              f"cohesion={cand.cohesion_score:.2f}")"""))
+
+    cells.append(md(r"""### 11.6 — Findings
+
+| Knob | Default | Decision | Notes |
+|---|---|---|---|
+| `MIN_BURST_TOOLS` | 2 | **keep** | Drops 1-tool single-call bursts that aren't delegation candidates. |
+| `MAX_BURST_TOOLS` | 20 | **keep** | Caps degenerate single-message mega-bursts (50-Edit batch refactor turns) that would dominate any cluster they joined. |
+| `MIN_BURST_TEXT_TOKENS` | 30 | **keep, flag for v0.6** | Tighter than delegation's 50 because burst text is shorter (no human prompt). Sweep results in §11.1 above show the impact. |
+| `DEFAULT_BURST_CLUSTER_SIZE` | 5 | **keep** | Algorithmic-rigor floor. Section 11.5 validates at 3 *only* when 5 yields nothing on this single contributor's data. |
+| `_TOOL_FREQUENCY_THRESHOLD` | 0.5 | **keep** | Same default as delegation (#184). Sweep results in §11.3 above show how the kept-tools list changes — typical clusters lose ~1–3 incidental tools at 0.5. |
+| Confidence tiers (high: size ≥ 10 ∧ cohesion ≥ 0.50; medium: cohesion ≥ 0.35) | reuse delegation | **keep, flag for v0.6** | Architect review hypothesised parent-thread bursts may need different boundaries. Section 11.4 dumps the observed distribution; v0.6 calibration pass should revisit once we have multi-contributor data. |
+
+**Single-dataset caveat applies.** Re-run this notebook against
+broader session corpora when available."""))
 
     nb.cells = cells
     nb.metadata["kernelspec"] = {
