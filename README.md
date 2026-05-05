@@ -130,6 +130,8 @@ agentfluent analyze --project codefluent --no-diagnostics      # Token + cost on
 agentfluent analyze --project codefluent --agent pm            # Filter to one subagent
 agentfluent analyze --project codefluent --latest 5            # Last 5 sessions only
 agentfluent analyze --project codefluent -v                    # + YAML subagent drafts
+agentfluent analyze --project codefluent --min-severity warning  # Hide info-level recs
+agentfluent analyze --project codefluent --top-n 10            # Top-10 priority fixes summary block
 agentfluent analyze --project codefluent --format json | jq '.data.token_metrics.total_cost'
 
 # Save the top-confidence cluster as a real subagent definition:
@@ -138,11 +140,13 @@ agentfluent analyze --project codefluent --format json \
   > ~/.claude/agents/new-agent.md
 ```
 
-Produces a token-usage table, per-model cost breakdown (labeled as API rate — subscription plans differ), tool usage concentration, and an Agent Invocations table summarizing each subagent's token, duration, and tool-use count. Behavior diagnostics run by default and surface the full v0.3 signal surface (pass `--no-diagnostics` to skip):
+Produces a token-usage table, per-model cost breakdown (labeled as API rate — subscription plans differ), tool usage concentration, and an Agent Invocations table summarizing each subagent's token, duration, and tool-use count. The Cost by Model table breaks out parent vs subagent rows (a model used in both shows two rows with `Origin` distinguishing them), and the top-line `Total cost` / `Total tokens` are comprehensive — parent thread + linked subagent runs combined. Behavior diagnostics run by default and surface signals across three layers (pass `--no-diagnostics` to skip):
 
 - **Metadata-level** (from invocation summaries): tool-error keywords, token-per-tool-use outliers, duration outliers.
 - **Trace-level** (from `~/.claude/projects/<session>/subagents/`): retry loops, stuck patterns, permission failures, consecutive tool-error sequences — each with per-tool-call evidence.
 - **Aggregate**: model mismatch (complexity class wrong for declared/observed model), delegation clustering (recurring `general-purpose` patterns → proposed specialized subagents), MCP server audit (configured-but-unused, observed-but-missing).
+
+Above the Recommendations table, a **Top-N priority fixes summary** ranks findings by a composite `priority_score` that combines severity, occurrence count, cost impact (for `target='model'` mismatches), and trace-evidence boost — so the highest-leverage changes surface first instead of asking the reader to scan a flat severity-sorted list. The sort key is part of the JSON envelope (`aggregated_recommendations[].priority_score`), so a CI gate can fail the run on priority regression. An **Offload Candidates** section calls out clusters of repeating tool-use patterns in the parent thread and proposes subagent / skill drafts that move that work onto cheaper-tier models — the dominant cost lever for users running agents at scale.
 
 Near-duplicate recommendations are aggregated per `(agent, target, signal)` shape into one row with an occurrence `Count` and metric range (e.g. *"4 invocations (4.9x–8.0x above 5,064 mean). Consider adding more specific instructions..."*). Each recommendation carries a specific config surface to change (prompt, tools, model, mcp) and a pointer to the file to edit. Recommendations for built-in agents (Explore, general-purpose, Plan, etc.) use concern-specific action text — wrapper subagent for scope issues, retry bounds on the delegating agent for recovery issues, reroute for tools/model — since built-in agents have no user-editable prompt or tool config.
 
@@ -191,6 +195,9 @@ AgentFluent's "configuration" is CLI flags — no config file, no environment va
 | `--diagnostics / --no-diagnostics` | on | `analyze`: behavior-correlation signals (default on; `--no-diagnostics` skips the pipeline) |
 | `--min-cluster-size` | 5 | Delegation clustering: minimum invocations per cluster (requires `agentfluent[clustering]`) |
 | `--min-similarity` | 0.7 | Delegation dedup: cosine-similarity threshold against existing agents |
+| `--top-n N` | 5 | `analyze`: number of priority-ranked recommendations to summarize above the Recommendations table. Pass 0 to disable the summary block. |
+| `--min-severity` | (none) | `analyze`: drop recommendations below `info` / `warning` / `critical`. Filters both the default table and the `--verbose` per-invocation surface; signals are not affected. |
+| `--fail-on` | (none) | `diff`: gate exit code 3 on new recommendations at or above `info` / `warning` / `critical`, or `off` to disable. |
 | `--claude-config-dir` | `~/.claude/` | Override the Claude config root (also honors `$CLAUDE_CONFIG_DIR`) |
 | `--format` | `table` | Output format: `table` (Rich) or `json` (envelope). Shortcut: `--json` (equivalent to `--format json`) |
 | `--verbose` | off | Extra detail: per-session breakdown, per-invocation detail, raw (un-aggregated) recommendations, and YAML subagent drafts for suggested clusters |
@@ -204,16 +211,31 @@ AgentFluent's "configuration" is CLI flags — no config file, no environment va
 
 ```json
 {
-  "version": 1,
+  "version": "2",
   "command": "analyze",
   "data": {
-    "token_metrics": { "total_cost": 15.42, "total_tokens": 82940115, ... },
-    "by_model": { "claude-opus-4-7": {...}, "claude-sonnet-4-6": {...} },
+    "token_metrics": {
+      "total_cost": 41.11,
+      "total_tokens": 54019983,
+      "by_model": [
+        {"model": "claude-opus-4-7", "origin": "parent",   "cost": 30.68, "input_tokens": 6829, ...},
+        {"model": "claude-opus-4-7", "origin": "subagent", "cost":  1.50, "input_tokens": 1213, ...},
+        {"model": "claude-opus-4-6", "origin": "subagent", "cost":  8.93, "input_tokens": 7825, ...}
+      ]
+    },
     "tool_usage": [...],
-    "agent_invocations": [...]
+    "agent_invocations": [...],
+    "diagnostics": {
+      "aggregated_recommendations": [...],
+      "offload_candidates": [...],
+      "delegation_suggestions": [...],
+      "delegation_suggestions_skipped_reason": null
+    }
   }
 }
 ```
+
+**Schema v2 (v0.5):** `token_metrics.by_model` changed from a dict keyed by model name to a list of rows where each row carries an `origin` field (`"parent"` or `"subagent"`). Two rows can share a model with different origins (Opus used in both parent and subagent runs). Top-level `total_cost` and `total_tokens` are now comprehensive — they include subagent contributions. `agentfluent diff` reads both v1 and v2 envelopes (legacy v1 rows normalize as `origin="parent"`), so saved baselines remain diffable across the upgrade.
 
 No ANSI escapes in JSON output, guaranteed. The key `total_cost` is the pay-per-token equivalent; subscribers on Pro/Max/Team/Enterprise plans see a flat monthly charge regardless.
 
@@ -272,9 +294,13 @@ Everything runs locally. No outbound network calls, ever. No API key needed.
 
 - **Project and Session Discovery** — Enumerates `~/.claude/projects/`, groups sessions by project, shows per-project session count, total size, and last-modified timestamp. Handles Claude Code subagent sidechain files and Agent SDK sessions uniformly.
 - **Execution Analytics** — Token usage, API-rate cost, cache efficiency, per-model breakdown, tool-call concentration, and per-agent invocation metrics (tokens, duration, tool-use count). Cache creation and cache read tokens are tracked separately so you can see where your prompt caching is working.
+- **Comprehensive Cost Attribution** — Top-line `total_cost` and `total_tokens` reflect parent + subagent runs combined. The per-model breakdown decomposes by `(model, origin)` so a user who sees "100% Opus" can tell whether their Haiku-routed Explore subagent contributed cost, and whether Opus spend lives in the parent thread or a delegated agent. JSON envelope is at schema v2.
 - **Agent Config Assessment** — 4-dimension rubric (description, tools, model, prompt) applied to every `.md` file in `~/.claude/agents/` and `./.claude/agents/`. Produces a 0–100 score plus ranked, specific recommendations ("Prompt body doesn't mention error handling"). Catches agents that are technically valid but miss well-known best practices.
 - **Subagent Trace Parsing** — Parses the internal tool-call sequences Claude Code emits under `~/.claude/projects/<session>/subagents/agent-<agentId>.jsonl`, links them back to the delegating invocation, and detects retry sequences. Gives diagnostics per-call evidence (which tool, which attempt, which error) instead of just an invocation-level summary.
-- **Behavior Diagnostics** — `--diagnostics` emits signals across three layers. *Metadata*: tool-error keywords, token-per-tool-use outliers, duration outliers. *Trace-level*: retry loops, stuck patterns (same call repeated with no progress), permission failures, consecutive tool-error sequences. *Aggregate*: model mismatch (declared/observed model wrong for the workload's complexity), MCP server audit (configured-but-unused, observed-but-missing). Near-duplicate recommendations collapse into one row per `(agent, target, signal)` shape with an occurrence `Count` and metric range, sorted severity-desc then count-desc so the highest-impact findings surface first. Recommendations for built-in agents (Explore, general-purpose, Plan, code-reviewer, etc.) use concern-specific action text since built-ins have no user-editable config. Each signal routes to a `target` config surface — prompt, tools, model, or mcp — and the recommendation names the file to edit and the specific change to make.
+- **Behavior Diagnostics** — `--diagnostics` emits signals across three layers. *Metadata*: tool-error keywords, token-per-tool-use outliers, duration outliers. *Trace-level*: retry loops, stuck patterns (same call repeated with no progress), permission failures, consecutive tool-error sequences. *Aggregate*: model mismatch (declared/observed model wrong for the workload's complexity), MCP server audit (configured-but-unused, observed-but-missing). Near-duplicate recommendations collapse into one row per `(agent, target, signal)` shape with an occurrence `Count` and metric range. Recommendations for built-in agents (Explore, general-purpose, Plan, code-reviewer, etc.) use concern-specific action text since built-ins have no user-editable config. Each signal routes to a `target` config surface — prompt, tools, model, or mcp — and the recommendation names the file to edit and the specific change to make.
+- **Priority Ranking** — A composite `priority_score` ranks recommendations by severity, occurrence count, cost impact (model-mismatch findings carry the dollar savings), and trace-evidence boost. The default Recommendations table is sorted by priority desc, and a Top-N priority-fixes summary surfaces above the table so the highest-leverage changes are the first thing the reader sees. `--top-n N` controls the summary depth; `--min-severity {info|warning|critical}` filters the recommendation surface without touching the underlying signals.
+- **Offload Candidates** — Detects clusters of repeating tool-use patterns in the parent Claude Code thread, estimates the cost saved by routing them through a cheaper subagent or skill, and proposes a draft definition for each cluster. The dominant cost lever for users running agents at scale: a Sonnet thread that does 80 GitHub PR reviews per week is cheaper as a Haiku-routed `pr-review` subagent. Calibrated against real-world burst distributions (`scripts/calibration/`).
+- **Comparison Workflow** — `agentfluent diff baseline.json current.json` compares two `analyze --json` envelopes, classifying each recommendation as `new` / `resolved` / `persisting`, computing token / cost / cache deltas, and emitting per-agent invocation deltas. `--fail-on {info|warning|critical}` gates exit code 3 on new findings at or above the chosen severity, so `agentfluent diff` slots into a PR check the same way a test runner does. Baselines are user-managed files — no internal cache — so re-running against an older snapshot at any time is just one command. Reads both v1 (legacy) and v2 (current) JSON envelopes via a compatibility shim.
 - **Delegation Clustering** — TF-IDF + KMeans on recurring `general-purpose` invocations surfaces patterns that would benefit from their own specialized subagent. Proposes a complete draft: name, description, recommended model (with cost reasoning), tool list derived from the cluster's trace data, and a prompt-body scaffold. Under `--verbose`, each cluster emits a copy-paste-ready **YAML subagent definition block** (frontmatter + prompt body) that can be saved directly as `~/.claude/agents/<name>.md`. Low-confidence clusters are kept but prefixed with a `REVIEW BEFORE USE` comment so loose groupings don't land in production blindly. Confidence tiers (high/medium/low) are calibrated against real-world cohesion distributions from multi-contributor datasets. Suppresses drafts that overlap existing agents and annotates the overlap. Requires the optional `agentfluent[clustering]` extra.
 - **Model-Routing Diagnostics** — Per-agent-type classification of observed complexity (tool-call counts, token footprint, error rate, write-tool presence) compared against the agent's declared model tier. Flags overspec (complex model on simple workload — cost savings estimate included) and underspec (simple model struggling). Consumes trace-based model inference when frontmatter is absent.
 - **MCP Server Assessment** — Reads configured MCP servers from `~/.claude.json` (user + project-local) and `.mcp.json` (project-shared), honoring per-user enable/disable gating. Compares against observed `mcp__<server>__*` tool usage from both parent sessions and subagent traces. Emits `MCP_UNUSED_SERVER` (INFO, configured but zero calls) and `MCP_MISSING_SERVER` (WARNING, failing calls to an unconfigured server) signals with actionable recommendations.
@@ -394,20 +420,54 @@ Five GitHub Actions workflows run automatically:
 - `--claude-config-dir` flag and `$CLAUDE_CONFIG_DIR` env var for non-default session paths ([#90](https://github.com/frederick-douglas-pearce/agentfluent/issues/90)).
 - Empirical threshold calibration via a committed Jupyter notebook ([#140](https://github.com/frederick-douglas-pearce/agentfluent/issues/140)).
 
-**v0.4+:**
-- Parent-thread offload analysis ([#189](https://github.com/frederick-douglas-pearce/agentfluent/issues/189)) — detect repeating tool-use patterns in the parent Claude Code thread and recommend subagent / skill candidates that move that work onto cheaper-tier models. The dominant cost lever for users who deploy agents at scale.
-- In-product glossary ([#190](https://github.com/frederick-douglas-pearce/agentfluent/issues/190), [#191](https://github.com/frederick-douglas-pearce/agentfluent/issues/191)) — definitions for token types, tool names, agent types, signal types, severity / confidence levels surfaced via static markdown (Phase 1) and `agentfluent explain <term>` CLI subcommand (Phase 2).
-- Outlier-detection distribution recalibration ([#186](https://github.com/frederick-douglas-pearce/agentfluent/issues/186)) — replace ratio-to-mean outlier signals with distribution-aware detection (z-score / IQR) backed by per-agent distribution analysis.
+**v0.4 (shipped):**
+- In-product glossary — Phase 1 markdown reference + Phase 2 `agentfluent explain <term>` CLI subcommand ([#190](https://github.com/frederick-douglas-pearce/agentfluent/issues/190), [#191](https://github.com/frederick-douglas-pearce/agentfluent/issues/191)). Defines every term that appears in CLI output.
+- Wait-time exclusion from duration metrics ([#230](https://github.com/frederick-douglas-pearce/agentfluent/issues/230)) — subtract idle gaps so duration-based outlier detection doesn't false-positive on user-input wait time.
+- IQR-based outlier detection ([#186](https://github.com/frederick-douglas-pearce/agentfluent/issues/186), [#187](https://github.com/frederick-douglas-pearce/agentfluent/issues/187)) — replace naive mean-ratio with distribution-aware Q3+1.5·IQR, with `--verbose` distribution context.
+- Bounded `is_error` regex fallback ([#238](https://github.com/frederick-douglas-pearce/agentfluent/issues/238)) — leading-window match on subagent trace results to suppress mid-text false positives.
+- `PERMISSION_FAILURE` false-positive filter ([#231](https://github.com/frederick-douglas-pearce/agentfluent/issues/231)) — drops signals from hook-induced denials that don't reflect agent misbehavior.
+- `--diagnostics` defaults on, `--json` shortcut, parse warnings to stderr ([#202](https://github.com/frederick-douglas-pearce/agentfluent/issues/202), [#196](https://github.com/frederick-douglas-pearce/agentfluent/issues/196), [#206](https://github.com/frederick-douglas-pearce/agentfluent/issues/206)).
+- Cost surfacing on `by_agent_type` ([#200](https://github.com/frederick-douglas-pearce/agentfluent/issues/200)) — `total_cost_usd` + `avg_cost_per_invocation_usd` per agent.
+
+**v0.5 (shipped — "Trustworthy Diagnostics"):**
+
+The release theme: make diagnostic signals reliable enough that a user who doesn't know the internals can act on them without second-guessing.
+
+- `agentfluent diff` ([#199](https://github.com/frederick-douglas-pearce/agentfluent/issues/199)) — comparison workflow with `--fail-on` for CI gates. The feature that makes AgentFluent habit-forming: re-run, diff, and a regression-check exit code lands the same way a test runner does.
+- Priority ranking + Top-N priority fixes summary ([#172](https://github.com/frederick-douglas-pearce/agentfluent/issues/172)) — composite `priority_score` across severity, count, cost impact, and trace evidence; sorts the Recommendations table and powers the priority-fixes summary block.
+- Parent-thread offload candidates ([#189](https://github.com/frederick-douglas-pearce/agentfluent/issues/189), [#256](https://github.com/frederick-douglas-pearce/agentfluent/issues/256)–[#260](https://github.com/frederick-douglas-pearce/agentfluent/issues/260)) — detect repeating parent-thread tool-bursts and propose subagent / skill drafts that move work onto cheaper-tier models. Dominant cost lever for users running agents at scale, calibrated against real burst distributions.
+- `--min-severity` filter ([#205](https://github.com/frederick-douglas-pearce/agentfluent/issues/205)) — drop recommendations below `info` / `warning` / `critical` without affecting signals.
+- `delegation_suggestions_skipped_reason` JSON field ([#215](https://github.com/frederick-douglas-pearce/agentfluent/issues/215)) — names *why* `delegation_suggestions` is empty (`sklearn_not_installed` / `insufficient_invocations` / `no_clusters_above_min_size`) so JSON consumers can distinguish "feature unavailable" from "ran but found nothing".
+- Cost by Model includes subagent tokens, JSON schema v2 ([#227](https://github.com/frederick-douglas-pearce/agentfluent/issues/227)) — `by_model` becomes a list with an `origin` field per row, top-line `total_cost` is now comprehensive (parent + subagent), `agentfluent diff` reads both v1 and v2 envelopes via a compat shim.
+- MCP `is_error` leading-window FP fix ([#241](https://github.com/frederick-douglas-pearce/agentfluent/issues/241)) — ports the #238 bound to MCP tool results, eliminating ~86% / ~63% false-positive rates measured against real GitHub-MCP-heavy projects.
+- Outlier-detection recalibration + extractor consolidation ([#186](https://github.com/frederick-douglas-pearce/agentfluent/issues/186), [#235](https://github.com/frederick-douglas-pearce/agentfluent/issues/235)).
+- Delegation-draft tools list frequency filter ([#184](https://github.com/frederick-douglas-pearce/agentfluent/issues/184)) — least-privilege tool inclusion so generated drafts don't request the union of every member's tools.
+- Unified complexity classifier across model_routing and delegation ([#185](https://github.com/frederick-douglas-pearce/agentfluent/issues/185)).
+
+**v0.6 (planned — "Quality Axis: Tier 1"):**
+
+The next theme adds a third diagnostics axis alongside cost and speed: **quality**. Review-style subagents (architect, tester, security-review, code-reviewer) are systematically under-recommended today because their primary value is *independent context and quality improvement*, not token offload or wallclock savings — the existing recommendation engine can't see that benefit. v0.6 closes the gap. See PRD: [`.claude/specs/prd-quality-axis.md`](.claude/specs/prd-quality-axis.md). Tier-1 epic + stories at [#268](https://github.com/frederick-douglas-pearce/agentfluent/issues/268), with decisions D015–D022 in [`.claude/specs/decisions.md`](.claude/specs/decisions.md).
+
+- Tier-1 quality signals (no new data sources):
+  - User mid-flight corrections ([#269](https://github.com/frederick-douglas-pearce/agentfluent/issues/269)) — frequency of "no, do X instead" / "wait" / "actually" patterns as a parent-quality miss-rate proxy.
+  - File rework density ([#270](https://github.com/frederick-douglas-pearce/agentfluent/issues/270)) — same file edited N+ times within a session as a missing-pre-implementation-review signal.
+  - "Reviewer caught" rate ([#271](https://github.com/frederick-douglas-pearce/agentfluent/issues/271)) — when architect / security-review / tester subagents *do* run, measure substantive findings and whether the parent acted on them.
+- Multi-axis priority scoring ([#272](https://github.com/frederick-douglas-pearce/agentfluent/issues/272)) — annotations approach per D017 + D021: extend the existing `priority_score` formula with a `quality_evidence_factor * W_QUALITY` term, expose per-axis `axis_scores: {cost, speed, quality}` and `primary_axis` as post-hoc annotations. Schema-additive, preserves `diff` comparison semantics.
+- Single-axis signal classification ([D022](.claude/specs/decisions.md)) — every `SignalType` maps to exactly one axis (no cross-cutting), with the mapping pinned as a module-level `SIGNAL_AXIS_MAP` constant.
+- CLI/JSON axis attribution ([#273](https://github.com/frederick-douglas-pearce/agentfluent/issues/273)) — recommendations name *which axis* triggered them (`[quality] 7 user corrections in 3 sessions — consider an architect agent for design review`).
+- Calibration sweep ([#274](https://github.com/frederick-douglas-pearce/agentfluent/issues/274)) — modeled on #260's pattern; tunes thresholds against real data before shipping. The calibration story gates between "implemented" and "shipped" for the v0.6 release.
+- Tier-2 stretch ([#275](https://github.com/frederick-douglas-pearce/agentfluent/issues/275)) — local-git correlation (feat→fix proximity, revert rate, file re-touch decay). Pulled in if Tier 1 lands cleanly; otherwise deferred to v0.7.
+
+**Future:**
+- Quality-axis Tier 3 — opt-in GitHub enrichment: PR review comment density and topic clustering on Claude-authored PRs, CI-failure-on-first-push rate, post-merge issue references.
 - Time-series pricing data structure ([#80](https://github.com/frederick-douglas-pearce/agentfluent/issues/80)) + session-timestamp-aware cost calculation ([#81](https://github.com/frederick-douglas-pearce/agentfluent/issues/81)) + automated pricing updates ([#82](https://github.com/frederick-douglas-pearce/agentfluent/issues/82)).
 - Agent SDK main-session MCP + tool extraction ([#112](https://github.com/frederick-douglas-pearce/agentfluent/issues/112)).
 - Per-invocation token input/output split for more accurate cost estimates ([#143](https://github.com/frederick-douglas-pearce/agentfluent/issues/143)).
 - Hosted documentation site ([#97](https://github.com/frederick-douglas-pearce/agentfluent/issues/97)).
 - Hook coverage in the config rubric.
-
-**Future:**
-- Webapp dashboard for trend visualization
-- Closed-loop self-improvement — use AgentFluent's diagnostic output as a feedback signal the agent itself consumes to propose config edits against its own past sessions
-- Agent ROI reporting — roll up cost, usage, and task-completion signals over time so a business can evaluate whether an optimized agent is worth continuing to run
+- Webapp dashboard for trend visualization.
+- Closed-loop self-improvement — use AgentFluent's diagnostic output as a feedback signal the agent itself consumes to propose config edits against its own past sessions.
+- Agent ROI reporting — roll up cost, usage, and task-completion signals over time so a business can evaluate whether an optimized agent is worth continuing to run.
 
 Browse [open issues](https://github.com/frederick-douglas-pearce/agentfluent/issues) for the full backlog.
 
