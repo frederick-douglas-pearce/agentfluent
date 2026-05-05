@@ -16,6 +16,9 @@ permissions:
 
 jobs:
   create-docs-issue:
+    # Coarse pre-filter so non-release milestones don't spin up a runner.
+    # The in-script regex below is the authoritative gate.
+    if: startsWith(github.event.milestone.title, 'v')
     runs-on: ubuntu-latest
     steps:
       - name: Create docs catch-up issue
@@ -26,8 +29,6 @@ jobs:
             const milestoneNumber = context.payload.milestone.number;
             const { owner, repo } = context.repo;
 
-            // Only fire for release-style milestone titles (vMAJOR.MINOR.PATCH).
-            // Skips ad-hoc / non-release milestones.
             if (!/^v\d+\.\d+\.\d+$/.test(milestoneTitle)) {
               core.info(`Milestone "${milestoneTitle}" is not a release-style title; skipping.`);
               return;
@@ -35,12 +36,17 @@ jobs:
 
             const issueTitle = `docs: catch up README + GLOSSARY + CHANGELOG for ${milestoneTitle}`;
 
-            // Idempotency: skip if an issue with this exact title already exists.
-            // Guards against the workflow firing twice (e.g. milestone deleted and recreated).
-            const existing = await github.rest.search.issuesAndPullRequests({
-              q: `repo:${owner}/${repo} type:issue in:title "${issueTitle}"`,
+            // Guards against the workflow re-firing for the same milestone (e.g. event replay).
+            // Scoping by milestone number avoids the tokenization quirks of GitHub's search API
+            // (which splits on `+` and `:`, both present in the issue title).
+            const attached = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              milestone: milestoneNumber,
+              state: 'all',
+              per_page: 100,
             });
-            if (existing.data.items.some(i => i.title === issueTitle)) {
+            if (attached.some(i => i.title === issueTitle)) {
               core.info(`Issue already exists for ${milestoneTitle}; skipping.`);
               return;
             }
