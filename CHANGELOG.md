@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.5.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.4.0...v0.5.0) (2026-05-05)
+
+
+### Features
+
+* **agents:** add tester agent for fixing existing pytest failures ([#228](https://github.com/frederick-douglas-pearce/agentfluent/issues/228)) ([09c62d7](https://github.com/frederick-douglas-pearce/agentfluent/commit/09c62d7e618d0229177805fbc3c74c7c60ccb89d))
+* **analytics:** Cost by Model includes subagent tokens ([#227](https://github.com/frederick-douglas-pearce/agentfluent/issues/227)) ([#279](https://github.com/frederick-douglas-pearce/agentfluent/issues/279)) ([08707b4](https://github.com/frederick-douglas-pearce/agentfluent/commit/08707b4dbdc36b359daad8f2ae1d35327e30f32b))
+* **cli:** --min-severity filter on analyze recommendations ([#205](https://github.com/frederick-douglas-pearce/agentfluent/issues/205)) ([#277](https://github.com/frederick-douglas-pearce/agentfluent/issues/277)) ([56554bf](https://github.com/frederick-douglas-pearce/agentfluent/commit/56554bff9b4ec4f9d0c526346e16f852e66b211d))
+* **cli:** agentfluent diff -- compare two analyze runs ([#199](https://github.com/frederick-douglas-pearce/agentfluent/issues/199)) ([#267](https://github.com/frederick-douglas-pearce/agentfluent/issues/267)) ([bf1e97e](https://github.com/frederick-douglas-pearce/agentfluent/commit/bf1e97e63b17098bea1169543f7d8c066d410ce3))
+* **cli:** distribution context on outlier signals under --verbose ([#187](https://github.com/frederick-douglas-pearce/agentfluent/issues/187)) ([#237](https://github.com/frederick-douglas-pearce/agentfluent/issues/237)) ([88fd9e9](https://github.com/frederick-douglas-pearce/agentfluent/commit/88fd9e9f48bd6fe8b1ee48a04f11c81ffd796fc4))
+* **diagnostics:** 'Offload Candidates' CLI section + calibration sweep ([#260](https://github.com/frederick-douglas-pearce/agentfluent/issues/260)) ([#261](https://github.com/frederick-douglas-pearce/agentfluent/issues/261)) ([bfb198f](https://github.com/frederick-douglas-pearce/agentfluent/commit/bfb198fb10fce85e8d998541a6fff70c89a419ee))
+* **diagnostics:** cluster parent-thread bursts and synthesize OffloadCandidate drafts ([#256](https://github.com/frederick-douglas-pearce/agentfluent/issues/256)) ([#257](https://github.com/frederick-douglas-pearce/agentfluent/issues/257)) ([9fd9aa9](https://github.com/frederick-douglas-pearce/agentfluent/commit/9fd9aa9f4d5a14f72a27861e2f9ccd130368eaec))
+* **diagnostics:** cost estimation for parent-thread tool-bursts ([#249](https://github.com/frederick-douglas-pearce/agentfluent/issues/249)) ([#250](https://github.com/frederick-douglas-pearce/agentfluent/issues/250)) ([f52de56](https://github.com/frederick-douglas-pearce/agentfluent/commit/f52de5666ec1dc3dd95358da71a7310077fa40b2))
+* **diagnostics:** explain empty delegation_suggestions in JSON ([#215](https://github.com/frederick-douglas-pearce/agentfluent/issues/215)) ([#276](https://github.com/frederick-douglas-pearce/agentfluent/issues/276)) ([4013a48](https://github.com/frederick-douglas-pearce/agentfluent/commit/4013a4804d8a63e338358cc13130a725a3ab90cd))
+* **diagnostics:** frequency-filter delegation draft tools list ([#184](https://github.com/frederick-douglas-pearce/agentfluent/issues/184)) ([#253](https://github.com/frederick-douglas-pearce/agentfluent/issues/253)) ([b01cbbd](https://github.com/frederick-douglas-pearce/agentfluent/commit/b01cbbd9069cb3415bc1cd1a7b2b6090f36c3de0))
+* **diagnostics:** parent-thread tool-burst extractor ([#247](https://github.com/frederick-douglas-pearce/agentfluent/issues/247)) ([#248](https://github.com/frederick-douglas-pearce/agentfluent/issues/248)) ([718595c](https://github.com/frederick-douglas-pearce/agentfluent/commit/718595caab3e32d759323cc67af1cd07db47c795))
+* **diagnostics:** priority ranking + Top-N priority fixes summary ([#172](https://github.com/frederick-douglas-pearce/agentfluent/issues/172)) ([#266](https://github.com/frederick-douglas-pearce/agentfluent/issues/266)) ([4170d12](https://github.com/frederick-douglas-pearce/agentfluent/commit/4170d12d44c7bb50cebd8e7eee78b7e3c61961a9))
+* **diagnostics:** subtract idle gaps from duration for outlier detection ([#230](https://github.com/frederick-douglas-pearce/agentfluent/issues/230)) ([#234](https://github.com/frederick-douglas-pearce/agentfluent/issues/234)) ([d4ba779](https://github.com/frederick-douglas-pearce/agentfluent/commit/d4ba7799f6e74e67f38a1d6f84a2be078bb9e4f6))
+* **diagnostics:** wire offload candidates into pipeline + dedup ([#258](https://github.com/frederick-douglas-pearce/agentfluent/issues/258)) ([#259](https://github.com/frederick-douglas-pearce/agentfluent/issues/259)) ([c1c7b58](https://github.com/frederick-douglas-pearce/agentfluent/commit/c1c7b58ef0769680e5697304ea08263cea1626a9))
+* **signals:** IQR-based outlier detection ([#186](https://github.com/frederick-douglas-pearce/agentfluent/issues/186)) + extractor consolidation ([#235](https://github.com/frederick-douglas-pearce/agentfluent/issues/235)) ([#236](https://github.com/frederick-douglas-pearce/agentfluent/issues/236)) ([c5fdc80](https://github.com/frederick-douglas-pearce/agentfluent/commit/c5fdc8045fe7681d7cb156082e690d01596d149f))
+
+
+### Bug Fixes
+
+* **diagnostics:** bound is_error regex fallback to leading 200 chars ([#238](https://github.com/frederick-douglas-pearce/agentfluent/issues/238)) ([#240](https://github.com/frederick-douglas-pearce/agentfluent/issues/240)) ([a9dee60](https://github.com/frederick-douglas-pearce/agentfluent/commit/a9dee60032e61d4519b379cf932ad7c96d8b38f5))
+* **diagnostics:** bound MCP is_error regex fallback to leading window ([#241](https://github.com/frederick-douglas-pearce/agentfluent/issues/241)) ([#278](https://github.com/frederick-douglas-pearce/agentfluent/issues/278)) ([1927b28](https://github.com/frederick-douglas-pearce/agentfluent/commit/1927b28d335d70f6e231cf1cc01b73ac439964e8))
+* **diagnostics:** filter PERMISSION_FAILURE false positives ([#231](https://github.com/frederick-douglas-pearce/agentfluent/issues/231)) ([#239](https://github.com/frederick-douglas-pearce/agentfluent/issues/239)) ([5afe6cf](https://github.com/frederick-douglas-pearce/agentfluent/commit/5afe6cfab79700555d8fbe2f195c24a6f5c77631))
+
 ## [0.4.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.3.0...v0.4.0) (2026-04-30)
 
 
