@@ -37,6 +37,29 @@ ERROR_REGEX = re.compile(
     re.IGNORECASE,
 )
 
+# Real error messages lead with the indicator ("Error: ...", "Permission
+# denied", "Failed to ..."). Bounding the regex prevents successful
+# results that mention error keywords mid-text — GitHub issue bodies,
+# Playwright snapshots, file Reads — from synthesizing is_error=True.
+# Shared between traces.parser._detect_is_error and
+# mcp_assessment.extract_mcp_calls_from_messages (#241).
+ERROR_DETECTION_WINDOW_CHARS = 200
+
+
+def detect_is_error_from_text(text: str | None) -> bool:
+    """Synthesize ``is_error`` from result text by matching the leading window.
+
+    Used as a fallback when the upstream tool result has no explicit
+    ``is_error`` boolean. The leading-window bound is the FP defense:
+    it keeps long, successful results (issue bodies, web fetches, file
+    contents) from being flagged just because an error keyword appears
+    deep in the body. ``None`` and empty strings always return False.
+    """
+    if not text:
+        return False
+    return bool(ERROR_REGEX.search(text[:ERROR_DETECTION_WINDOW_CHARS]))
+
+
 # Map matched text back to severity
 _KEYWORD_SEVERITY: dict[str, Severity] = {kw.lower(): sev for kw, sev in ERROR_PATTERNS}
 

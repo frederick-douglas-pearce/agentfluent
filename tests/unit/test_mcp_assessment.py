@@ -23,6 +23,7 @@ from agentfluent.diagnostics.mcp_assessment import (
     parse_mcp_tool_name,
 )
 from agentfluent.diagnostics.models import SignalType
+from agentfluent.diagnostics.signals import ERROR_DETECTION_WINDOW_CHARS
 from agentfluent.traces.models import SubagentToolCall, SubagentTrace
 from tests._builders import (
     assistant_message,
@@ -176,6 +177,36 @@ class TestExtractMcpCallsFromMessages:
         ]
         calls = extract_mcp_calls_from_messages(messages)
         assert calls[0].is_error is True  # "unable to" matches ERROR_REGEX
+
+    def test_keyword_outside_leading_window_stays_false(self) -> None:
+        # #241 fix: GitHub MCP responses, Playwright snapshots, etc.
+        # embed error keywords in successful bodies. Bound regex search
+        # to the leading window so mid-text keywords no longer flip
+        # is_error=True.
+        leading_padding = "ok " * (ERROR_DETECTION_WINDOW_CHARS // 3 + 20)
+        result_text = (
+            leading_padding + "definitions of error and failed live here"
+        )
+        messages = [
+            _assistant_with_mcp("tu-window", "mcp__github__get_issue"),
+            _user_with_result("tu-window", text=result_text, is_error=None),
+        ]
+        calls = extract_mcp_calls_from_messages(messages)
+        assert calls[0].is_error is False
+
+    def test_short_error_with_leading_keyword_fires(self) -> None:
+        # Real error messages lead with the indicator — must still fire
+        # under the bounded fallback.
+        messages = [
+            _assistant_with_mcp("tu-lead", "mcp__github__create_issue"),
+            _user_with_result(
+                "tu-lead",
+                text="Error: 422 Unprocessable Entity from GitHub",
+                is_error=None,
+            ),
+        ]
+        calls = extract_mcp_calls_from_messages(messages)
+        assert calls[0].is_error is True
 
     def test_explicit_is_error_false_wins_over_error_keyword(self) -> None:
         # Documents the ERROR_REGEX fallback's limited scope: explicit

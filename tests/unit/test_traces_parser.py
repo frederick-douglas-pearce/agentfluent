@@ -9,16 +9,14 @@ from typing import Any
 
 import pytest
 
+from agentfluent.diagnostics.signals import ERROR_DETECTION_WINDOW_CHARS
 from agentfluent.traces.models import (
     INPUT_SUMMARY_MAX_CHARS,
     RESULT_SUMMARY_MAX_CHARS,
     UNKNOWN_AGENT_TYPE,
     SubagentTrace,
 )
-from agentfluent.traces.parser import (
-    ERROR_DETECTION_WINDOW_CHARS,
-    parse_subagent_trace,
-)
+from agentfluent.traces.parser import parse_subagent_trace
 from tests._builders import (
     assistant_message as _assistant,
 )
