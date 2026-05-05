@@ -56,15 +56,19 @@ If you write your own prompts each session, use CodeFluent. If your prompts live
 
 **Execution Analytics** — `agentfluent analyze --project <name>`
 
-![Execution Analytics: token usage, per-model cost, tool frequency, and Agent Invocations tables](images/demo-analyze.svg)
+![Execution Analytics: token usage, Cost by Model with parent vs subagent Origin column, tool frequency, and Agent Invocations tables](images/demo-analyze.svg)
 
 **Behavior Diagnostics** — `agentfluent analyze --project <name>` (diagnostics on by default)
 
-![Behavior Diagnostics: aggregated Recommendations table with Count column and built-in-aware action text](images/demo-diagnostics.svg)
+![Behavior Diagnostics: Diagnostic Signals + Top-N priority fixes summary above the aggregated Recommendations table + Offload Candidates section ranking parent-thread tool-burst clusters by estimated savings](images/demo-diagnostics.svg)
 
 **Suggested Subagents with copy-paste-ready YAML draft** — `agentfluent analyze --project <name> --verbose`
 
 ![Suggested Subagents: medium-confidence cluster + YAML subagent definition ready to save as ~/.claude/agents/<name>.md](images/demo-subagents.svg)
+
+**Comparison Workflow** — `agentfluent diff baseline.json current.json`
+
+![agentfluent diff output: New / Resolved / Persisting recommendation row classes with severity, count_delta, priority_score_delta, plus token / cost / cache deltas and per-agent invocation deltas](images/demo-diff.svg)
 
 **Config Assessment** — `agentfluent config-check`
 
