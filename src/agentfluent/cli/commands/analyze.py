@@ -14,6 +14,7 @@ from agentfluent.cli.formatters.helpers import format_cost, format_tokens
 from agentfluent.cli.formatters.json_output import format_json_output
 from agentfluent.cli.formatters.table import format_analysis_table
 from agentfluent.config.mcp_discovery import resolve_project_disk_path
+from agentfluent.config.models import SEVERITY_RANK, Severity
 from agentfluent.core.discovery import find_project
 from agentfluent.core.paths import projects_dir_for
 from agentfluent.diagnostics import run_diagnostics
@@ -22,6 +23,25 @@ from agentfluent.diagnostics.delegation import (
     DEFAULT_MIN_SIMILARITY,
     SKLEARN_AVAILABLE,
 )
+
+
+def _apply_min_severity(result: AnalysisResult, min_severity: Severity) -> None:
+    """Drop recommendations below the severity threshold (in place).
+
+    Signals are left intact — the user opted to filter recommendations,
+    not observations.
+    """
+    if result.diagnostics is None:
+        return
+    threshold = SEVERITY_RANK[min_severity]
+    result.diagnostics.recommendations = [
+        r for r in result.diagnostics.recommendations
+        if SEVERITY_RANK[r.severity] >= threshold
+    ]
+    result.diagnostics.aggregated_recommendations = [
+        a for a in result.diagnostics.aggregated_recommendations
+        if SEVERITY_RANK[a.severity] >= threshold
+    ]
 
 ANALYZE_EPILOG = """\
 Examples:
@@ -150,6 +170,17 @@ def analyze(
             "Recommendations table. Pass 0 to disable the summary block."
         ),
     ),
+    min_severity: Optional[Severity] = typer.Option(  # noqa: UP007, UP045
+        None,
+        "--min-severity",
+        case_sensitive=False,
+        help=(
+            "Drop recommendations below this severity. "
+            "Choices: info, warning, critical. Filters both the default "
+            "Recommendations table and the per-invocation --verbose surface; "
+            "Diagnostic Signals are not affected."
+        ),
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output."),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Show summary only."),
 ) -> None:
@@ -232,6 +263,9 @@ def analyze(
             "[dim]No agent invocations found -- "
             "diagnostics require agent activity.[/dim]"
         )
+
+    if min_severity is not None:
+        _apply_min_severity(result, min_severity)
 
     if format == "json":
         _print_json(result, quiet=quiet, project_name=project_info.display_name)
