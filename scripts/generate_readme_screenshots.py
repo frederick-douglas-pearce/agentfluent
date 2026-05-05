@@ -25,7 +25,6 @@ from __future__ import annotations
 import io
 import sys
 from pathlib import Path
-from typing import Any
 
 from rich.console import Console
 
@@ -152,12 +151,6 @@ def generate_config_check() -> None:
     save(console, "demo-config-check.svg", "agentfluent config-check")
 
 
-def _envelope(result: AnalysisResult) -> dict[str, Any]:
-    """Serialize an ``AnalysisResult`` to the same dict shape ``compute_diff``
-    expects from ``analyze --json`` output."""
-    return result.model_dump(mode="json")
-
-
 def _analyze_with_diagnostics(paths: list[Path]) -> AnalysisResult:
     result = analyze_sessions(paths, agent_filter=None)
     invocations = [inv for s in result.sessions for inv in s.invocations]
@@ -173,19 +166,16 @@ def _analyze_with_diagnostics(paths: list[Path]) -> AnalysisResult:
 
 
 def generate_diff(paths: list[Path]) -> None:
-    """Render an ``agentfluent diff`` screenshot.
-
-    Builds two snapshots from the same project: the earlier half of
-    sessions as baseline, all sessions as current. The diff between
-    them surfaces real new/resolved/persisting rows and token / cost
-    deltas without requiring a hand-curated fixture.
+    """Render an ``agentfluent diff`` screenshot from two real snapshots
+    of the same project, so the demo uses real new/resolved deltas
+    without a hand-curated fixture.
     """
     if len(paths) < 2:
         print("not enough sessions for diff screenshot; skipping")
         return
-    half = max(1, len(paths) // 2)
-    baseline = _envelope(_analyze_with_diagnostics(paths[:half]))
-    current = _envelope(_analyze_with_diagnostics(paths))
+    half = len(paths) // 2
+    baseline = _analyze_with_diagnostics(paths[:half]).model_dump(mode="json")
+    current = _analyze_with_diagnostics(paths).model_dump(mode="json")
     diff_result = compute_diff(baseline, current)
     console = make_console()
     format_diff_table(console, diff_result, top_n=5, verbose=False)
