@@ -1,0 +1,94 @@
+name: Milestone Docs Issue
+
+# When a release-style milestone (e.g. v0.6.0) is opened, create a stub
+# "docs catch-up" issue attached to it so the docs update step doesn't
+# slip through the cracks again. Body is intentionally terse -- the
+# milestone's issue list and the release-please notes are the source of
+# truth for what actually needs documenting. See #288 for the rationale
+# and #287 for the v0.6 manual precedent.
+
+on:
+  milestone:
+    types: [created]
+
+permissions:
+  issues: write
+
+jobs:
+  create-docs-issue:
+    # Coarse pre-filter so non-release milestones don't spin up a runner.
+    # The in-script regex below is the authoritative gate.
+    if: startsWith(github.event.milestone.title, 'v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create docs catch-up issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const milestoneTitle = context.payload.milestone.title;
+            const milestoneNumber = context.payload.milestone.number;
+            const { owner, repo } = context.repo;
+
+            if (!/^v\d+\.\d+\.\d+$/.test(milestoneTitle)) {
+              core.info(`Milestone "${milestoneTitle}" is not a release-style title; skipping.`);
+              return;
+            }
+
+            const issueTitle = `docs: catch up README + GLOSSARY + CHANGELOG for ${milestoneTitle}`;
+
+            // Guards against the workflow re-firing for the same milestone (e.g. event replay).
+            // Scoping by milestone number avoids the tokenization quirks of GitHub's search API
+            // (which splits on `+` and `:`, both present in the issue title).
+            const attached = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              milestone: milestoneNumber,
+              state: 'all',
+              per_page: 100,
+            });
+            if (attached.some(i => i.title === issueTitle)) {
+              core.info(`Issue already exists for ${milestoneTitle}; skipping.`);
+              return;
+            }
+
+            const body = [
+              `## Context`,
+              ``,
+              `Auto-created when milestone \`${milestoneTitle}\` was opened, to make sure README / GLOSSARY / CHANGELOG move with the release. See #288 for the workflow that produced this issue, and #287 for the v0.6 manual precedent that motivated automating it.`,
+              ``,
+              `## Source of truth`,
+              ``,
+              `- **Milestone scope:** [issues in \`${milestoneTitle}\`](https://github.com/${owner}/${repo}/milestone/${milestoneNumber}) -- full list of what's shipping`,
+              `- **Release notes:** the release-please PR for \`${milestoneTitle}\` will summarize user-facing changes by Conventional Commit type`,
+              ``,
+              `Use both to scope the actual docs PR -- the milestone's issue list shows the work; the release-please notes show what surfaces users will see change.`,
+              ``,
+              `## Doc surfaces to revisit`,
+              ``,
+              `- [ ] **README.md** -- roadmap, feature list, configuration table, sample CLI output, JSON envelope example, screenshots if CLI rendering changed`,
+              `- [ ] **docs/GLOSSARY.md** -- entries for any new terms surfaced in CLI output, JSON fields, or PRDs`,
+              `- [ ] **CHANGELOG.md** -- verify release-please's auto-generated entries cover the user-facing surface; expand prose where the auto-summary is too thin`,
+              `- [ ] **.claude/specs/** -- confirm any \`prd-*.md\` documents reflect what actually shipped; append decision log entries for scope changes made during the release`,
+              ``,
+              `## Acceptance criteria`,
+              ``,
+              `- [ ] All doc surfaces above reviewed and updated where needed`,
+              `- [ ] No stale roadmap entries, no missing flags`,
+              `- [ ] PR commit follows Conventional Commits (\`docs:\` prefix)`,
+              ``,
+              `## Out of scope`,
+              ``,
+              `- \`CLAUDE.md\` -- only update if conventions change`,
+              `- New documentation site (#97) -- separate epic`,
+              ``,
+            ].join('\n');
+
+            const created = await github.rest.issues.create({
+              owner,
+              repo,
+              title: issueTitle,
+              body,
+              labels: ['documentation', 'enhancement', 'priority:medium'],
+              milestone: milestoneNumber,
+            });
+            core.info(`Created issue #${created.data.number} for ${milestoneTitle}.`);
