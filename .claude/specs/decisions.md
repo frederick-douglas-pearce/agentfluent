@@ -403,3 +403,19 @@ The mapping is a module-level constant dict `SIGNAL_AXIS_MAP: dict[SignalType, A
 **Reference:** Architect review on #268 (concern #3).
 
 ---
+
+## D023: pm subagent — Write hook allows agent-memory paths (preserve `memory: user`)
+
+**Date:** 2026-05-05
+**Context:** Issue #292. The pm subagent (`~/.claude/agents/pm.md`) declares `memory: user` in its frontmatter, granting it user-scope auto-memory at `~/.claude/agent-memory/pm/`. Its inline `PreToolUse` Write hook only allowed paths matching `/.claude/specs/` or `/docs/`, so any auto-memory write was silently blocked with the message *"PM agent may only write to .claude/specs/ and docs/"*. Surfaced by `agentfluent analyze --diagnostics --verbose` as a `tool_error_sequence`.
+
+**Decision:** Option A — extend the hook regex to also allow `~/.claude/agent-memory/pm/`, and update the prompt's writable-paths section to enumerate all three allowed roots. The `memory: user` directive is intentional: pm benefits from remembering user preferences (framework choice, label conventions, prioritization style) across sessions.
+
+**Rationale:**
+- Preserves the explicit `memory: user` capability rather than silently dropping it.
+- The auto-memory path is namespaced under the agent's name (`/pm/`), so the broadened regex does not let pm escape into other agents' memory or arbitrary paths.
+- Failure mode was silent (hook denial only appears in JSONL traces), so the misconfig was hard to spot without dogfooding agentfluent against itself — fixing it improves the template for anyone copying this pm.md.
+
+**Reference:** Issue #292; surfaced by dogfooding run on 2026-05-05.
+
+---
