@@ -419,3 +419,72 @@ The mapping is a module-level constant dict `SIGNAL_AXIS_MAP: dict[SignalType, A
 **Reference:** Issue #292; surfaced by dogfooding run on 2026-05-05.
 
 ---
+
+## D024: Date/time-range filtering — session-level on first-message timestamp
+
+**Date:** 2026-05-05
+**Context:** Feature request for `--since`/`--until` flags on `analyze` and `list`. Need to decide what timestamp dimension to filter on. Options: (A) per-message timestamp with partial-session inclusion, (B) session file mtime, (C) first-message timestamp (whole-session inclusion), (D) last-message timestamp.
+
+**Decision:** Option C — filter at session granularity using first-message timestamp. A session is entirely in or entirely out based on its earliest analytical message's timestamp.
+
+**Rationale:**
+- **Per-message filtering (A) is architecturally expensive.** The analytics pipeline (`analyze_session()`) computes metrics per-session: token totals, tool patterns, agent invocations, diagnostics signals. Partial-session inclusion would require re-running the pipeline on filtered message subsets, a large refactor with unclear benefit. Diagnostics signals (retry loops, stuck patterns) are computed from sequential tool-call patterns within a session -- splitting a session mid-signal would lose or corrupt the signal.
+- **File mtime (B) is unreliable.** Cloud sync, file copies, and backup restores alter mtime. Content-derived timestamps are deterministic and reproducible.
+- **First-message timestamp (C) matches user intent.** The primary workflow is "sessions after I made a config change." Config changes happen between sessions. A session that *started* after the fix is the relevant unit for "did the fix work." Performance cost is bounded: reading the first analytical message's timestamp requires parsing at most a few lines per file (the first non-SKIP_TYPES message).
+- **The "straddling session" edge case is rare.** Sessions rarely span config edits. If they do, the user can target them with `--session <uuid>`.
+- **Forward-compatible.** `SessionInfo` can later expose `last_message_timestamp` to enable a `--include-straddling` flag without breaking existing behavior.
+
+**Tradeoff accepted:** A multi-hour session where the user edits a config mid-session cannot be partially analyzed. The user must end and restart sessions around config changes. This matches Claude Code's natural behavior (sessions rarely persist across major config edits).
+
+**Reference:** PRD `prd-date-range-filtering.md` Section 4.
+
+---
+
+## D025: Date/time-range filtering — no partial-session metric recomputation
+
+**Date:** 2026-05-05
+**Context:** Given D024's session-level filtering, the question remains: if a session's first message is inside the window but some of its messages predate or postdate the window, should metrics be recomputed on only the in-window messages?
+
+**Decision:** No. Whole-session semantics. All metrics reflect the full session content, regardless of whether individual message timestamps fall outside the specified window.
+
+**Rationale:**
+- The session is the natural unit of agent execution. A retry loop, stuck pattern, or error sequence that straddles a time boundary is one behavioral event. Splitting it would lose the signal.
+- Token totals for a session are pre-aggregated in `toolUseResult` metadata. Recomputing them on a message subset would require ignoring the metadata and recalculating from scratch -- a reliability concern.
+- Implementation simplicity: zero changes to `analyze_session()`, `compute_token_metrics()`, or any diagnostics rule. The filtering is a pure session-list filter at the CLI layer.
+- Acceptable precision: for the "verify a fix" workflow, a session that started in the window has all its behavior relevant to post-fix evaluation. The few messages that might predate the window (e.g., the opening prompt) are context, not noise.
+
+**Reference:** PRD `prd-date-range-filtering.md` Section 7.
+
+---
+
+## D026: v0.6 scoping — Quality axis Tier 1 IS the headline, alongside date-range filtering
+
+**Date:** 2026-05-05
+**Context:** v0.5.1 shipped (2026-05-05). The v0.6.0 milestone held 19 open issues from mixed origins: deferred v0.5 polish (#198, #201, #203, #204), date-range filtering (#293-#299), CLI ergonomics (#285), diagnostics polish (#281, #264, #263, #262), and a test consolidation (#265). The quality-axis epic (#268) and its stories (#269-#274) were unmilestoned but labeled `priority:high`. The headline question: does Quality Axis Tier 1 land in v0.6, or does v0.6 ship date-range filtering + cleanup and defer quality to v0.7?
+
+**Options considered:**
+- A) Quality axis + date-range filtering as dual headlines (total ~22-26 dev days)
+- B) Date-range filtering only + cleanup (total ~12-15 dev days, ships faster but weaker narrative)
+- C) Quality axis only, defer date-range to v0.7 (blocks the dogfooding loop verification)
+
+**Decision:** Option A — both quality axis Tier 1 and date-range filtering ship in v0.6. The release carries two parallel streams with no cross-dependencies.
+
+**Rationale:**
+- **Credibility urgency.** The under-recommendation gap for review subagents is a product credibility problem. Every release without the quality axis is a release where AgentFluent's output diverges from best-practice guidance. Deferring to v0.7 means 6-8 more weeks of this gap.
+- **Infrastructure freshness.** v0.5 shipped priority ranking (#172), offload candidates (#189), calibration sweep (#260), and `diff` (#199). These form the exact scaffolding quality signals plug into. The code is fresh in mind and stable.
+- **Effort fits the window.** Quality Tier 1: ~12-15 days. Date-range filtering: ~5-8 days. Combined with docs + CLI polish: ~22-28 days. Within the 3-4 week target (matching v0.5's actual timeline).
+- **Streams parallelize.** Quality axis and date-range filtering have zero cross-dependencies until docs at the end. A solo dev can interleave them effectively.
+- **Date-range filtering cannot be deferred (Option C).** The dogfooding loop requires `--since` to verify pm.md fixes without historical noise. This was the triggering use case.
+- **Option B is a release without a compelling narrative.** "You can filter by date now" is a nice-to-have feature, not a product moment worth announcing.
+
+**Scope cuts to make Option A fit:**
+- **#274 (calibration notebook) moved to stretch.** Conservative defaults are shippable. Calibration refines but doesn't gate.
+- **#198 (Markdown report), #201 (per-session scope), #203, #204 deferred to v0.7.** These are output-format and polish items that benefit from the quality axis output stabilizing first.
+- **#263, #262 deferred.** Performance and threshold recalibration items that need more diverse data.
+- **#170, #171, #183 remain unmilestoned.** Independent improvements with no connection to the v0.6 themes.
+
+**Risk mitigation:** If quality axis runs long, it has a clean internal cut point: #269-#271 (signals) + #273 (output labels) can ship without #272 (multi-axis scoring). Signals still flow through existing aggregation with default priority scoring. The quality dimension would be visible in output even without the scoring refinement, and #272 can follow in v0.6.1.
+
+**Reference:** PRD `prd-v0.6.md`. Prior decisions D015-D022 established all architectural choices for the quality axis; this decision confirms v0.6 is the delivery vehicle.
+
+---
