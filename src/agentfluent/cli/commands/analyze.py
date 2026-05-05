@@ -28,10 +28,8 @@ from agentfluent.diagnostics.delegation import (
 def _apply_min_severity(result: AnalysisResult, min_severity: Severity) -> None:
     """Drop recommendations below the severity threshold (in place).
 
-    Filters both ``recommendations`` (per-invocation, ``--verbose``
-    surface) and ``aggregated_recommendations`` (default table). Signals
-    are left intact — the user opted to filter recommendations, not
-    observations.
+    Signals are left intact — the user opted to filter recommendations,
+    not observations.
     """
     if result.diagnostics is None:
         return
