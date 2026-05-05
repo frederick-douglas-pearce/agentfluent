@@ -21,7 +21,10 @@ from agentfluent.analytics.agent_metrics import (
 from agentfluent.analytics.tokens import (
     ModelTokenBreakdown,
     TokenMetrics,
+    _aggregate_totals,
+    compute_subagent_token_metrics,
     compute_token_metrics,
+    fold_subagent_metrics_in,
 )
 from agentfluent.analytics.tools import (
     ConcentrationEntry,
@@ -116,6 +119,10 @@ def analyze_session(
     invocations = _link_subagent_traces(invocations, path)
     mcp_tool_calls = extract_mcp_calls_from_messages(messages)
 
+    subagent_traces = [inv.trace for inv in invocations if inv.trace is not None]
+    subagent_rows = compute_subagent_token_metrics(subagent_traces)
+    token_metrics = fold_subagent_metrics_in(token_metrics, subagent_rows)
+
     agent_metrics = compute_agent_metrics(
         invocations,
         session_total_tokens=token_metrics.total_tokens,
@@ -175,22 +182,24 @@ def analyze_sessions(
 
 
 def _merge_token_metrics(metrics_list: list[TokenMetrics]) -> TokenMetrics:
-    """Merge multiple TokenMetrics by summing per-model breakdowns."""
-    merged_models: dict[str, ModelTokenBreakdown] = {}
+    """Merge multiple TokenMetrics by summing per-(model, origin) breakdowns."""
+    merged_models: dict[tuple[str, str], ModelTokenBreakdown] = {}
     api_call_count = 0
 
     for tm in metrics_list:
         api_call_count += tm.api_call_count
-        for model_name, breakdown in tm.by_model.items():
-            existing = merged_models.get(model_name)
+        for breakdown in tm.by_model:
+            key = (breakdown.model, breakdown.origin)
+            existing = merged_models.get(key)
             if existing is None:
-                merged_models[model_name] = ModelTokenBreakdown(
-                    model=model_name,
+                merged_models[key] = ModelTokenBreakdown(
+                    model=breakdown.model,
                     input_tokens=breakdown.input_tokens,
                     output_tokens=breakdown.output_tokens,
                     cache_creation_input_tokens=breakdown.cache_creation_input_tokens,
                     cache_read_input_tokens=breakdown.cache_read_input_tokens,
                     cost=breakdown.cost,
+                    origin=breakdown.origin,
                 )
             else:
                 existing.input_tokens += breakdown.input_tokens
@@ -199,16 +208,11 @@ def _merge_token_metrics(metrics_list: list[TokenMetrics]) -> TokenMetrics:
                 existing.cache_read_input_tokens += breakdown.cache_read_input_tokens
                 existing.cost += breakdown.cost
 
-    total_input = sum(b.input_tokens for b in merged_models.values())
-    total_output = sum(b.output_tokens for b in merged_models.values())
-    total_cache_creation = sum(b.cache_creation_input_tokens for b in merged_models.values())
-    total_cache_read = sum(b.cache_read_input_tokens for b in merged_models.values())
-    total_cost = sum(b.cost for b in merged_models.values())
-
-    cache_denom = total_cache_read + total_input + total_cache_creation
-    cache_efficiency = (
-        round(total_cache_read / cache_denom * 100, 1) if cache_denom > 0 else 0.0
-    )
+    rows = list(merged_models.values())
+    (
+        total_input, total_output, total_cache_creation, total_cache_read,
+        total_cost, cache_efficiency,
+    ) = _aggregate_totals(rows)
 
     return TokenMetrics(
         input_tokens=total_input,
@@ -218,7 +222,7 @@ def _merge_token_metrics(metrics_list: list[TokenMetrics]) -> TokenMetrics:
         total_cost=total_cost,
         cache_efficiency=cache_efficiency,
         api_call_count=api_call_count,
-        by_model=merged_models,
+        by_model=rows,
     )
 
 

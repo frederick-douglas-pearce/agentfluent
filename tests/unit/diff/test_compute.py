@@ -23,12 +23,19 @@ from agentfluent.diff.models import DiffResult
 def _envelope(
     *,
     aggregated_recs: list[dict[str, Any]] | None = None,
-    by_model: dict[str, dict[str, Any]] | None = None,
+    by_model: dict[str, dict[str, Any]] | list[dict[str, Any]] | None = None,
     by_agent: dict[str, dict[str, Any]] | None = None,
     total_cost: float = 0.0,
     cache_efficiency: float = 0.0,
     session_count: int = 1,
 ) -> dict[str, Any]:
+    by_model_payload: dict[str, Any] | list[Any]
+    if by_model is None:
+        # Default to v2 list shape for new tests; legacy dict tests pass
+        # explicitly.
+        by_model_payload = []
+    else:
+        by_model_payload = by_model
     return {
         "session_count": session_count,
         "token_metrics": {
@@ -38,7 +45,7 @@ def _envelope(
             "cache_read_input_tokens": 0,
             "total_cost": total_cost,
             "cache_efficiency": cache_efficiency,
-            "by_model": by_model or {},
+            "by_model": by_model_payload,
         },
         "agent_metrics": {
             "by_agent_type": by_agent or {},
@@ -283,6 +290,58 @@ class TestTokenMetricsDelta:
         assert models["claude-opus-4-7"].cost_delta == -1.0
         assert models["claude-sonnet-4-6"].baseline_cost == 0.0
         assert models["claude-sonnet-4-6"].cost_delta == 0.30
+
+    def test_legacy_dict_envelope_diffs_against_v2_list_envelope(self) -> None:
+        # Cross-version: pre-#227 saved JSON used a dict keyed by model
+        # (no origin). The compat shim treats those rows as parent. A
+        # v2 envelope with the same parent row should diff to zero.
+        baseline_legacy = _envelope(by_model={
+            "claude-opus-4-7": {
+                "input_tokens": 100, "output_tokens": 200,
+                "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+                "cost": 1.0,
+            },
+        })
+        current_v2 = _envelope(by_model=[
+            {
+                "model": "claude-opus-4-7", "origin": "parent",
+                "input_tokens": 100, "output_tokens": 200,
+                "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+                "cost": 1.0,
+            },
+        ])
+
+        result = compute_diff(baseline_legacy, current_v2)
+        rows = result.token_metrics.by_model
+        assert len(rows) == 1
+        assert rows[0].model == "claude-opus-4-7"
+        assert rows[0].origin == "parent"
+        assert rows[0].cost_delta == 0.0
+        assert rows[0].total_tokens_delta == 0
+
+    def test_v2_list_envelope_distinguishes_parent_and_subagent(self) -> None:
+        # Same model used by parent and subagent → two distinct rows in
+        # the diff output, keyed by (model, origin).
+        baseline = _envelope(by_model=[])
+        current = _envelope(by_model=[
+            {
+                "model": "claude-opus-4-7", "origin": "parent",
+                "input_tokens": 100, "output_tokens": 0,
+                "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+                "cost": 0.5,
+            },
+            {
+                "model": "claude-opus-4-7", "origin": "subagent",
+                "input_tokens": 50, "output_tokens": 0,
+                "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+                "cost": 0.25,
+            },
+        ])
+
+        result = compute_diff(baseline, current)
+        keyed = {(r.model, r.origin): r for r in result.token_metrics.by_model}
+        assert keyed[("claude-opus-4-7", "parent")].cost_delta == pytest.approx(0.5)
+        assert keyed[("claude-opus-4-7", "subagent")].cost_delta == pytest.approx(0.25)
 
 
 class TestAgentTypeDelta:
