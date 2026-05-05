@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Literal
 
 from agentfluent.agents.models import AgentInvocation
 from agentfluent.config.mcp_discovery import discover_mcp_servers
@@ -30,7 +29,7 @@ from agentfluent.diagnostics.delegation import (
     DEFAULT_MIN_CLUSTER_SIZE,
     DEFAULT_MIN_SIMILARITY,
     SKLEARN_AVAILABLE,
-    count_clusterable_invocations,
+    _count_clusterable_invocations,
     suggest_delegations,
 )
 from agentfluent.diagnostics.mcp_assessment import (
@@ -44,6 +43,7 @@ from agentfluent.diagnostics.model_routing import (
 )
 from agentfluent.diagnostics.models import (
     TRACE_SIGNAL_TYPES,
+    DelegationSkippedReason,
     DelegationSuggestion,
     DiagnosticSignal,
     DiagnosticsResult,
@@ -264,17 +264,10 @@ def run_diagnostics(
     subagent_trace_count = sum(1 for inv in invocations if inv.trace is not None)
 
     delegation_suggestions: list[DelegationSuggestion] = []
-    delegation_skipped_reason: (
-        Literal[
-            "sklearn_not_installed",
-            "insufficient_invocations",
-            "no_clusters_above_min_size",
-        ]
-        | None
-    ) = None
+    delegation_skipped_reason: DelegationSkippedReason | None = None
     offload_candidates: list[OffloadCandidate] = []
     if SKLEARN_AVAILABLE:
-        if count_clusterable_invocations(invocations) < min_cluster_size:
+        if _count_clusterable_invocations(invocations) < min_cluster_size:
             delegation_skipped_reason = "insufficient_invocations"
         else:
             delegation_suggestions = suggest_delegations(

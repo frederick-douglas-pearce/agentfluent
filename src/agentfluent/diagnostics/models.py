@@ -477,6 +477,13 @@ class OffloadCandidate(BaseModel):
         )
 
 
+DelegationSkippedReason = Literal[
+    "sklearn_not_installed",
+    "insufficient_invocations",
+    "no_clusters_above_min_size",
+]
+
+
 class DiagnosticsResult(BaseModel):
     """Complete diagnostics output for a session or set of sessions."""
 
@@ -499,14 +506,7 @@ class DiagnosticsResult(BaseModel):
     delegation_suggestions: list[DelegationSuggestion] = Field(default_factory=list)
     """Draft subagent definitions proposed by the clustering pipeline."""
 
-    delegation_suggestions_skipped_reason: (
-        Literal[
-            "sklearn_not_installed",
-            "insufficient_invocations",
-            "no_clusters_above_min_size",
-        ]
-        | None
-    ) = None
+    delegation_suggestions_skipped_reason: DelegationSkippedReason | None = None
     """When ``delegation_suggestions`` is empty, names the reason so JSON
     consumers can distinguish "feature unavailable" from "ran but found
     nothing." ``None`` when suggestions are present. Reasons:
