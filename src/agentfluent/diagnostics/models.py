@@ -477,6 +477,13 @@ class OffloadCandidate(BaseModel):
         )
 
 
+DelegationSkippedReason = Literal[
+    "sklearn_not_installed",
+    "insufficient_invocations",
+    "no_clusters_above_min_size",
+]
+
+
 class DiagnosticsResult(BaseModel):
     """Complete diagnostics output for a session or set of sessions."""
 
@@ -498,6 +505,21 @@ class DiagnosticsResult(BaseModel):
 
     delegation_suggestions: list[DelegationSuggestion] = Field(default_factory=list)
     """Draft subagent definitions proposed by the clustering pipeline."""
+
+    delegation_suggestions_skipped_reason: DelegationSkippedReason | None = None
+    """When ``delegation_suggestions`` is empty, names the reason so JSON
+    consumers can distinguish "feature unavailable" from "ran but found
+    nothing." ``None`` when suggestions are present. Reasons:
+
+    - ``sklearn_not_installed`` — the ``agentfluent[clustering]`` extra is
+      not installed; the clustering path was skipped entirely.
+    - ``insufficient_invocations`` — sklearn is available but the count
+      of clusterable general-purpose invocations is below
+      ``--min-cluster-size``.
+    - ``no_clusters_above_min_size`` — clustering ran but produced no
+      drafts (no clusters met the threshold, or all drafts were deduped
+      against existing agent configs).
+    """
 
     # v0.5: added offload_candidates (#189). Wired up in sub-issue E.
     offload_candidates: list[OffloadCandidate] = Field(default_factory=list)

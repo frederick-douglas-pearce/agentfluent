@@ -170,6 +170,16 @@ def _filter_candidates(
     ]
 
 
+def _count_clusterable_invocations(invocations: list[AgentInvocation]) -> int:
+    """Count general-purpose invocations eligible for clustering.
+
+    Used by the diagnostics pipeline to distinguish "insufficient
+    invocations" from "clustering produced nothing" when populating
+    ``delegation_suggestions_skipped_reason``.
+    """
+    return len(_filter_candidates(invocations))
+
+
 def _build_single_cluster(
     candidates: list[AgentInvocation],
     tfidf_matrix: np.ndarray,
