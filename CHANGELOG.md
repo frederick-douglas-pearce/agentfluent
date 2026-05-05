@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.5.0...v0.5.1) (2026-05-05)
+
+
+### Miscellaneous Chores
+
+* trigger v0.5.1 release for docs catch-up ([4ec10ad](https://github.com/frederick-douglas-pearce/agentfluent/commit/4ec10ad567921079f376eb526a80095de26dee88))
+
 ## [0.5.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.4.0...v0.5.0) (2026-05-05)
 
 
