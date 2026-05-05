@@ -116,7 +116,11 @@ def generate_analyze(result: AnalysisResult) -> None:
     format_analysis_table(
         console, result, verbose=False, show_diagnostics=False,
     )
-    save(console, "demo-analyze.svg", "agentfluent analyze --project agentfluent")
+    save(
+        console,
+        "demo-analyze.svg",
+        "agentfluent analyze --project agentfluent --no-diagnostics",
+    )
 
 
 def generate_diagnostics(diag: DiagnosticsResult) -> None:
@@ -125,7 +129,7 @@ def generate_diagnostics(diag: DiagnosticsResult) -> None:
     save(
         console,
         "demo-diagnostics.svg",
-        "agentfluent analyze --project agentfluent --diagnostics",
+        "agentfluent analyze --project agentfluent",
     )
 
 
@@ -137,7 +141,7 @@ def generate_subagents(diag: DiagnosticsResult) -> None:
     save(
         console,
         "demo-subagents.svg",
-        "agentfluent analyze --project agentfluent --diagnostics --verbose",
+        "agentfluent analyze --project agentfluent --verbose",
     )
 
 

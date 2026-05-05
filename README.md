@@ -54,7 +54,7 @@ If you write your own prompts each session, use CodeFluent. If your prompts live
 
 ## Screenshots
 
-**Execution Analytics** — `agentfluent analyze --project <name>`
+**Execution Analytics** — `agentfluent analyze --project <name> --no-diagnostics`
 
 ![Execution Analytics: token usage, Cost by Model with parent vs subagent Origin column, tool frequency, and Agent Invocations tables](images/demo-analyze.svg)
 
