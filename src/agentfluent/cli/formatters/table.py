@@ -160,8 +160,6 @@ def format_analysis_table(
         model_table.add_column("Origin")
         model_table.add_column("Tokens", justify="right")
         model_table.add_column("Cost", justify="right")
-        # Group rows by (model, origin); parent first, then subagent
-        # within each model so the table reads top-down by source.
         sorted_rows = sorted(
             tm.by_model,
             key=lambda b: (b.model, 0 if b.origin == "parent" else 1),

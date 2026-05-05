@@ -7,6 +7,7 @@ cost breakdown and parent-vs-subagent origin attribution.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
@@ -104,6 +105,35 @@ def _populate_costs(by_model: dict[tuple[str, str], ModelTokenBreakdown]) -> flo
     return total
 
 
+def _aggregate_totals(
+    rows: Iterable[ModelTokenBreakdown],
+) -> tuple[int, int, int, int, float, float]:
+    """Sum totals across breakdown rows. Returns (input, output, cache_creation,
+    cache_read, total_cost, cache_efficiency).
+
+    Cache efficiency formula: cache_read / (cache_read + input + cache_creation) * 100.
+    """
+    total_input = 0
+    total_output = 0
+    total_cache_creation = 0
+    total_cache_read = 0
+    total_cost = 0.0
+    for r in rows:
+        total_input += r.input_tokens
+        total_output += r.output_tokens
+        total_cache_creation += r.cache_creation_input_tokens
+        total_cache_read += r.cache_read_input_tokens
+        total_cost += r.cost
+    cache_denom = total_cache_read + total_input + total_cache_creation
+    cache_efficiency = (
+        round(total_cache_read / cache_denom * 100, 1) if cache_denom > 0 else 0.0
+    )
+    return (
+        total_input, total_output, total_cache_creation, total_cache_read,
+        total_cost, cache_efficiency,
+    )
+
+
 def compute_token_metrics(messages: list[SessionMessage]) -> TokenMetrics:
     """Compute parent-session token usage totals and dollar costs.
 
@@ -117,17 +147,13 @@ def compute_token_metrics(messages: list[SessionMessage]) -> TokenMetrics:
         TokenMetrics with parent-only totals, per-model breakdown
         (origin="parent"), cost, and cache efficiency.
     """
-    # Internal indexing by (model, origin) so subsequent merges and
-    # subagent additions can dedupe deterministically.
     by_model: dict[tuple[str, str], ModelTokenBreakdown] = {}
     api_call_count = 0
 
     for msg in messages:
         if msg.type != "assistant" or msg.usage is None:
             continue
-
-        # Skip synthetic/internal sentinel models emitted by Claude Code.
-        # These are not real API calls -- no tokens billed, no pricing needed.
+        # <synthetic> is a Claude Code sentinel — no real API call, no pricing.
         if msg.model in SYNTHETIC_MODELS:
             continue
 
@@ -146,18 +172,12 @@ def compute_token_metrics(messages: list[SessionMessage]) -> TokenMetrics:
         breakdown.cache_creation_input_tokens += usage.cache_creation_input_tokens
         breakdown.cache_read_input_tokens += usage.cache_read_input_tokens
 
-    total_cost = _populate_costs(by_model)
-
-    total_input = sum(b.input_tokens for b in by_model.values())
-    total_output = sum(b.output_tokens for b in by_model.values())
-    total_cache_creation = sum(b.cache_creation_input_tokens for b in by_model.values())
-    total_cache_read = sum(b.cache_read_input_tokens for b in by_model.values())
-
-    # Cache efficiency: cache_read / (cache_read + input + cache_creation)
-    cache_denominator = total_cache_read + total_input + total_cache_creation
-    cache_efficiency = (
-        round(total_cache_read / cache_denominator * 100, 1) if cache_denominator > 0 else 0.0
-    )
+    _populate_costs(by_model)
+    rows = list(by_model.values())
+    (
+        total_input, total_output, total_cache_creation, total_cache_read,
+        total_cost, cache_efficiency,
+    ) = _aggregate_totals(rows)
 
     return TokenMetrics(
         input_tokens=total_input,
@@ -167,7 +187,7 @@ def compute_token_metrics(messages: list[SessionMessage]) -> TokenMetrics:
         total_cost=total_cost,
         cache_efficiency=cache_efficiency,
         api_call_count=api_call_count,
-        by_model=list(by_model.values()),
+        by_model=rows,
     )
 
 
@@ -217,23 +237,17 @@ def fold_subagent_metrics_in(
     The ``by_model`` list is the union of parent and subagent rows
     (rows with the same ``model`` but different ``origin`` stay
     distinct). Cache efficiency is recomputed from the comprehensive
-    totals.
+    totals. When ``subagent_rows`` is empty, returns ``parent`` itself
+    (identity preserved) so the merge is free in the common no-trace case.
     """
     if not subagent_rows:
         return parent
 
     combined_rows = list(parent.by_model) + list(subagent_rows)
-    total_input = sum(r.input_tokens for r in combined_rows)
-    total_output = sum(r.output_tokens for r in combined_rows)
-    total_cache_creation = sum(r.cache_creation_input_tokens for r in combined_rows)
-    total_cache_read = sum(r.cache_read_input_tokens for r in combined_rows)
-    total_cost = sum(r.cost for r in combined_rows)
-
-    cache_denominator = total_cache_read + total_input + total_cache_creation
-    cache_efficiency = (
-        round(total_cache_read / cache_denominator * 100, 1)
-        if cache_denominator > 0 else 0.0
-    )
+    (
+        total_input, total_output, total_cache_creation, total_cache_read,
+        total_cost, cache_efficiency,
+    ) = _aggregate_totals(combined_rows)
 
     return TokenMetrics(
         input_tokens=total_input,

@@ -12,6 +12,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from agentfluent.analytics.tokens import Origin
 from agentfluent.config.models import Severity
 from agentfluent.diagnostics.models import SignalType
 
@@ -67,7 +68,7 @@ class ModelTokenDelta(BaseModel):
     """
 
     model: str
-    origin: str = "parent"
+    origin: Origin = "parent"
     baseline_total_tokens: int = 0
     current_total_tokens: int = 0
     total_tokens_delta: int = 0

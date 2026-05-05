@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from agentfluent.analytics.tokens import Origin
 from agentfluent.config.models import SEVERITY_RANK, Severity
 from agentfluent.diagnostics.models import SignalType
 from agentfluent.diff.models import (
@@ -251,32 +252,31 @@ def _sum_token_components(d: dict[str, Any]) -> int:
 
 def _normalize_by_model(
     raw: dict[str, Any] | list[Any],
-) -> dict[tuple[str, str], dict[str, Any]]:
+) -> dict[tuple[str, Origin], dict[str, Any]]:
     """Coerce a ``by_model`` payload to ``{(model, origin): row}``.
 
     Schema v2 (#227) emits a list of rows with an ``origin`` field. The
     pre-#227 schema (v1) emitted a dict keyed by model name with no
     ``origin`` field; for cross-version diffs we treat those rows as
     parent-origin so legacy saved envelopes remain comparable. Rows
-    without a ``model`` field are dropped — defensive guard against
-    user-edited JSON.
+    without a ``model`` field, or with an unknown ``origin`` value, are
+    treated defensively (skip / default to parent) — a user-edited JSON
+    file should not crash the diff.
     """
     if isinstance(raw, dict):
-        # Legacy v1: dict keyed by model name; everything is parent.
         return {
             (model, "parent"): (row if isinstance(row, dict) else {})
             for model, row in raw.items()
         }
-    out: dict[tuple[str, str], dict[str, Any]] = {}
+    out: dict[tuple[str, Origin], dict[str, Any]] = {}
     for row in raw:
         if not isinstance(row, dict):
             continue
         model = row.get("model")
         if not isinstance(model, str):
             continue
-        origin = row.get("origin", "parent")
-        if not isinstance(origin, str):
-            origin = "parent"
+        raw_origin = row.get("origin", "parent")
+        origin: Origin = raw_origin if raw_origin in ("parent", "subagent") else "parent"
         out[(model, origin)] = row
     return out
 

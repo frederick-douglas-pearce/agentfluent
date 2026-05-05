@@ -21,6 +21,7 @@ from agentfluent.analytics.agent_metrics import (
 from agentfluent.analytics.tokens import (
     ModelTokenBreakdown,
     TokenMetrics,
+    _aggregate_totals,
     compute_subagent_token_metrics,
     compute_token_metrics,
     fold_subagent_metrics_in,
@@ -118,9 +119,6 @@ def analyze_session(
     invocations = _link_subagent_traces(invocations, path)
     mcp_tool_calls = extract_mcp_calls_from_messages(messages)
 
-    # Fold subagent token usage into the per-model breakdown so the
-    # session-level TokenMetrics reflects the true cost (parent thread
-    # + linked subagent runs). #227.
     subagent_traces = [inv.trace for inv in invocations if inv.trace is not None]
     subagent_rows = compute_subagent_token_metrics(subagent_traces)
     token_metrics = fold_subagent_metrics_in(token_metrics, subagent_rows)
@@ -210,16 +208,11 @@ def _merge_token_metrics(metrics_list: list[TokenMetrics]) -> TokenMetrics:
                 existing.cache_read_input_tokens += breakdown.cache_read_input_tokens
                 existing.cost += breakdown.cost
 
-    total_input = sum(b.input_tokens for b in merged_models.values())
-    total_output = sum(b.output_tokens for b in merged_models.values())
-    total_cache_creation = sum(b.cache_creation_input_tokens for b in merged_models.values())
-    total_cache_read = sum(b.cache_read_input_tokens for b in merged_models.values())
-    total_cost = sum(b.cost for b in merged_models.values())
-
-    cache_denom = total_cache_read + total_input + total_cache_creation
-    cache_efficiency = (
-        round(total_cache_read / cache_denom * 100, 1) if cache_denom > 0 else 0.0
-    )
+    rows = list(merged_models.values())
+    (
+        total_input, total_output, total_cache_creation, total_cache_read,
+        total_cost, cache_efficiency,
+    ) = _aggregate_totals(rows)
 
     return TokenMetrics(
         input_tokens=total_input,
@@ -229,7 +222,7 @@ def _merge_token_metrics(metrics_list: list[TokenMetrics]) -> TokenMetrics:
         total_cost=total_cost,
         cache_efficiency=cache_efficiency,
         api_call_count=api_call_count,
-        by_model=list(merged_models.values()),
+        by_model=rows,
     )
 
 
