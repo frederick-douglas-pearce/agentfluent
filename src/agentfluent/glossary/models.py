@@ -20,6 +20,8 @@ GlossaryCategory = Literal[
     "agent_concern",
     "cluster_metric",
     "model_routing",
+    "diagnostics_field",
+    "diff_status",
     "builtin_agent_type",
     "builtin_tool",
 ]
@@ -35,6 +37,8 @@ GLOSSARY_CATEGORIES: tuple[tuple[GlossaryCategory, str], ...] = (
     ("agent_concern", "Built-in agent concern"),
     ("cluster_metric", "Cluster metrics"),
     ("model_routing", "Model routing"),
+    ("diagnostics_field", "Diagnostics output fields"),
+    ("diff_status", "Comparison row status"),
     ("builtin_agent_type", "Built-in agent types"),
     ("builtin_tool", "Built-in tools"),
 )

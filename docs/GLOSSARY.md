@@ -730,6 +730,191 @@ costs *more*); the recommendation is purely about output quality.
 
 ---
 
+## Diagnostics output fields
+
+### `priority_score`
+
+**Short:** Composite ranking score on each `aggregated_recommendation`.
+Higher = act on this first.
+
+**Detail:** Combines four signals: severity rank, log-scaled occurrence count,
+estimated cost impact (for `target='model'` mismatches that carry
+a dollar savings figure), and a trace-evidence boost when the
+recommendation is grounded in subagent trace data instead of
+just metadata. The formula and weights are tunable, calibrated
+in `scripts/calibration/threshold_validation.ipynb`.
+
+The Recommendations table is sorted by `priority_score` descending,
+and a Top-N priority-fixes summary surfaces above the table so the
+highest-leverage changes are the first thing the reader sees. Use
+`--top-n N` to control summary depth, or `--top-n 0` to disable.
+
+Exposed on every row in `aggregated_recommendations[].priority_score`.
+`agentfluent diff` reports `priority_score_delta` on persisting rows
+so you can detect *quiet regression* — a finding that didn't change
+severity or occurrence count but climbed in priority because its
+cost contribution rose.
+
+**Example:**
+
+```
+Top-N priority fixes:
+  1. [critical] pm: tool_error_sequence (priority 23.4) — ...
+  2. [warning]  general-purpose: model_mismatch (priority 18.7) — ...
+```
+
+**Threshold:** tunable; severity * 4 + log1p(count) * 2 + savings_usd / 5 + trace_boost
+
+### `offload_candidate`
+
+**Short:** A cluster of repeating tool-use patterns in the parent thread that
+could be moved to a cheaper subagent or skill.
+
+**Detail:** Surfaced by the parent-thread offload pipeline (#189). Detects
+bursts of similar tool-call sequences in the main Claude Code
+thread, clusters them by tool-use shape and prompt similarity,
+estimates the cost saved by routing the cluster through a
+Haiku- or Sonnet-tier subagent instead of Opus, and proposes a
+draft definition. Two draft kinds emit: a `subagent_draft` for
+delegation patterns and a `skill_draft` for repeated invocation
+patterns that map cleanly to a slash command.
+
+The Offload Candidates CLI section ranks clusters by estimated
+monthly savings. JSON consumers read
+`data.diagnostics.offload_candidates`. Calibrated against
+real-world burst distributions; see
+`scripts/calibration/threshold_validation.ipynb`.
+
+Empty when scikit-learn isn't installed (the `agentfluent[clustering]`
+extra is required) or when no cluster cleared the minimum size.
+
+**Example:**
+
+```
+Offload Candidates (potential savings: $42/mo):
+  1. PR review (8 occurrences) → propose pr-review subagent (Haiku)
+```
+
+### `delegation_suggestions_skipped_reason`
+
+**Short:** Names *why* `delegation_suggestions` is empty in JSON output.
+
+**Detail:** `null` when suggestions are present. Otherwise one of:
+
+- `sklearn_not_installed` — the `agentfluent[clustering]` extra
+  is not installed; the clustering pipeline was skipped entirely.
+- `insufficient_invocations` — sklearn is available but the count
+  of clusterable general-purpose invocations is below
+  `--min-cluster-size` (default 5).
+- `no_clusters_above_min_size` — clustering ran but produced no
+  drafts. Either no cluster met the size threshold, or every
+  draft was deduped against an existing agent config (cosine
+  similarity above `--min-similarity`).
+
+Lets JSON consumers distinguish "feature unavailable" from "ran
+but found nothing" without inspecting the install or counting
+invocations themselves.
+
+**Example:**
+
+```
+{"delegation_suggestions": [], "delegation_suggestions_skipped_reason": "insufficient_invocations"}
+```
+
+### `origin`
+
+**Short:** On a `by_model` cost row, distinguishes parent-thread vs subagent
+contributions: `"parent"` or `"subagent"`.
+
+**Detail:** Added in JSON schema v2 (#227). The Cost by Model breakdown is now
+a list of rows where each row carries an `origin` field. A model
+used by both the parent thread and a delegated subagent shows two
+rows — one per origin — instead of being aggregated into one.
+`total_cost` and `total_tokens` at the top level are comprehensive
+(parent + subagent), reflecting the true API spend for the
+session.
+
+`agentfluent diff` reads both v1 (legacy dict) and v2 (current
+list) envelopes via a compatibility shim. Legacy v1 rows
+normalize as `origin="parent"` so saved baselines remain diffable.
+
+**Example:**
+
+```
+[
+  {"model": "claude-opus-4-7", "origin": "parent",   "cost": 30.68},
+  {"model": "claude-opus-4-7", "origin": "subagent", "cost":  1.50},
+  {"model": "claude-opus-4-6", "origin": "subagent", "cost":  8.93}
+]
+```
+
+
+---
+
+## Comparison row status
+
+### `new`
+
+**Short:** A recommendation present in the current run but not the baseline.
+
+**Detail:** `agentfluent diff` keys recommendations by
+`(agent_type, target, frozenset(signal_types))`. A row is
+classified `new` when that key appears in the current envelope
+but not the baseline. `--fail-on {info|warning|critical}` gates
+exit code 3 on any `new` row at or above the chosen severity, so
+a CI check can fail on regression without needing per-row
+bookkeeping.
+
+Only `new` rows count against `--fail-on` in v0.5; persisting-row
+`priority_score` increases are deferred to v0.6's
+`--fail-on priority-regression` mode.
+
+**Example:**
+
+```
+Recommendations diff: 2 new, 1 resolved, 5 persisting
+[new] critical pm: stuck_pattern — ...
+```
+
+### `resolved`
+
+**Short:** A recommendation present in the baseline but not the current run —
+a fix landed.
+
+**Detail:** Same keying as `new` (the `(agent_type, target, signal_types)`
+tuple). A row is `resolved` when the baseline emitted it but the
+current run no longer does. Surfaces wins from prompt edits,
+tool-allowlist tightenings, and model swaps. Does not count
+against `--fail-on`.
+
+**Example:**
+
+```
+[resolved] warning architect: model_mismatch — already fixed
+```
+
+### `persisting`
+
+**Short:** A recommendation present in both runs. Carries `count_delta` and
+`priority_score_delta` so a CI consumer can detect quiet movement.
+
+**Detail:** Persisting rows surface count drift (the same finding firing more
+or fewer times than baseline) and priority drift (the
+`priority_score` climbed because cost impact rose, even though
+severity and count stayed the same). The deltas are exposed on
+each persisting row as `count_delta` and `priority_score_delta`
+so a downstream gate can flag *quiet regression* — a finding
+that's getting worse without crossing a discrete threshold.
+
+**Example:**
+
+```
+[persisting] warning pm: tool_error_sequence (count_delta=+2, priority_score_delta=+4.1)
+```
+
+
+---
+
 ## Built-in agent types
 
 ### `general-purpose`
