@@ -1,11 +1,13 @@
 """Generate SVG screenshots for the README from the real agentfluent project.
 
-Produces four reproducible SVGs under ``images/``:
+Produces five reproducible SVGs under ``images/``:
 
 - ``demo-analyze.svg`` — token/cost/tool/agent tables (no --diagnostics)
-- ``demo-diagnostics.svg`` — trimmed Diagnostic Signals + aggregated Recommendations
+- ``demo-diagnostics.svg`` — trimmed Diagnostic Signals + Top-N priority fixes
+  + aggregated Recommendations + Offload Candidates
 - ``demo-subagents.svg`` — Suggested Subagents table + one YAML draft block
 - ``demo-config-check.svg`` — config-check scoring + recommendations
+- ``demo-diff.svg`` — agentfluent diff: new/resolved/persisting + deltas
 
 Regenerate after feature changes:
 
@@ -13,6 +15,8 @@ Regenerate after feature changes:
 
 The script uses the CLI's own formatter functions against the current machine's
 ``~/.claude/projects/agentfluent`` session data, so numbers reflect live data.
+The diff screenshot is built by analyzing two slices of the same project (an
+earlier half vs. all sessions) so it surfaces realistic new/resolved deltas.
 Commit the regenerated SVGs alongside README / feature changes.
 """
 
@@ -24,7 +28,8 @@ from pathlib import Path
 
 from rich.console import Console
 
-from agentfluent.analytics.pipeline import analyze_sessions
+from agentfluent.analytics.pipeline import AnalysisResult, analyze_sessions
+from agentfluent.cli.formatters.diff_table import format_diff_table
 from agentfluent.cli.formatters.table import (
     _format_delegation_suggestions,
     _format_diagnostics_table,
@@ -35,6 +40,7 @@ from agentfluent.config import assess_agents
 from agentfluent.core.discovery import find_project
 from agentfluent.diagnostics.models import DiagnosticsResult
 from agentfluent.diagnostics.pipeline import run_diagnostics
+from agentfluent.diff import compute_diff
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IMAGES_DIR = REPO_ROOT / "images"
@@ -105,12 +111,16 @@ def _subagents_only_diagnostics(diag: DiagnosticsResult) -> DiagnosticsResult:
     )
 
 
-def generate_analyze(result) -> None:
+def generate_analyze(result: AnalysisResult) -> None:
     console = make_console()
     format_analysis_table(
         console, result, verbose=False, show_diagnostics=False,
     )
-    save(console, "demo-analyze.svg", "agentfluent analyze --project agentfluent")
+    save(
+        console,
+        "demo-analyze.svg",
+        "agentfluent analyze --project agentfluent --no-diagnostics",
+    )
 
 
 def generate_diagnostics(diag: DiagnosticsResult) -> None:
@@ -119,7 +129,7 @@ def generate_diagnostics(diag: DiagnosticsResult) -> None:
     save(
         console,
         "demo-diagnostics.svg",
-        "agentfluent analyze --project agentfluent --diagnostics",
+        "agentfluent analyze --project agentfluent",
     )
 
 
@@ -131,7 +141,7 @@ def generate_subagents(diag: DiagnosticsResult) -> None:
     save(
         console,
         "demo-subagents.svg",
-        "agentfluent analyze --project agentfluent --diagnostics --verbose",
+        "agentfluent analyze --project agentfluent --verbose",
     )
 
 
@@ -143,6 +153,37 @@ def generate_config_check() -> None:
     console = make_console()
     format_config_check_table(console, scores, verbose=False)
     save(console, "demo-config-check.svg", "agentfluent config-check")
+
+
+def _analyze_with_diagnostics(paths: list[Path]) -> AnalysisResult:
+    result = analyze_sessions(paths, agent_filter=None)
+    invocations = [inv for s in result.sessions for inv in s.invocations]
+    mcp_calls = [c for s in result.sessions for c in s.mcp_tool_calls]
+    messages = [m for s in result.sessions for m in s.messages]
+    if invocations:
+        result.diagnostics = run_diagnostics(
+            invocations,
+            mcp_tool_calls=mcp_calls,
+            parent_messages=messages,
+        )
+    return result
+
+
+def generate_diff(paths: list[Path]) -> None:
+    """Render an ``agentfluent diff`` screenshot from two real snapshots
+    of the same project, so the demo uses real new/resolved deltas
+    without a hand-curated fixture.
+    """
+    if len(paths) < 2:
+        print("not enough sessions for diff screenshot; skipping")
+        return
+    half = len(paths) // 2
+    baseline = _analyze_with_diagnostics(paths[:half]).model_dump(mode="json")
+    current = _analyze_with_diagnostics(paths).model_dump(mode="json")
+    diff_result = compute_diff(baseline, current)
+    console = make_console()
+    format_diff_table(console, diff_result, top_n=5, verbose=False)
+    save(console, "demo-diff.svg", "agentfluent diff baseline.json current.json")
 
 
 def main() -> int:
@@ -158,15 +199,7 @@ def main() -> int:
         print(f"no sessions for project: {PROJECT_NAME}", file=sys.stderr)
         return 1
 
-    result = analyze_sessions(paths, agent_filter=None)
-    all_invocations = [inv for s in result.sessions for inv in s.invocations]
-    all_mcp_calls = [c for s in result.sessions for c in s.mcp_tool_calls]
-
-    if all_invocations:
-        result.diagnostics = run_diagnostics(
-            all_invocations,
-            mcp_tool_calls=all_mcp_calls,
-        )
+    result = _analyze_with_diagnostics(paths)
 
     generate_analyze(result)
     if result.diagnostics is not None:
@@ -174,6 +207,7 @@ def main() -> int:
         if result.diagnostics.delegation_suggestions:
             generate_subagents(result.diagnostics)
     generate_config_check()
+    generate_diff(paths)
 
     return 0
 
