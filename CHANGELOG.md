@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.1](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.5.0...v0.5.1) (2026-05-05)
+
+Documentation catch-up release. v0.5.0 shipped to GitHub but the PyPI publish was deferred so the docs could land alongside it; v0.5.1 closes that gap.
+
+
+### Documentation
+
+* **README:** roadmap restructured into v0.4 (shipped), v0.5 (shipped — "Trustworthy Diagnostics"), v0.6 (planned — "Quality Axis: Tier 1"), and Future. The v0.6 section frames the new third diagnostics axis (quality alongside cost and speed) and links the Tier-1 epic ([#268](https://github.com/frederick-douglas-pearce/agentfluent/issues/268)) plus stories ([#269](https://github.com/frederick-douglas-pearce/agentfluent/issues/269)–[#275](https://github.com/frederick-douglas-pearce/agentfluent/issues/275)). ([#280](https://github.com/frederick-douglas-pearce/agentfluent/issues/280), [#283](https://github.com/frederick-douglas-pearce/agentfluent/issues/283))
+* **README:** JSON envelope example bumped to schema v2 — `token_metrics.by_model` is now a list of `{model, origin, ...}` rows, top-line `total_cost` / `total_tokens` are comprehensive (parent + subagent), and `agentfluent diff` reads both v1 and v2 envelopes via a compat shim. ([#280](https://github.com/frederick-douglas-pearce/agentfluent/issues/280))
+* **README:** configuration table adds `--top-n`, `--min-severity`, and `--fail-on`. ([#280](https://github.com/frederick-douglas-pearce/agentfluent/issues/280))
+* **README:** `agentfluent analyze` section now describes the Top-N priority fixes summary, the Offload Candidates section, and the parent/subagent origin breakout in Cost by Model. Features list adds Comparison Workflow, Priority Ranking, Offload Candidates, and Comprehensive Cost Attribution. ([#280](https://github.com/frederick-douglas-pearce/agentfluent/issues/280))
+* **README screenshots:** all four existing SVGs regenerated to show v0.4 / v0.5 surfaces (Top-N priority fixes summary, Offload Candidates table, Cost by Model Origin column). New `demo-diff.svg` captures `agentfluent diff` output. Caption corrections: Execution Analytics shot is now correctly labeled `--no-diagnostics` since v0.4 turned diagnostics on by default. ([#282](https://github.com/frederick-douglas-pearce/agentfluent/issues/282), [#284](https://github.com/frederick-douglas-pearce/agentfluent/issues/284))
+* **GLOSSARY:** two new categories — *Diagnostics output fields* and *Comparison row status* — with seven new entries: `priority_score`, `offload_candidate`, `delegation_suggestions_skipped_reason`, `origin`, `new`, `resolved`, `persisting`. ([#280](https://github.com/frederick-douglas-pearce/agentfluent/issues/280))
+
 ## [0.5.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.4.0...v0.5.0) (2026-05-05)
 
 
