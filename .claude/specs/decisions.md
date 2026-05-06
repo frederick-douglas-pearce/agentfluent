@@ -488,3 +488,35 @@ The mapping is a module-level constant dict `SIGNAL_AXIS_MAP: dict[SignalType, A
 **Reference:** PRD `prd-v0.6.md`. Prior decisions D015-D022 established all architectural choices for the quality axis; this decision confirms v0.6 is the delivery vehicle.
 
 ---
+
+## D027: `primary_axis` tiebreaker order — `quality > speed > cost`
+
+**Date:** 2026-05-05
+**Context:** D022 established single-axis classification: every recommendation gets exactly one `primary_axis` derived from its per-axis scores. The implementation in #272 uses `max(axis_scores, key=axis_scores.get)`, which is non-deterministic on ties (depends on dict insertion order). When two or more axes have equal scores for a recommendation, what tiebreaker order should `primary_axis` resolve to? Surfaced by architect review on #272 (issuecomment-4385199185) and resolved by PM input on the same issue (issuecomment-4385286798).
+
+**Options considered:**
+- A) `quality > speed > cost` — earlier wins ties; quality wins all ties.
+- B) `cost > speed > quality` — preserves status quo: existing v0.5 cost/speed recommendations keep their familiar labeling.
+- C) `speed > cost > quality` — speed pain is most visceral.
+
+**Decision:** Option A — `AXIS_TIEBREAKER = ("quality", "speed", "cost")`. Implementation:
+
+```python
+AXIS_TIEBREAKER: tuple[str, ...] = ("quality", "speed", "cost")
+# Why: ties resolve in favor of the v0.6 headline axis so the new quality
+# capability is visible by default. See decisions.md D027.
+primary_axis = max(AXIS_TIEBREAKER, key=lambda a: axis_scores[a])
+```
+
+**Rationale:**
+- **Aligns with the v0.6 product positioning.** D026 confirmed quality axis IS the v0.6 headline. The tiebreaker should reinforce, not undercut, that positioning. A genuinely cross-axis recommendation surfacing as `[quality]` matches the release's narrative; surfacing as `[cost]` would make the new capability invisible on the very recommendations where it matters most.
+- **Maximizes first-run visibility.** Users running `agentfluent analyze` for the first time after upgrading to v0.6 should see quality labels in their output. The tiebreaker order shapes that first impression.
+- **Diff stability is unaffected.** `primary_axis` is a new field with no v0.5 baseline to drift from. The first post-upgrade `agentfluent diff` shows quality labels emerging on persisting recommendations as new evidence arrives — exactly the intended behavior. There is no backward-compatibility concern because there is no prior `primary_axis` value to flip.
+- **True ties become rare post-calibration.** #274 (deferred to stretch but landing within v0.6 or v0.6.1) tunes per-signal weights. Continuous-valued scores rarely hit exact equality after calibration. The tiebreaker matters most for the first-release experience, not the steady state.
+- **Determinism is required regardless of order.** The dominant engineering reason for an explicit tuple over `max(dict, key=...)` is determinism across runs and Python versions. The product question is only about *which* deterministic order; once that is decided, the choice has low ongoing maintenance cost.
+
+**Tradeoff accepted:** Recommendations where cost evidence and quality evidence tie exactly will be labeled `[quality]` even when a v0.5 user might have expected `[cost]`. This is intentional — the user's mental model should update to reflect that AgentFluent now scores quality.
+
+**Reference:** Issue #272 architect review (issuecomment-4385199185); PM decision (issuecomment-4385286798). Implements the tiebreaker contract referenced in D022 (single-axis classification).
+
+---
