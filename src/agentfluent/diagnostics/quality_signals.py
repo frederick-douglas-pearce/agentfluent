@@ -43,6 +43,7 @@ calibration notebook can sweep them without function-body edits.
 from __future__ import annotations
 
 import re
+from enum import StrEnum
 
 from agentfluent.agents.models import WRITE_TOOLS, AgentInvocation
 from agentfluent.config.models import Severity
@@ -51,102 +52,105 @@ from agentfluent.diagnostics.models import DiagnosticSignal, SignalType
 
 # Review-style subagents whose presence and findings drive the
 # REVIEWER_CAUGHT signal in #271. Defined here (not in ``agents.models``)
-# because it is quality-axis-specific and may diverge from ``BUILTIN_AGENT_TYPES``
-# as users add custom review agents (e.g. project-specific ``security-review``
-# variants). Custom review-agent names will be a calibration-time addition
-# in #274.
+# because it is quality-axis-specific and may diverge from
+# ``BUILTIN_AGENT_TYPES`` as users add custom review agents (e.g.
+# project-specific ``security-review`` variants). Custom review-agent
+# names will be a calibration-time addition in #274.
 REVIEW_AGENT_TYPES: frozenset[str] = frozenset(
     {"architect", "security-review", "tester", "code-reviewer"},
 )
 
 
+class PrecedingAction(StrEnum):
+    """How the assistant message preceding a user correction is classified.
+
+    Stamped on each ``USER_CORRECTION`` signal's ``detail`` so #274
+    calibration can analyze precision per-tier and so consumers can
+    distinguish corrections-of-action from corrections-of-reasoning.
+    """
+
+    WRITE_TOOL = "write_tool"
+    QUESTION = "question"
+    TEXT_ONLY = "text_only"
+
+
+class CorrectionCategory(StrEnum):
+    """Pattern-tier classification for a detected user correction.
+
+    ``STRONG`` corresponds to ``_STRONG_CORRECTION_PATTERNS``;
+    the soft tiers correspond to the categories in
+    ``_SOFT_PATTERN_CATEGORIES`` and are useful for #274 calibration.
+    """
+
+    STRONG = "strong"
+    NEGATION = "negation"
+    INTERRUPTION = "interruption"
+    REDIRECTION = "redirection"
+    UNDO = "undo"
+
+
+def _ci(*patterns: str) -> tuple[re.Pattern[str], ...]:
+    """Compile a tuple of case-insensitive regex patterns."""
+    return tuple(re.compile(p, re.IGNORECASE) for p in patterns)
+
+
 # Soft-correction pattern categories. These fire only when the primary
 # gate (preceding message has a write tool) is satisfied. Suppressed when
 # the preceding assistant message is question-only.
-_NEGATION_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bno,?\s", re.IGNORECASE),
-    re.compile(r"\bno\s+don'?t\b", re.IGNORECASE),
-    re.compile(r"\bthat'?s\s+not\s+what\s+I\b", re.IGNORECASE),
+_NEGATION_PATTERNS = _ci(
+    r"\bno,?\s",
+    r"\bno\s+don'?t\b",
+    r"\bthat'?s\s+not\s+what\s+I\b",
 )
-_INTERRUPTION_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bstop\b", re.IGNORECASE),
-    re.compile(r"\bwait\b", re.IGNORECASE),
-    re.compile(r"\bhold\s+on\b", re.IGNORECASE),
+_INTERRUPTION_PATTERNS = _ci(r"\bstop\b", r"\bwait\b", r"\bhold\s+on\b")
+_REDIRECTION_PATTERNS = _ci(
+    r"\bactually,?\s",
+    r"\binstead,?\s",
+    r"\bI\s+meant\b",
+    r"\bwhat\s+I\s+wanted\s+was\b",
 )
-_REDIRECTION_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bactually,?\s", re.IGNORECASE),
-    re.compile(r"\binstead,?\s", re.IGNORECASE),
-    re.compile(r"\bI\s+meant\b", re.IGNORECASE),
-    re.compile(r"\bwhat\s+I\s+wanted\s+was\b", re.IGNORECASE),
-)
-_UNDO_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bgo\s+back\s+to\b", re.IGNORECASE),
-    re.compile(r"\brestore\b", re.IGNORECASE),
-)
+_UNDO_PATTERNS = _ci(r"\bgo\s+back\s+to\b", r"\brestore\b")
 
 # Strong-correction overlay: a strict subset of high-confidence phrases
 # that fire regardless of the preceding-message gate. ``revert`` and
 # ``undo`` are intentionally promoted out of ``_UNDO_PATTERNS`` to live
 # only here so a single regex match can never be claimed by both tiers.
-# ``that's wrong`` and ``that's not what I`` are corrections of the
-# parent's reasoning — they signal the user is overruling the system,
-# not answering a question.
-_STRONG_CORRECTION_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bthat'?s\s+wrong\b", re.IGNORECASE),
-    re.compile(r"\brevert\b", re.IGNORECASE),
-    re.compile(r"\bundo\b", re.IGNORECASE),
-    re.compile(r"\bthat'?s\s+not\s+what\s+I\b", re.IGNORECASE),
+_STRONG_CORRECTION_PATTERNS = _ci(
+    r"\bthat'?s\s+wrong\b",
+    r"\brevert\b",
+    r"\bundo\b",
+    r"\bthat'?s\s+not\s+what\s+I\b",
 )
 
-# Soft-correction overlay: union of the category lists (all soft).
-# Iteration order preserved so the first-match category label is
-# deterministic and useful in ``detail.matched_pattern``.
-_SOFT_PATTERN_CATEGORIES: tuple[tuple[str, tuple[re.Pattern[str], ...]], ...] = (
-    ("negation", _NEGATION_PATTERNS),
-    ("interruption", _INTERRUPTION_PATTERNS),
-    ("redirection", _REDIRECTION_PATTERNS),
-    ("undo", _UNDO_PATTERNS),
+_SOFT_PATTERN_CATEGORIES: tuple[
+    tuple[CorrectionCategory, tuple[re.Pattern[str], ...]], ...
+] = (
+    (CorrectionCategory.NEGATION, _NEGATION_PATTERNS),
+    (CorrectionCategory.INTERRUPTION, _INTERRUPTION_PATTERNS),
+    (CorrectionCategory.REDIRECTION, _REDIRECTION_PATTERNS),
+    (CorrectionCategory.UNDO, _UNDO_PATTERNS),
 )
 
-# Cap on the user-message snippet stamped onto each signal's ``detail``.
-# 140 chars is enough to identify the correction in CLI output without
-# spilling whole prompts into the diagnostics envelope.
 _SNIPPET_MAX_CHARS = 140
 
 
-def _preceding_assistant_action(
-    messages: list[SessionMessage], user_idx: int,
-) -> tuple[bool, bool]:
-    """Classify the assistant message immediately preceding ``messages[user_idx]``.
+def _classify_assistant(message: SessionMessage) -> tuple[bool, bool]:
+    """Return ``(had_write_tool, is_question_only)`` for an assistant message.
 
-    Returns ``(had_write_tool, is_question_only)``:
-
-    - ``had_write_tool`` — True when the preceding assistant message
-      carries any ``tool_use`` block whose ``name`` is in ``WRITE_TOOLS``.
-      Indicates the assistant was actively implementing, so a follow-up
-      correction is structurally a correction-of-action.
-    - ``is_question_only`` — True when the preceding assistant message's
-      text ends with ``?`` AND no write tool was used. Indicates the
-      assistant was asking for clarification, so a "no" answer is not
-      a correction.
-
-    When no preceding assistant message exists (user is the first
-    analytical message), both flags are False — strong-correction
-    patterns can still fire, soft patterns cannot.
+    - ``had_write_tool`` — any ``tool_use`` block whose ``name`` is in
+      ``WRITE_TOOLS``. Indicates the assistant was actively implementing,
+      so a follow-up correction is structurally a correction-of-action.
+    - ``is_question_only`` — text ends with ``?`` AND no write tool.
+      Indicates the assistant was asking for clarification, so a "no"
+      answer is not a correction.
     """
-    for prev_idx in range(user_idx - 1, -1, -1):
-        prev = messages[prev_idx]
-        if prev.type != "assistant":
-            continue
-        had_write_tool = any(
-            block.name in WRITE_TOOLS for block in prev.tool_use_blocks
-        )
-        prev_text = prev.text.rstrip()
-        is_question_only = (
-            not had_write_tool and prev_text.endswith("?")
-        )
-        return had_write_tool, is_question_only
-    return False, False
+    had_write_tool = any(
+        block.name in WRITE_TOOLS for block in message.tool_use_blocks
+    )
+    is_question_only = (
+        not had_write_tool and message.text.rstrip().endswith("?")
+    )
+    return had_write_tool, is_question_only
 
 
 def _match_correction(
@@ -154,25 +158,19 @@ def _match_correction(
     *,
     had_write_tool: bool,
     is_question_only: bool,
-) -> tuple[str, str] | None:
-    """Apply the 3-tier heuristic and return ``(category, matched_phrase)``
-    when the user message is a correction; ``None`` otherwise.
+) -> tuple[CorrectionCategory, str] | None:
+    """Apply the 3-tier heuristic; return ``(category, matched_phrase)`` or ``None``.
 
-    Tier order:
-    1. Strong-correction override — fires unconditionally on hit.
-    2. Primary gate — soft patterns fire when ``had_write_tool``.
-    3. Question suppression — soft patterns suppressed when
-       ``is_question_only`` (already implied by ``not had_write_tool``
-       in this code path; the explicit check is kept for clarity).
-
-    Returns the first matching category and the matched substring so
-    callers can stamp it on the signal's ``detail.matched_pattern`` for
-    calibration analysis in #274.
+    Tier order: strong override → primary gate (write tool) → question
+    suppression. Returns the first matching category and matched
+    substring so callers can stamp it on ``detail`` for #274 calibration.
     """
     for pattern in _STRONG_CORRECTION_PATTERNS:
         if match := pattern.search(user_text):
-            return "strong", match.group(0)
+            return CorrectionCategory.STRONG, match.group(0)
 
+    # Soft patterns require the primary gate (write-tool present) and
+    # are suppressed by the question-only classification.
     if not had_write_tool or is_question_only:
         return None
 
@@ -183,15 +181,10 @@ def _match_correction(
     return None
 
 
-def _user_message_text(message: SessionMessage) -> str:
-    """Concatenated text content from a user message.
-
-    Mirrors ``SessionMessage.text`` but drops to the empty string for
-    messages whose content is purely tool_result blocks (no text). The
-    parent thread carries both kinds — agent tool_result envelopes are
-    not user prose and must not be scanned for correction patterns.
-    """
-    return message.text
+def _build_snippet(text: str) -> str:
+    if len(text) <= _SNIPPET_MAX_CHARS:
+        return text
+    return text[:_SNIPPET_MAX_CHARS].rstrip() + "…"
 
 
 def extract_quality_signals(
@@ -206,78 +199,73 @@ def extract_quality_signals(
     without breaking #270 mid-flight.
 
     Returns an empty list when ``messages`` is empty or contains no
-    user messages. ``agent_type`` is ``None`` on every emitted signal:
+    user prose. ``agent_type`` is ``None`` on every emitted signal:
     these are cross-cutting parent-thread observations, not subagent-
     scoped findings.
     """
-    del agent_invocations  # Reserved for #271 (REVIEWER_CAUGHT)
-
     if not messages:
         return []
 
-    # First pass: collect (user_idx, category, matched_phrase, snippet,
-    # preceding_action) for each detected correction. ``total_user_messages``
-    # is the denominator for ``session_correction_rate`` — counted on
-    # the same pass so we don't traverse twice.
-    detections: list[tuple[int, str, str, str, str]] = []
+    # Single forward pass: as we walk messages we update the most
+    # recently seen assistant's classification, and read it whenever
+    # we encounter user prose. Avoids the O(n²) backward scan that an
+    # earlier draft used.
+    last_assistant: tuple[bool, bool] | None = None
+    detections: list[tuple[CorrectionCategory, str, str, PrecedingAction]] = []
     total_user_messages = 0
 
-    for idx, msg in enumerate(messages):
+    for msg in messages:
+        if msg.type == "assistant":
+            last_assistant = _classify_assistant(msg)
+            continue
         if msg.type != "user":
             continue
-        text = _user_message_text(msg)
+        text = msg.text
         if not text:
             continue
         total_user_messages += 1
 
-        had_write_tool, is_question_only = _preceding_assistant_action(messages, idx)
-        match_result = _match_correction(
+        had_write_tool, is_question_only = last_assistant or (False, False)
+        result = _match_correction(
             text,
             had_write_tool=had_write_tool,
             is_question_only=is_question_only,
         )
-        if match_result is None:
+        if result is None:
             continue
-        category, matched_phrase = match_result
+        category, matched_phrase = result
 
         if had_write_tool:
-            preceding_action = "write_tool"
+            preceding = PrecedingAction.WRITE_TOOL
         elif is_question_only:
-            preceding_action = "question"
+            preceding = PrecedingAction.QUESTION
         else:
-            preceding_action = "text_only"
+            preceding = PrecedingAction.TEXT_ONLY
 
-        snippet = text[:_SNIPPET_MAX_CHARS]
-        if len(text) > _SNIPPET_MAX_CHARS:
-            snippet = snippet.rstrip() + "…"
-
-        detections.append((idx, category, matched_phrase, snippet, preceding_action))
+        detections.append(
+            (category, matched_phrase, _build_snippet(text), preceding),
+        )
 
     if not detections or total_user_messages == 0:
         return []
 
     session_correction_rate = len(detections) / total_user_messages
 
-    # Second pass: construct signals once with the rate already known.
-    # Avoids post-construction mutation of the detail dict.
-    signals: list[DiagnosticSignal] = []
-    for _, category, matched_phrase, snippet, preceding_action in detections:
-        signals.append(
-            DiagnosticSignal(
-                signal_type=SignalType.USER_CORRECTION,
-                severity=Severity.WARNING,
-                agent_type=None,
-                invocation_id=None,
-                message=f"User correction in parent thread: {snippet}",
-                detail={
-                    "correction_text": snippet,
-                    "matched_pattern": matched_phrase,
-                    "matched_category": category,
-                    "preceding_assistant_action": preceding_action,
-                    "session_correction_rate": session_correction_rate,
-                    "total_user_messages": total_user_messages,
-                    "total_corrections": len(detections),
-                },
-            ),
+    return [
+        DiagnosticSignal(
+            signal_type=SignalType.USER_CORRECTION,
+            severity=Severity.WARNING,
+            agent_type=None,
+            invocation_id=None,
+            message=f"User correction in parent thread: {snippet}",
+            detail={
+                "correction_text": snippet,
+                "matched_pattern": matched_phrase,
+                "matched_category": category.value,
+                "preceding_assistant_action": preceding.value,
+                "session_correction_rate": session_correction_rate,
+                "total_user_messages": total_user_messages,
+            },
         )
-    return signals
+        for category, matched_phrase, snippet, preceding in detections
+    ]

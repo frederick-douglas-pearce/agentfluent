@@ -49,11 +49,6 @@ def _assistant_with_write_tool(
     )
 
 
-def _assistant_question(text: str) -> SessionMessage:
-    """Assistant message ending with '?' and no tool_use blocks."""
-    return _assistant_text(text)
-
-
 class TestUserCorrectionDetection:
     def test_three_corrections_in_ten_user_messages_emits_three_signals(self) -> None:
         """AC fixture: 3 corrections in 10 user messages -> 3 signals."""
@@ -76,7 +71,6 @@ class TestUserCorrectionDetection:
         assert isinstance(rate, float)
         assert rate == 0.3
         for s in signals:
-            assert s.detail["total_corrections"] == 3
             assert s.detail["total_user_messages"] == 10
 
     def test_zero_corrections_returns_empty(self) -> None:
@@ -92,7 +86,7 @@ class TestUserCorrectionDetection:
     def test_no_answer_to_question_does_not_fire(self) -> None:
         """AC fixture: 'no' as an answer to a question is not a correction."""
         messages = [
-            _assistant_question("Should I keep going with approach A?"),
+            _assistant_text("Should I keep going with approach A?"),
             _user("no, let's stop here for now"),
         ]
         assert extract_quality_signals(messages) == []
@@ -105,7 +99,7 @@ class TestUserCorrectionDetection:
         system, not answering the question.
         """
         messages = [
-            _assistant_question("Did you want me to delete the file?"),
+            _assistant_text("Did you want me to delete the file?"),
             _user("that's wrong, we agreed not to delete anything"),
         ]
         signals = extract_quality_signals(messages)
@@ -196,6 +190,18 @@ class TestUserCorrectionDetection:
         ]
         assert extract_quality_signals(messages) == []
 
+    def test_skips_unknown_message_types(self) -> None:
+        """Defensive guard: messages whose ``type`` is neither 'user'
+        nor 'assistant' are silently skipped without affecting state."""
+        messages = [
+            _assistant_with_write_tool(),
+            SessionMessage(type="system", content_blocks=[]),
+            _user("no, that's wrong"),
+        ]
+        signals = extract_quality_signals(messages)
+        assert len(signals) == 1
+        assert signals[0].detail["preceding_assistant_action"] == "write_tool"
+
     def test_skips_intervening_non_assistant_messages(self) -> None:
         """Look-back finds the most recent assistant, skipping any
         intervening tool-result-only user messages."""
@@ -239,7 +245,6 @@ class TestUserCorrectionDetection:
             "preceding_assistant_action",
             "session_correction_rate",
             "total_user_messages",
-            "total_corrections",
         ):
             assert key in sig.detail
 
@@ -281,7 +286,6 @@ class TestExtractQualitySignalsSignature:
         assert len(with_invocations) == len(without_invocations) == 1
 
     def test_review_agent_types_constant_present(self) -> None:
-        assert "architect" in REVIEW_AGENT_TYPES
-        assert "code-reviewer" in REVIEW_AGENT_TYPES
-        assert "tester" in REVIEW_AGENT_TYPES
-        assert "security-review" in REVIEW_AGENT_TYPES
+        assert REVIEW_AGENT_TYPES >= {
+            "architect", "code-reviewer", "tester", "security-review",
+        }
