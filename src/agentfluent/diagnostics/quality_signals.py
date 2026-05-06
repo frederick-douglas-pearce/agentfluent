@@ -167,6 +167,59 @@ _COMPLETION_PATTERNS = _ci(
 )
 
 
+# Keywords that indicate a review subagent's response contains a
+# substantive finding rather than a "looks good" pass. Combined with
+# ``_SUBSTANTIVE_RESPONSE_MIN_CHARS`` as an AND-gate before emitting a
+# REVIEWER_CAUGHT signal: short responses or those without these
+# keywords are treated as clean passes and produce no signal.
+_FINDING_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "blocker", "issue", "concern", "must", "should",
+        "warning", "risk", "vulnerability", "fix", "change needed",
+    },
+)
+_FINDING_KEYWORDS_PATTERN = re.compile(
+    "|".join(rf"\b{re.escape(k)}\b" for k in _FINDING_KEYWORDS),
+    re.IGNORECASE,
+)
+
+# Minimum response length (chars) for a review subagent's output to
+# count as substantive. Short responses are ``LGTM``-style passes.
+_SUBSTANTIVE_RESPONSE_MIN_CHARS = 500
+
+# Source-file extensions a review subagent is plausibly referencing.
+# The list is conservative — including version strings (``v1.0``) and
+# domain names (``github.com``) as "files" would inflate ``parent_acted``
+# counts. Architect review on #271 promoted this list to a module
+# constant for #274 calibration.
+_SOURCE_FILE_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        "py", "ts", "js", "jsx", "tsx", "md", "yaml", "yml", "json",
+        "toml", "rs", "go", "java", "rb", "sh", "css", "html", "c",
+        "cpp", "h", "hpp",
+    },
+)
+_SOURCE_FILE_EXTENSIONS_RE = "|".join(_SOURCE_FILE_EXTENSIONS)
+# Match either (a) paths with a directory component (anything before a
+# ``/``) and a file-like name, or (b) bare filenames whose extension is
+# in our known-source-extension set. Both styles are common in review
+# output ("see src/foo.py" vs "rename module.py to ...").
+_DIR_PATH_PATTERN = re.compile(
+    r"(?:[a-zA-Z0-9_.\-]+/)+[a-zA-Z0-9_\-]+\.[a-zA-Z]{1,10}",
+)
+_BARE_FILE_PATTERN = re.compile(
+    rf"\b[a-zA-Z0-9_\-]+\.(?:{_SOURCE_FILE_EXTENSIONS_RE})\b",
+    re.IGNORECASE,
+)
+
+# Cap on assistant messages to scan after a review's tool_result when
+# checking whether the parent acted on the review's findings. An edit
+# 150 messages later is almost certainly unrelated — capping at 15
+# matches the typical "reviewer findings → parent follows up within a
+# few turns" cadence and is calibratable in #274.
+_PARENT_ACTED_WINDOW = 15
+
+
 @dataclass(slots=True)
 class _FileEditStats:
     """Accumulator for a single file's edit activity within a session.
@@ -266,6 +319,114 @@ def _emit_user_correction_signals(
     ]
 
 
+def _extract_files_mentioned(text: str) -> set[str]:
+    """Extract plausible source-file paths from review prose.
+
+    Strict by design (architect review concern #1 on #271): matches
+    require either a directory separator (``src/foo.py``) or a known
+    source-file extension (``.py``, ``.ts``, ``.md``, ...). Strings like
+    ``v1.0``, ``section 3.b``, and ``github.com`` do not match —
+    inflating ``parent_acted = True`` from prose noise would undermine
+    the signal's reliability, and a missed obscure extension is the
+    safer error direction (yields ``parent_acted = False``).
+    """
+    return set(_DIR_PATH_PATTERN.findall(text)) | set(
+        _BARE_FILE_PATTERN.findall(text),
+    )
+
+
+def _files_edited_after(
+    messages: list[SessionMessage],
+    start_idx: int,
+    *,
+    window: int = _PARENT_ACTED_WINDOW,
+) -> set[str]:
+    """File paths edited in the next ``window`` assistant messages
+    after ``start_idx``. Used to compute ``parent_acted`` — capped so
+    edits 100+ messages later cannot be attributed to the review."""
+    edited: set[str] = set()
+    seen_assistants = 0
+    for msg in messages[start_idx + 1:]:
+        if msg.type != "assistant":
+            continue
+        seen_assistants += 1
+        if seen_assistants > window:
+            break
+        for block in msg.tool_use_blocks:
+            if block.name not in _EDIT_TOOL_NAMES:
+                continue
+            fp = block.input.get("file_path")
+            if isinstance(fp, str) and fp:
+                edited.add(fp)
+    return edited
+
+
+def _extract_reviewer_caught_signals(
+    messages: list[SessionMessage],
+    agent_invocations: list[AgentInvocation],
+) -> list[DiagnosticSignal]:
+    """Emit one ``REVIEWER_CAUGHT`` per substantive review.
+
+    A review invocation is "substantive" when the response is at least
+    ``_SUBSTANTIVE_RESPONSE_MIN_CHARS`` long AND mentions at least one
+    finding keyword. ``parent_acted`` is True when any file mentioned
+    in the review's output is edited in the following
+    ``_PARENT_ACTED_WINDOW`` assistant messages.
+    """
+    # tool_use_id -> index of the message containing the corresponding
+    # tool_result block. Lets us scope ``parent_acted`` look-forward to
+    # messages strictly after the review's result.
+    tool_result_idx: dict[str, int] = {}
+    for idx, msg in enumerate(messages):
+        if msg.type != "user":
+            continue
+        for block in msg.content_blocks:
+            if block.type == "tool_result" and block.tool_use_id:
+                tool_result_idx[block.tool_use_id] = idx
+
+    signals: list[DiagnosticSignal] = []
+    for inv in agent_invocations:
+        if inv.agent_type.lower() not in REVIEW_AGENT_TYPES:
+            continue
+        text = inv.output_text
+        if not text or len(text) < _SUBSTANTIVE_RESPONSE_MIN_CHARS:
+            continue
+        keyword_hits = sorted({m.lower() for m in _FINDING_KEYWORDS_PATTERN.findall(text)})
+        if not keyword_hits:
+            continue
+
+        files_mentioned = _extract_files_mentioned(text)
+        files_acted_on: set[str] = set()
+        result_idx = tool_result_idx.get(inv.tool_use_id)
+        if result_idx is not None and files_mentioned:
+            edited = _files_edited_after(messages, result_idx)
+            files_acted_on = files_mentioned & edited
+
+        signals.append(
+            DiagnosticSignal(
+                signal_type=SignalType.REVIEWER_CAUGHT,
+                severity=Severity.INFO,
+                agent_type=inv.agent_type,
+                invocation_id=inv.tool_use_id,
+                message=(
+                    f"`{inv.agent_type}` review surfaced "
+                    f"{len(keyword_hits)} finding-keyword(s)"
+                ),
+                detail={
+                    "agent_type": inv.agent_type,
+                    "finding_count": len(keyword_hits),
+                    "finding_keywords": keyword_hits,
+                    "parent_acted": bool(files_acted_on),
+                    "response_length": len(text),
+                    "review_invocation_id": inv.tool_use_id,
+                    "files_mentioned": sorted(files_mentioned),
+                    "files_acted_on": sorted(files_acted_on),
+                },
+            ),
+        )
+    return signals
+
+
 def _emit_file_rework_signals(
     edit_stats: dict[str, _FileEditStats],
 ) -> list[DiagnosticSignal]:
@@ -297,15 +458,18 @@ def extract_quality_signals(
 ) -> list[DiagnosticSignal]:
     """Extract quality-axis signals from parent-thread messages.
 
-    Emits ``USER_CORRECTION`` (#269) and ``FILE_REWORK`` (#270);
-    ``REVIEWER_CAUGHT`` (#271) will land here. ``agent_invocations`` is
-    accepted but unused by the current detectors — locked in this
-    signature so #271 can plug in without breaking the existing
-    callers.
+    Emits ``USER_CORRECTION`` (#269), ``FILE_REWORK`` (#270), and
+    ``REVIEWER_CAUGHT`` (#271). The first two are cross-cutting
+    (``agent_type=None``) parent-thread observations; ``REVIEWER_CAUGHT``
+    is per-agent (``agent_type`` carries the named review subagent) so
+    aggregation can group findings under each review agent rather than
+    lumping them globally.
 
-    Returns an empty list when ``messages`` is empty. ``agent_type`` is
-    ``None`` on every emitted signal: these are cross-cutting
-    parent-thread observations, not subagent-scoped findings.
+    ``agent_invocations`` drives the REVIEWER_CAUGHT detector; the
+    other two detectors only need ``messages``. Pass ``None`` (or omit)
+    to skip review-agent analysis when invocations aren't available.
+
+    Returns an empty list when ``messages`` is empty.
     """
     if not messages:
         return []
@@ -363,9 +527,15 @@ def extract_quality_signals(
             (category, matched_phrase, _build_snippet(text), preceding),
         )
 
+    reviewer_signals = (
+        _extract_reviewer_caught_signals(messages, agent_invocations)
+        if agent_invocations
+        else []
+    )
     return [
         *_emit_user_correction_signals(
             correction_detections, total_user_messages,
         ),
         *_emit_file_rework_signals(edit_stats),
+        *reviewer_signals,
     ]

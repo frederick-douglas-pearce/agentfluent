@@ -767,3 +767,89 @@ class TestQualitySignalsWiring:
         kinds = {s.signal_type for s in result.signals}
         assert SignalType.USER_CORRECTION in kinds
         assert SignalType.FILE_REWORK in kinds
+
+    def test_all_three_quality_signals_coexist(self) -> None:
+        """USER_CORRECTION + FILE_REWORK + REVIEWER_CAUGHT all fire on
+        the same session when the evidence is present. Confirms #271
+        plugged into the pipeline without breaking the existing
+        cross-cutting detectors."""
+        edit_block = ContentBlock(
+            type="tool_use",
+            id="toolu_e",
+            name="Edit",
+            input={"file_path": "/src/foo.py"},
+        )
+        substantive = (
+            "I reviewed the change and found several blocker issues "
+            "that must be addressed before merge. The function in "
+            "src/foo.py does not handle the empty-input case and "
+            "will raise an unexpected exception at runtime. Second "
+            "concern: there is a security risk in the auth flow — "
+            "credentials are logged at debug level which is a real "
+            "vulnerability if log levels are misconfigured. Third "
+            "warning: the test fixture in tests/test_foo.py mocks "
+            "behavior that contradicts the production code path. "
+            "Recommended fix: add input validation and redact "
+            "credentials before logging."
+        )
+        review_inv = AgentInvocation(
+            agent_type="architect",
+            description="review",
+            prompt="review the diff",
+            tool_use_id="toolu_review",
+            output_text=substantive,
+        )
+
+        messages: list[SessionMessage] = []
+        for _ in range(4):
+            messages.append(
+                SessionMessage(type="assistant", content_blocks=[edit_block]),
+            )
+        messages.append(
+            SessionMessage(
+                type="user",
+                content_blocks=[
+                    ContentBlock(type="text", text="that's wrong, undo it"),
+                ],
+            ),
+        )
+        # The review's tool_result and the architect invocation must
+        # both be present in the messages so the pipeline's own
+        # extract_agent_invocations sees the review.
+        messages.append(
+            SessionMessage(
+                type="assistant",
+                content_blocks=[
+                    ContentBlock(
+                        type="tool_use",
+                        id="toolu_review",
+                        name="Agent",
+                        input={
+                            "subagent_type": "architect",
+                            "description": "review",
+                            "prompt": "review the diff",
+                        },
+                    ),
+                ],
+            ),
+        )
+        messages.append(
+            SessionMessage(
+                type="user",
+                content_blocks=[
+                    ContentBlock(
+                        type="tool_result",
+                        tool_use_id="toolu_review",
+                        text=substantive,
+                    ),
+                ],
+            ),
+        )
+
+        result = run_diagnostics(
+            [_inv(), review_inv], parent_messages=messages,
+        )
+        kinds = {s.signal_type for s in result.signals}
+        assert SignalType.USER_CORRECTION in kinds
+        assert SignalType.FILE_REWORK in kinds
+        assert SignalType.REVIEWER_CAUGHT in kinds

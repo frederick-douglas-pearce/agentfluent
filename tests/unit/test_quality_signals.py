@@ -456,3 +456,202 @@ class TestEditToolNamesContract:
 
     def test_edit_tool_names_subset_of_write_tools(self) -> None:
         assert _EDIT_TOOL_NAMES <= WRITE_TOOLS
+
+
+def _review_invocation(
+    agent_type: str = "architect",
+    output_text: str = "",
+    tool_use_id: str = "toolu_review",
+) -> AgentInvocation:
+    return AgentInvocation(
+        agent_type=agent_type,
+        description="review",
+        prompt="review the diff",
+        tool_use_id=tool_use_id,
+        output_text=output_text,
+    )
+
+
+def _user_with_tool_result(
+    tool_use_id: str, content: str = "review complete",
+) -> SessionMessage:
+    return SessionMessage(
+        type="user",
+        content_blocks=[
+            ContentBlock(
+                type="tool_result", tool_use_id=tool_use_id, text=content,
+            ),
+        ],
+    )
+
+
+_SUBSTANTIVE_REVIEW = (
+    "I reviewed the change and found several blocker issues that must "
+    "be addressed before merge. First concern: the new function in "
+    "src/foo.py does not handle the empty-input case and will raise "
+    "an unexpected exception at runtime. Second issue: a security risk "
+    "in the auth flow — credentials are logged at debug level which "
+    "is a real vulnerability if log levels are misconfigured. Third "
+    "warning: the test fixture in tests/test_foo.py mocks behavior "
+    "that contradicts the production code path; the test should "
+    "exercise the real implementation. Recommended fix: add input "
+    "validation, redact credentials before logging, and rewrite the "
+    "fixture against the real code path."
+)
+
+
+class TestReviewerCaughtDetection:
+    """REVIEWER_CAUGHT fires when a review-style subagent (architect,
+    code-reviewer, security-review, tester) produces a substantive
+    response (>= 500 chars + finding keywords). Per-agent attribution
+    — ``agent_type`` carries the named review agent."""
+
+    def test_substantive_review_fires(self) -> None:
+        inv = _review_invocation(output_text=_SUBSTANTIVE_REVIEW)
+        signals = extract_quality_signals(
+            messages=[_user_with_tool_result(inv.tool_use_id)],
+            agent_invocations=[inv],
+        )
+        rev = [s for s in signals if s.signal_type == SignalType.REVIEWER_CAUGHT]
+        assert len(rev) == 1
+        sig = rev[0]
+        assert sig.agent_type == "architect"
+        assert sig.detail["finding_count"] >= 1
+        assert "blocker" in sig.detail["finding_keywords"]
+
+    def test_lgtm_pass_does_not_fire(self) -> None:
+        inv = _review_invocation(output_text="LGTM, no concerns.")
+        signals = extract_quality_signals(
+            messages=[_user_with_tool_result(inv.tool_use_id)],
+            agent_invocations=[inv],
+        )
+        assert not any(
+            s.signal_type == SignalType.REVIEWER_CAUGHT for s in signals
+        )
+
+    def test_long_response_without_keywords_does_not_fire(self) -> None:
+        inv = _review_invocation(output_text="x" * 1000)
+        signals = extract_quality_signals(
+            messages=[_user_with_tool_result(inv.tool_use_id)],
+            agent_invocations=[inv],
+        )
+        assert not any(
+            s.signal_type == SignalType.REVIEWER_CAUGHT for s in signals
+        )
+
+    def test_parent_acted_when_mentioned_file_subsequently_edited(self) -> None:
+        inv = _review_invocation(output_text=_SUBSTANTIVE_REVIEW)
+        messages = [
+            _user_with_tool_result(inv.tool_use_id),
+            _assistant_with_edits("src/foo.py"),
+        ]
+        signals = extract_quality_signals(messages, [inv])
+        rev = next(s for s in signals if s.signal_type == SignalType.REVIEWER_CAUGHT)
+        assert rev.detail["parent_acted"] is True
+        assert "src/foo.py" in rev.detail["files_acted_on"]
+
+    def test_parent_not_acted_when_no_followup_edits(self) -> None:
+        inv = _review_invocation(output_text=_SUBSTANTIVE_REVIEW)
+        signals = extract_quality_signals(
+            messages=[_user_with_tool_result(inv.tool_use_id)],
+            agent_invocations=[inv],
+        )
+        rev = next(s for s in signals if s.signal_type == SignalType.REVIEWER_CAUGHT)
+        assert rev.detail["parent_acted"] is False
+
+    def test_parent_acted_window_caps_lookforward(self) -> None:
+        """Edits beyond the look-forward window do not count toward
+        ``parent_acted``. Defends against attributing unrelated edits
+        100+ messages later to a review (architect concern #2)."""
+        inv = _review_invocation(output_text=_SUBSTANTIVE_REVIEW)
+        messages: list[SessionMessage] = [_user_with_tool_result(inv.tool_use_id)]
+        for i in range(20):
+            messages.append(_assistant_text(f"step {i}"))
+        messages.append(_assistant_with_edits("src/foo.py"))
+        signals = extract_quality_signals(messages, [inv])
+        rev = next(s for s in signals if s.signal_type == SignalType.REVIEWER_CAUGHT)
+        assert rev.detail["parent_acted"] is False
+
+    def test_built_in_code_reviewer_fires(self) -> None:
+        inv = _review_invocation(
+            agent_type="code-reviewer", output_text=_SUBSTANTIVE_REVIEW,
+        )
+        signals = extract_quality_signals(
+            messages=[_user_with_tool_result(inv.tool_use_id)],
+            agent_invocations=[inv],
+        )
+        rev = [s for s in signals if s.signal_type == SignalType.REVIEWER_CAUGHT]
+        assert len(rev) == 1
+        assert rev[0].agent_type == "code-reviewer"
+
+    def test_non_review_agent_ignored(self) -> None:
+        inv = _review_invocation(
+            agent_type="general-purpose", output_text=_SUBSTANTIVE_REVIEW,
+        )
+        signals = extract_quality_signals(
+            messages=[_user_with_tool_result(inv.tool_use_id)],
+            agent_invocations=[inv],
+        )
+        assert not any(
+            s.signal_type == SignalType.REVIEWER_CAUGHT for s in signals
+        )
+
+    def test_no_invocations_yields_no_reviewer_signals(self) -> None:
+        """When ``agent_invocations`` is None or empty, the detector
+        is silently skipped."""
+        signals = extract_quality_signals(messages=[], agent_invocations=None)
+        assert signals == []
+
+    def test_files_mentioned_uses_strict_pattern(self) -> None:
+        """``v1.0``, ``github.com``, ``section 3.b`` should NOT be
+        classified as files (architect concern #1 on #271)."""
+        review = _SUBSTANTIVE_REVIEW + (
+            " See v1.0 release notes at github.com/foo/bar — "
+            "section 3.b for context."
+        )
+        inv = _review_invocation(output_text=review)
+        signals = extract_quality_signals(
+            messages=[_user_with_tool_result(inv.tool_use_id)],
+            agent_invocations=[inv],
+        )
+        rev = next(s for s in signals if s.signal_type == SignalType.REVIEWER_CAUGHT)
+        assert "src/foo.py" in rev.detail["files_mentioned"]
+        assert "tests/test_foo.py" in rev.detail["files_mentioned"]
+        assert "v1.0" not in rev.detail["files_mentioned"]
+        assert "3.b" not in rev.detail["files_mentioned"]
+        assert "github.com" not in rev.detail["files_mentioned"]
+
+    def test_parent_acted_skips_user_messages_between(self) -> None:
+        """Look-forward over assistant edits ignores intervening user
+        messages — defensive ``continue`` branch."""
+        inv = _review_invocation(output_text=_SUBSTANTIVE_REVIEW)
+        messages: list[SessionMessage] = [
+            _user_with_tool_result(inv.tool_use_id),
+            _user("interjection from the user"),
+            _assistant_with_edits("src/foo.py"),
+        ]
+        signals = extract_quality_signals(messages, [inv])
+        rev = next(s for s in signals if s.signal_type == SignalType.REVIEWER_CAUGHT)
+        assert rev.detail["parent_acted"] is True
+
+    def test_parent_acted_ignores_non_edit_tool_blocks(self) -> None:
+        """Bash and other non-edit tools in the look-forward window
+        do not count toward ``files_acted_on``."""
+        inv = _review_invocation(output_text=_SUBSTANTIVE_REVIEW)
+        messages = [
+            _user_with_tool_result(inv.tool_use_id),
+            SessionMessage(
+                type="assistant",
+                content_blocks=[
+                    ContentBlock(
+                        type="tool_use",
+                        id="toolu_b",
+                        name="Bash",
+                        input={"command": "ls src/"},
+                    ),
+                ],
+            ),
+        ]
+        signals = extract_quality_signals(messages, [inv])
+        rev = next(s for s in signals if s.signal_type == SignalType.REVIEWER_CAUGHT)
+        assert rev.detail["parent_acted"] is False
