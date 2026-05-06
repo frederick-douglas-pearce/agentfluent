@@ -148,8 +148,13 @@ def _normalize_content(raw_content: str | list[dict[str, Any]] | None) -> list[C
     return []
 
 
-def _parse_timestamp(raw: str | None) -> datetime | None:
-    """Parse an ISO 8601 timestamp string."""
+def parse_timestamp(raw: str | None) -> datetime | None:
+    """Parse an ISO 8601 timestamp string.
+
+    Tolerates the trailing ``Z`` UTC marker that Claude Code emits and
+    returns ``None`` for missing or malformed input rather than raising,
+    so callers can iterate JSONL safely without per-line guards.
+    """
     if not raw:
         return None
     try:
@@ -174,7 +179,7 @@ def _parse_user_message(data: dict[str, Any]) -> SessionMessage:
 
     return SessionMessage(
         type="user",
-        timestamp=_parse_timestamp(data.get("timestamp")),
+        timestamp=parse_timestamp(data.get("timestamp")),
         content_blocks=_normalize_content(message.get("content")),
         metadata=metadata,
     )
@@ -196,7 +201,7 @@ def _parse_assistant_message(data: dict[str, Any]) -> SessionMessage:
 
     return SessionMessage(
         type="assistant",
-        timestamp=_parse_timestamp(data.get("timestamp")),
+        timestamp=parse_timestamp(data.get("timestamp")),
         message_id=message.get("id"),
         model=message.get("model"),
         content_blocks=_normalize_content(message.get("content")),

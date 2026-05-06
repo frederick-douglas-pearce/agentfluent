@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from agentfluent.core.parser import iter_raw_messages, parse_timestamp
 from agentfluent.core.paths import (
     DEFAULT_CLAUDE_CONFIG_DIR,
     PROJECTS_SUBDIR,
     SUBAGENTS_SUBDIR,
 )
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_PROJECTS_DIR = DEFAULT_CLAUDE_CONFIG_DIR / PROJECTS_SUBDIR
 
@@ -25,6 +29,13 @@ class SessionInfo:
     modified: datetime
     subagent_count: int = 0
     """Number of subagent trace files in <session-uuid>/subagents/."""
+
+    first_message_timestamp: datetime | None = None
+    """Timestamp of the first analytical message in file order. Drives
+    the date-range filter introduced in v0.6 (#293) — content-derived
+    so it survives file copies and cloud-sync mtime churn that
+    ``modified`` cannot. ``None`` when the file is empty, has no
+    parseable timestamps, or could not be opened."""
 
 
 @dataclass
@@ -56,6 +67,34 @@ def slug_to_display_name(slug: str) -> str:
     # The last segment is typically the project name
     # For paths like -home-fdpearce-Documents-Projects-git-codefluent -> codefluent
     return parts[-1] if parts else slug
+
+
+def _extract_first_timestamp(path: Path) -> datetime | None:
+    """First analytical message timestamp in file order, or ``None``.
+
+    ``iter_raw_messages`` already filters ``SKIP_TYPES`` and silently
+    drops malformed lines, so the first yielded message is the first
+    analytical one. Stops on the first parseable timestamp (typically
+    within the first few lines of the file).
+
+    "First in file order" rather than "earliest" is intentional —
+    Claude Code writes JSONL sequentially as the session progresses,
+    so file order is the faithful proxy for "session start" per D024.
+
+    ``OSError`` (covers ``PermissionError`` / partially-written
+    cloud-synced files) is caught and logged so a single bad file
+    cannot abort discovery for an entire project.
+    """
+    try:
+        for _, data in iter_raw_messages(path):
+            ts = parse_timestamp(data.get("timestamp"))
+            if ts is not None:
+                return ts
+    except OSError:
+        logger.warning(
+            "Could not read timestamps from %s", path, exc_info=True,
+        )
+    return None
 
 
 def _count_subagent_files(session_path: Path) -> int:
@@ -92,6 +131,7 @@ def discover_sessions(project_path: Path) -> list[SessionInfo]:
                     size_bytes=stat.st_size,
                     modified=datetime.fromtimestamp(stat.st_mtime, tz=UTC),
                     subagent_count=_count_subagent_files(entry),
+                    first_message_timestamp=_extract_first_timestamp(entry),
                 )
             )
 
