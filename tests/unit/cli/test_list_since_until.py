@@ -1,4 +1,4 @@
-"""Tests for ``agentfluent list --since/--until`` (#296).
+"""Tests for ``agentfluent list --since/--until``.
 
 The seeded fixture session in ``populated_home`` has its first message
 at 2026-04-10T10:00:00Z, so windows are anchored to that.
@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 import typer
 from typer.testing import CliRunner
 
@@ -35,64 +36,35 @@ class TestRequiresProject:
 
 
 class TestFilterApplied:
-    def test_since_after_session_excludes_it(
-        self, runner: CliRunner, cli_app: typer.Typer, populated_home: Path,
-    ) -> None:
-        # Session is at 2026-04-10; --since 2026-05-01 is after, so the
-        # session is excluded.
-        result = runner.invoke(
-            cli_app,
-            [
-                "list", "--project", "project",
-                "--since", "2026-05-01",
-                "--quiet",
-            ],
-        )
-        assert result.exit_code == EXIT_OK
-        assert "0 sessions" in result.stdout
+    """Session at 2026-04-10 is the only fixture session; each window
+    bracket either includes (1 session) or excludes (0 sessions) it."""
 
-    def test_since_before_session_includes_it(
-        self, runner: CliRunner, cli_app: typer.Typer, populated_home: Path,
+    @pytest.mark.parametrize(
+        ("flags", "expected_count_str"),
+        [
+            (["--since", "2026-05-01"], "0 sessions"),  # window after session
+            (["--since", "2026-04-01"], "1 sessions"),  # session at-or-after since
+            (["--until", "2026-04-01"], "0 sessions"),  # session after until
+            (
+                ["--since", "2026-04-01", "--until", "2026-05-01"],
+                "1 sessions",
+            ),  # session in window
+        ],
+    )
+    def test_window_filters_session(
+        self,
+        runner: CliRunner,
+        cli_app: typer.Typer,
+        populated_home: Path,
+        flags: list[str],
+        expected_count_str: str,
     ) -> None:
         result = runner.invoke(
             cli_app,
-            [
-                "list", "--project", "project",
-                "--since", "2026-04-01",
-                "--quiet",
-            ],
+            ["list", "--project", "project", *flags, "--quiet"],
         )
         assert result.exit_code == EXIT_OK
-        assert "1 sessions" in result.stdout
-
-    def test_until_before_session_excludes_it(
-        self, runner: CliRunner, cli_app: typer.Typer, populated_home: Path,
-    ) -> None:
-        result = runner.invoke(
-            cli_app,
-            [
-                "list", "--project", "project",
-                "--until", "2026-04-01",
-                "--quiet",
-            ],
-        )
-        assert result.exit_code == EXIT_OK
-        assert "0 sessions" in result.stdout
-
-    def test_window_brackets_session(
-        self, runner: CliRunner, cli_app: typer.Typer, populated_home: Path,
-    ) -> None:
-        result = runner.invoke(
-            cli_app,
-            [
-                "list", "--project", "project",
-                "--since", "2026-04-01",
-                "--until", "2026-05-01",
-                "--quiet",
-            ],
-        )
-        assert result.exit_code == EXIT_OK
-        assert "1 sessions" in result.stdout
+        assert expected_count_str in result.stdout
 
 
 class TestErrors:

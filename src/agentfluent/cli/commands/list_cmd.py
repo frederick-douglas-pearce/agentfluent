@@ -112,47 +112,37 @@ def _find_or_exit(project_slug: str, config_dir: Path | None) -> ProjectInfo:
 
 
 def _list_sessions_table(
-    project_slug: str,
+    project: ProjectInfo,
+    sessions: list[SessionInfo],
     *,
-    config_dir: Path | None,
     verbose: bool,
     quiet: bool,
-    sessions_override: list[SessionInfo] | None = None,
 ) -> None:
     """Display sessions for a project as a Rich table."""
-    project = _find_or_exit(project_slug, config_dir)
-    sessions_list = (
-        sessions_override if sessions_override is not None else project.sessions
-    )
     if quiet:
-        console.print(f"Project {project.display_name}: {len(sessions_list)} sessions")
+        console.print(f"Project {project.display_name}: {len(sessions)} sessions")
         return
-    sessions = [(s, len(parse_session(s.path))) for s in sessions_list]
-    format_sessions_table(console, project.display_name, sessions, verbose=verbose)
+    rows = [(s, len(parse_session(s.path))) for s in sessions]
+    format_sessions_table(console, project.display_name, rows, verbose=verbose)
 
 
 def _list_sessions_json(
-    project_slug: str,
+    project: ProjectInfo,
+    sessions: list[SessionInfo],
     *,
-    config_dir: Path | None,
     quiet: bool,
-    sessions_override: list[SessionInfo] | None = None,
 ) -> None:
     """Output sessions for a project as JSON."""
-    project = _find_or_exit(project_slug, config_dir)
-    sessions_list = (
-        sessions_override if sessions_override is not None else project.sessions
-    )
     if quiet:
         payload: dict[str, object] = {
             "project": project.display_name,
-            "session_count": len(sessions_list),
+            "session_count": len(sessions),
         }
     else:
-        sessions = []
-        for s in sessions_list:
+        rows = []
+        for s in sessions:
             messages = parse_session(s.path)
-            sessions.append(
+            rows.append(
                 {
                     "filename": s.filename,
                     "size_bytes": s.size_bytes,
@@ -161,7 +151,7 @@ def _list_sessions_json(
                     "subagent_count": s.subagent_count,
                 }
             )
-        payload = {"project": project.display_name, "sessions": sessions}
+        payload = {"project": project.display_name, "sessions": rows}
     print(format_json_output("list-sessions", payload))
 
 
@@ -219,24 +209,20 @@ def list_cmd(
         format = "json"
     config_dir = ctx.obj.claude_config_dir if ctx.obj else None
     if project:
-        sessions_override: list[SessionInfo] | None = None
+        project_info = _find_or_exit(project, config_dir)
+        sessions = project_info.sessions
         if since is not None or until is not None:
             parsed_since, parsed_until = parse_time_window(
                 since, until, err_console=err_console,
             )
-            project_info = _find_or_exit(project, config_dir)
-            sessions_override = filter_sessions_by_time(
-                project_info.sessions, parsed_since, parsed_until,
+            sessions = filter_sessions_by_time(
+                sessions, parsed_since, parsed_until,
             )
         if format == "json":
-            _list_sessions_json(
-                project, config_dir=config_dir, quiet=quiet,
-                sessions_override=sessions_override,
-            )
+            _list_sessions_json(project_info, sessions, quiet=quiet)
         else:
             _list_sessions_table(
-                project, config_dir=config_dir, verbose=verbose, quiet=quiet,
-                sessions_override=sessions_override,
+                project_info, sessions, verbose=verbose, quiet=quiet,
             )
     else:
         if format == "json":
