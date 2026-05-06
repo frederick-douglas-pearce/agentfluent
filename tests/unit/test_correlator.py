@@ -725,3 +725,60 @@ class TestFileReworkRule:
         action = recs[0].action.lower()
         assert "architect" in action
         assert "tester" in action
+
+
+class TestReviewerCaughtRule:
+    """REVIEWER_CAUGHT -> per-agent ``target='subagent'`` recommendation."""
+
+    @staticmethod
+    def _signal(
+        agent_type: str = "architect",
+        finding_keywords: list[str] | None = None,
+        parent_acted: bool = True,
+    ) -> DiagnosticSignal:
+        kw = finding_keywords if finding_keywords is not None else [
+            "blocker", "issue", "must",
+        ]
+        return DiagnosticSignal(
+            signal_type=SignalType.REVIEWER_CAUGHT,
+            severity=Severity.INFO,
+            agent_type=agent_type,
+            invocation_id="toolu_review",
+            message=(
+                f"`{agent_type}` review surfaced {len(kw)} finding-keyword(s)"
+            ),
+            detail={
+                "finding_keywords": kw,
+                "parent_acted": parent_acted,
+                "response_length": 1000,
+                "files_mentioned": ["src/foo.py"],
+                "files_acted_on": ["src/foo.py"] if parent_acted else [],
+            },
+        )
+
+    def test_emits_subagent_target_per_agent(self) -> None:
+        recs = correlate([self._signal()])
+        assert len(recs) == 1
+        rec = recs[0]
+        assert rec.target == "subagent"
+        assert rec.agent_type == "architect"
+        assert rec.invocation_id == "toolu_review"
+        assert rec.signal_types == [SignalType.REVIEWER_CAUGHT]
+
+    def test_message_carries_quality_prefix(self) -> None:
+        recs = correlate([self._signal()])
+        assert "[quality]" in recs[0].message
+
+    def test_parent_acted_branch_routes_more_sessions(self) -> None:
+        recs = correlate([self._signal(parent_acted=True)])
+        action = recs[0].action.lower()
+        assert "more sessions" in action or "routing" in action
+
+    def test_parent_did_not_act_branch_suggests_investigation(self) -> None:
+        recs = correlate([self._signal(parent_acted=False)])
+        action = recs[0].action.lower()
+        assert "investigate" in action or "follow-through" in action
+
+    def test_agent_name_appears_in_action(self) -> None:
+        recs = correlate([self._signal(agent_type="code-reviewer")])
+        assert "code-reviewer" in recs[0].action

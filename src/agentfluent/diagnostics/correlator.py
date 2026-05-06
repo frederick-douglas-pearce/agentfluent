@@ -7,7 +7,8 @@ for extensibility.
 
 from __future__ import annotations
 
-from typing import Protocol
+from abc import ABC, abstractmethod
+from typing import ClassVar, Protocol
 
 from agentfluent.agents.models import is_builtin_agent
 from agentfluent.config.models import AgentConfig, Severity
@@ -602,40 +603,48 @@ class McpAuditRule:
         )
 
 
-class UserCorrectionRule:
-    """USER_CORRECTION -> recommend a review-style subagent.
+class _QualityRule(ABC):
+    """Shared base for cross-cutting and per-agent quality-axis rules.
 
-    Cross-cutting (``agent_type=None`` per ``quality_signals``), so this
-    rule does not branch on built-in vs custom agents — there is no
-    specific agent config to look up. Pattern follows ``McpAuditRule``,
-    which is also a cross-cutting rule with no ``_builtin_target`` /
-    ``_builtin_concern`` attributes.
+    Three concrete rules now follow this shape (``UserCorrectionRule``,
+    ``FileReworkRule``, ``ReviewerCaughtRule``); the base eliminates
+    ~30 lines × 3 of identical ``DiagnosticRecommendation`` boilerplate
+    and normalizes the message format (``f"[quality] {obs}. {reason}
+    {action}"``) across all three.
 
     The ``[quality]`` prefix on ``message`` is a transitional measure
     until #273 renders axis labels from ``primary_axis`` via the
-    formatter; #273's AC includes removing this hardcoded prefix once
-    the formatter handles axis attribution uniformly.
+    formatter; #273's AC includes removing the hardcoded prefix from
+    every concrete subclass once the formatter handles axis attribution
+    uniformly.
+
+    Subclasses must set ``SIGNAL_TYPE`` and override
+    ``_observation_reason_action``. ``TARGET`` defaults to ``"subagent"``
+    (the right answer for all three current rules); future quality
+    rules that need a different config surface (e.g., ``"prompt"``) can
+    override the class variable.
     """
 
+    SIGNAL_TYPE: ClassVar[SignalType]
+    TARGET: ClassVar[str] = "subagent"
+
     def matches(self, signal: DiagnosticSignal, config: AgentConfig | None) -> bool:
-        return signal.signal_type == SignalType.USER_CORRECTION
+        return signal.signal_type == self.SIGNAL_TYPE
+
+    @abstractmethod
+    def _observation_reason_action(
+        self, signal: DiagnosticSignal,
+    ) -> tuple[str, str, str]:
+        """Return ``(observation, reason, action)`` for the recommendation."""
 
     def recommend(
         self, signal: DiagnosticSignal, config: AgentConfig | None,
     ) -> DiagnosticRecommendation:
-        observation = signal.message
-        reason = (
-            "Mid-flight corrections are evidence the parent would benefit "
-            "from independent review before acting."
-        )
-        action = (
-            "Consider delegating to a review-style subagent (architect, "
-            "code-reviewer) for design checks before implementation."
-        )
+        observation, reason, action = self._observation_reason_action(signal)
         return DiagnosticRecommendation(
-            target="subagent",
+            target=self.TARGET,
             severity=signal.severity,
-            message=f"[quality] {observation} {reason} {action}",
+            message=f"[quality] {observation}. {reason} {action}",
             observation=observation,
             reason=reason,
             action=action,
@@ -646,26 +655,42 @@ class UserCorrectionRule:
         )
 
 
-class FileReworkRule:
-    """FILE_REWORK -> recommend a review-style subagent.
+class UserCorrectionRule(_QualityRule):
+    """USER_CORRECTION -> recommend a review-style subagent.
 
-    Cross-cutting (``agent_type=None``), shape mirrors ``UserCorrectionRule``.
-    Recommendation copy branches on ``post_completion_edits``: edits that
-    happened after "completion" language (a stronger signal — the work was
-    declared done before further rework) get a different remediation than
-    edits that may reflect ordinary iterative development.
-
-    The ``[quality]`` prefix is transitional pending #273 (axis labels
-    rendered uniformly from ``primary_axis``).
+    Cross-cutting (``agent_type=None`` on the source signal). The
+    recommendation copy is constant — it does not branch on detail
+    keys.
     """
 
-    def matches(self, signal: DiagnosticSignal, config: AgentConfig | None) -> bool:
-        return signal.signal_type == SignalType.FILE_REWORK
+    SIGNAL_TYPE = SignalType.USER_CORRECTION
 
-    def recommend(
-        self, signal: DiagnosticSignal, config: AgentConfig | None,
-    ) -> DiagnosticRecommendation:
-        observation = signal.message
+    def _observation_reason_action(
+        self, signal: DiagnosticSignal,
+    ) -> tuple[str, str, str]:
+        return (
+            signal.message,
+            "Mid-flight corrections are evidence the parent would benefit "
+            "from independent review before acting.",
+            "Consider delegating to a review-style subagent (architect, "
+            "code-reviewer) for design checks before implementation.",
+        )
+
+
+class FileReworkRule(_QualityRule):
+    """FILE_REWORK -> recommend a review-style subagent.
+
+    Cross-cutting (``agent_type=None``). Recommendation copy branches
+    on ``post_completion_edits``: edits after the work was declared
+    complete (stronger signal) get distinct remediation from ordinary
+    iterative-development rework.
+    """
+
+    SIGNAL_TYPE = SignalType.FILE_REWORK
+
+    def _observation_reason_action(
+        self, signal: DiagnosticSignal,
+    ) -> tuple[str, str, str]:
         post_completion = signal.detail.get("post_completion_edits", 0)
         if isinstance(post_completion, int) and post_completion > 0:
             reason = (
@@ -687,18 +712,53 @@ class FileReworkRule:
                 "Consider an architect subagent for design review, or split "
                 "the change into smaller verifiable steps."
             )
-        return DiagnosticRecommendation(
-            target="subagent",
-            severity=signal.severity,
-            message=f"[quality] {observation}. {reason} {action}",
-            observation=observation,
-            reason=reason,
-            action=action,
-            agent_type=signal.agent_type,
-            invocation_id=signal.invocation_id,
-            config_file="",
-            signal_types=[signal.signal_type],
+        return signal.message, reason, action
+
+
+class ReviewerCaughtRule(_QualityRule):
+    """REVIEWER_CAUGHT -> route more sessions through this review agent.
+
+    Per-agent (``agent_type=invocation.agent_type`` on the source signal),
+    so aggregation groups findings under each named review agent rather
+    than lumping them into the global bucket. Recommendation copy
+    branches on ``parent_acted``: when the parent followed up with
+    edits to the reviewed files, the review demonstrably had impact;
+    when not, the review may not be actionable or is being ignored.
+    """
+
+    SIGNAL_TYPE = SignalType.REVIEWER_CAUGHT
+
+    def _observation_reason_action(
+        self, signal: DiagnosticSignal,
+    ) -> tuple[str, str, str]:
+        agent_type = signal.agent_type or "review-style subagent"
+        keywords = signal.detail.get("finding_keywords", [])
+        finding_count = len(keywords) if isinstance(keywords, list) else 0
+        parent_acted = signal.detail.get("parent_acted", False)
+        observation = (
+            f"`{agent_type}` produced {finding_count} substantive "
+            "review finding(s) in this session"
         )
+        if parent_acted:
+            reason = (
+                "and the parent acted on them — direct evidence the "
+                "review caught real issues."
+            )
+            action = (
+                f"Consider routing more sessions through `{agent_type}` "
+                "for consistent design / quality review."
+            )
+        else:
+            reason = (
+                "but the parent's subsequent edits did not appear to "
+                "address them."
+            )
+            action = (
+                f"Investigate whether `{agent_type}`'s findings are "
+                "actionable, or whether the parent prompt should require "
+                "follow-through on review feedback."
+            )
+        return observation, reason, action
 
 
 RULES: list[CorrelationRule] = [
@@ -714,6 +774,7 @@ RULES: list[CorrelationRule] = [
     McpAuditRule(),
     UserCorrectionRule(),
     FileReworkRule(),
+    ReviewerCaughtRule(),
 ]
 
 
