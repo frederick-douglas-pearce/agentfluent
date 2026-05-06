@@ -201,10 +201,33 @@ class AggregatedRecommendation(BaseModel):
     priority_score: float = 0.0
     """Composite priority score (#172). Combines severity, occurrence
     count, cost impact (for ``target='model'`` MODEL_MISMATCH recs),
-    and trace-evidence boost. Computed in
+    trace-evidence boost, and (#272) a quality-evidence boost when any
+    contributing signal is quality-typed. Computed in
     ``aggregation.aggregate_recommendations``; the default Recommendations
     table is sorted by this value descending. See ``aggregation.py``
     module docstring for the formula and weight rationale."""
+
+    axis_scores: dict[str, float] = Field(
+        default_factory=lambda: {
+            Axis.COST.value: 0.0,
+            Axis.SPEED.value: 0.0,
+            Axis.QUALITY.value: 0.0,
+        },
+    )
+    """Per-axis evidence scores (#272). Keys are bare axis strings
+    (``"cost"``, ``"speed"``, ``"quality"``) for stable JSON
+    serialization; values are summed per-signal contributions per D021's
+    annotations approach. ``primary_axis`` is derived from this map with
+    a deterministic tiebreaker (D027). Drives axis labels in CLI/JSON
+    output (#273) without changing the sort key (``priority_score``)."""
+
+    primary_axis: str = Axis.COST.value
+    """Axis that triggered this recommendation (#272). One of
+    ``"cost"``, ``"speed"``, ``"quality"``. Derived from ``axis_scores``
+    using the D027 tiebreaker (``quality > speed > cost``) so labels are
+    stable across runs and Python versions. Default ``"cost"`` matches
+    the v0.5 cost/speed-only baseline so deserialized pre-v0.6 envelopes
+    parse without surprises."""
 
 
 class DelegationSuggestion(BaseModel):
