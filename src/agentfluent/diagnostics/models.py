@@ -17,6 +17,23 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field
 from agentfluent.config.models import Severity
 
 
+class Axis(StrEnum):
+    """Diagnostics axis classification for signals and recommendations.
+
+    Each ``SignalType`` maps to exactly one ``Axis`` via
+    ``aggregation.SIGNAL_AXIS_MAP`` (per D022). The axis labels what
+    dimension of agent improvement a recommendation addresses:
+
+    - ``COST`` — token spend, model selection, MCP server hygiene
+    - ``SPEED`` — duration, retry density, error sequences, operational health
+    - ``QUALITY`` — user corrections, file rework, reviewer-caught findings
+    """
+
+    COST = "cost"
+    SPEED = "speed"
+    QUALITY = "quality"
+
+
 class SignalType(StrEnum):
     """Types of behavior signals detected in agent invocations.
 
@@ -32,6 +49,9 @@ class SignalType(StrEnum):
 
     MCP audit signals (configured-vs-observed MCP server usage):
     - `MCP_UNUSED_SERVER`, `MCP_MISSING_SERVER`
+
+    Quality signals (extracted from parent-thread message patterns):
+    - `USER_CORRECTION`, `FILE_REWORK`, `REVIEWER_CAUGHT`
     """
 
     ERROR_PATTERN = "error_pattern"
@@ -44,6 +64,9 @@ class SignalType(StrEnum):
     MODEL_MISMATCH = "model_mismatch"
     MCP_UNUSED_SERVER = "mcp_unused_server"
     MCP_MISSING_SERVER = "mcp_missing_server"
+    USER_CORRECTION = "user_correction"
+    FILE_REWORK = "file_rework"
+    REVIEWER_CAUGHT = "reviewer_caught"
 
 
 # Signal types emitted by the trace-level extractor. Used by the dedup

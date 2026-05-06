@@ -51,6 +51,7 @@ from agentfluent.diagnostics.models import (
     SignalType,
 )
 from agentfluent.diagnostics.parent_workload import build_offload_candidates
+from agentfluent.diagnostics.quality_signals import extract_quality_signals
 from agentfluent.diagnostics.signals import extract_signals
 from agentfluent.diagnostics.trace_signals import extract_trace_signals
 
@@ -256,6 +257,16 @@ def run_diagnostics(
                     sessions_analyzed=len(invocations) or 1,
                 ),
             )
+
+    # Quality signals (#268). Parent-thread observations — corrections,
+    # rework, reviewer-caught findings — that drive the third diagnostics
+    # axis. Quiet-skip when the caller didn't pass parent_messages so
+    # programmatic consumers without message context don't get a noisy
+    # warning; the CLI always passes parent_messages.
+    if parent_messages is not None:
+        signals.extend(extract_quality_signals(parent_messages, invocations))
+    else:
+        logger.debug("quality signals skipped: parent_messages=None")
 
     correlated_pairs = correlate(signals, configs_by_name)
     recommendations = [rec for _, rec in correlated_pairs]

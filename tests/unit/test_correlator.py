@@ -618,3 +618,60 @@ class TestInvocationIdPropagation:
         )
         recs = correlate([sig])
         assert recs and recs[0].invocation_id is None
+
+
+class TestUserCorrectionRule:
+    """USER_CORRECTION (cross-cutting quality signal) -> ``target='subagent'``
+    recommendation suggesting a review-style subagent."""
+
+    @staticmethod
+    def _user_correction_signal() -> DiagnosticSignal:
+        return DiagnosticSignal(
+            signal_type=SignalType.USER_CORRECTION,
+            severity=Severity.WARNING,
+            agent_type=None,
+            invocation_id=None,
+            message="User correction in parent thread: no, that's wrong",
+            detail={
+                "correction_text": "no, that's wrong",
+                "matched_pattern": "that's wrong",
+                "matched_category": "strong",
+                "preceding_assistant_action": "write_tool",
+                "session_correction_rate": 0.25,
+                "total_user_messages": 4,
+                "total_corrections": 1,
+            },
+        )
+
+    def test_emits_subagent_target(self) -> None:
+        recs = correlate([self._user_correction_signal()])
+        assert len(recs) == 1
+        rec = recs[0]
+        assert rec.target == "subagent"
+        assert rec.severity == Severity.WARNING
+        assert rec.agent_type is None
+        assert rec.invocation_id is None
+        assert rec.signal_types == [SignalType.USER_CORRECTION]
+
+    def test_message_carries_quality_prefix(self) -> None:
+        recs = correlate([self._user_correction_signal()])
+        # Transitional [quality] prefix until #273 renders axis labels
+        # via the formatter (architect review on #269, suggestion #5).
+        assert "[quality]" in recs[0].message
+
+    def test_recommends_review_style_subagent(self) -> None:
+        recs = correlate([self._user_correction_signal()])
+        action = recs[0].action.lower()
+        assert "architect" in action or "code-reviewer" in action
+
+    def test_does_not_match_other_signal_types(self) -> None:
+        # Ensure the rule's matches() doesn't catch unrelated signals.
+        unrelated = DiagnosticSignal(
+            signal_type=SignalType.TOKEN_OUTLIER,
+            severity=Severity.WARNING,
+            agent_type="pm",
+            message="High token usage.",
+            detail={"excess_iqrs": 3.0},
+        )
+        recs = correlate([unrelated])
+        assert all(rec.target != "subagent" for rec in recs)
