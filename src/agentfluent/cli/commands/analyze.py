@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -9,13 +10,15 @@ import typer
 from rich.console import Console
 
 from agentfluent.analytics.pipeline import AnalysisResult, analyze_sessions
+from agentfluent.cli._time_args import parse_time_window
 from agentfluent.cli.exit_codes import EXIT_NO_DATA, EXIT_USER_ERROR
 from agentfluent.cli.formatters.helpers import format_cost, format_tokens
 from agentfluent.cli.formatters.json_output import format_json_output
 from agentfluent.cli.formatters.table import format_analysis_table
 from agentfluent.config.mcp_discovery import resolve_project_disk_path
 from agentfluent.config.models import SEVERITY_RANK, Severity
-from agentfluent.core.discovery import find_project
+from agentfluent.core.discovery import SessionInfo, find_project
+from agentfluent.core.filtering import filter_sessions_by_time
 from agentfluent.core.paths import projects_dir_for
 from agentfluent.diagnostics import run_diagnostics
 from agentfluent.diagnostics.delegation import (
@@ -23,6 +26,40 @@ from agentfluent.diagnostics.delegation import (
     DEFAULT_MIN_SIMILARITY,
     SKLEARN_AVAILABLE,
 )
+
+
+def _apply_time_window(
+    session_infos: list[SessionInfo],
+    parsed_since: datetime | None,
+    parsed_until: datetime | None,
+    *,
+    verbose: bool,
+    err_console: Console,
+) -> list[SessionInfo]:
+    """Filter to ``[parsed_since, parsed_until)``; raise ``EXIT_NO_DATA`` on empty.
+
+    No-op when both bounds are ``None``. Verbose mode prints a dim
+    stderr note with resolved bounds + in-window/total counts.
+    """
+    if parsed_since is None and parsed_until is None:
+        return session_infos
+    pre_filter_count = len(session_infos)
+    filtered = filter_sessions_by_time(session_infos, parsed_since, parsed_until)
+    if not filtered:
+        err_console.print(
+            "[yellow]No sessions found in the specified time window.[/yellow] "
+            "Use [bold]agentfluent list --project P --since X --until Y[/bold] "
+            "to preview which sessions fall in a window.",
+        )
+        raise typer.Exit(code=EXIT_NO_DATA)
+    if verbose:
+        since_label = parsed_since.isoformat() if parsed_since else "—"
+        until_label = parsed_until.isoformat() if parsed_until else "—"
+        err_console.print(
+            f"[dim]Filtering: sessions from {since_label} to {until_label} "
+            f"({len(filtered)} of {pre_filter_count} sessions)[/dim]",
+        )
+    return filtered
 
 
 def _apply_min_severity(result: AnalysisResult, min_severity: Severity) -> None:
@@ -54,6 +91,12 @@ Examples:
 
   agentfluent analyze --project codefluent --latest 5 --diagnostics
       Analyze the 5 most recent sessions with behavior diagnostics.
+
+  agentfluent analyze --project codefluent --since 7d
+      Analyze sessions whose first message landed in the last 7 days.
+
+  agentfluent analyze --project codefluent --since 2026-05-01 --until 2026-05-08
+      Analyze sessions in the half-open interval [2026-05-01, 2026-05-08).
 
   agentfluent analyze --project codefluent --format json | jq '.data.token_metrics.total_cost'
       Extract total cost programmatically.
@@ -124,6 +167,24 @@ def analyze(
         "-n",
         help="Analyze only the N most recent sessions.",
     ),
+    since: Optional[str] = typer.Option(  # noqa: UP007, UP045
+        None,
+        "--since",
+        help=(
+            "Restrict to sessions whose first message landed at or after "
+            "this time. Accepts ISO 8601, date-only, or relative (7d, "
+            "12h, 30m). Mutually exclusive with --session."
+        ),
+    ),
+    until: Optional[str] = typer.Option(  # noqa: UP007, UP045
+        None,
+        "--until",
+        help=(
+            "Restrict to sessions whose first message landed strictly "
+            "before this time (half-open interval). Same formats as "
+            "--since. Mutually exclusive with --session."
+        ),
+    ),
     diagnostics: bool = typer.Option(
         True,
         "--diagnostics/--no-diagnostics",
@@ -188,6 +249,17 @@ def analyze(
     if verbose and quiet:
         raise typer.BadParameter("--verbose and --quiet are mutually exclusive")
 
+    if session is not None and (since is not None or until is not None):
+        err_console.print(
+            "[red]Error:[/red] --since/--until cannot be combined with "
+            "--session (which selects a specific file).",
+        )
+        raise typer.Exit(code=EXIT_USER_ERROR)
+
+    parsed_since, parsed_until = parse_time_window(
+        since, until, err_console=err_console,
+    )
+
     if json_flag:
         format = "json"
 
@@ -223,6 +295,11 @@ def analyze(
         if not session_infos:
             err_console.print(f"[red]Session not found:[/red] {session}")
             raise typer.Exit(code=EXIT_USER_ERROR)
+
+    session_infos = _apply_time_window(
+        session_infos, parsed_since, parsed_until,
+        verbose=verbose, err_console=err_console,
+    )
 
     if latest is not None and latest > 0:
         session_infos = session_infos[:latest]
