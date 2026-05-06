@@ -1,15 +1,8 @@
-"""Session-level filter utilities (#301).
+"""Date-range filter for ``SessionInfo`` lists.
 
-Single source of truth for date-range filtering of ``SessionInfo``
-lists, consumed by ``list --since/--until`` (#296), ``analyze
---since/--until`` (#297), and forward-compatibly by per-session
-diagnostics (#201, deferred to v0.7). Centralizing the filter here
-prevents drift between three call sites that would otherwise each
-reimplement timezone normalization, half-open interval semantics, and
-the missing-timestamp policy.
-
-Pure module: no I/O, no logging, no exceptions for empty results. The
-caller decides what to render for "no sessions matched."
+Single source of truth for timezone normalization, half-open interval
+semantics, and the missing-timestamp policy used by every CLI surface
+that accepts ``--since`` / ``--until``.
 """
 
 from __future__ import annotations
@@ -26,24 +19,23 @@ def filter_sessions_by_time(
 ) -> list[SessionInfo]:
     """Return ``sessions`` whose ``first_message_timestamp`` falls in ``[since, until)``.
 
-    Half-open interval per D024/D025 and the v0.6 PRD: a session is
-    included when ``since <= first_message_timestamp < until``. ``None``
-    bounds are open-ended.
+    Half-open interval per D024/D025: a session is included when
+    ``since <= first_message_timestamp < until``. ``None`` bounds are
+    open-ended.
 
     **Missing-timestamp policy.** Sessions where
-    ``first_message_timestamp is None`` (empty file, unreadable file,
-    no parseable timestamps) are excluded when *either* bound is set —
-    a session with no derivable start time cannot be placed inside or
-    outside a window safely, and silently including it would distort
-    the filtered result. With both bounds ``None`` (the identity case),
-    the input list is returned unchanged including any None-timestamp
-    sessions, so callers that don't filter pay no policy cost.
+    ``first_message_timestamp is None`` are excluded when *either* bound
+    is set — a session with no derivable start time cannot be placed
+    inside or outside a window safely, and silently including it would
+    distort the filtered result. With both bounds ``None`` the input
+    list is returned unchanged (identity, not a copy — caller must not
+    mutate) so unfiltered callers pay no policy cost.
 
     **Timezone normalization.** All comparisons happen in UTC. Naive
-    datetimes (no ``tzinfo``) are assumed to be UTC — matching the
-    JSONL ``timestamp`` field's ISO-8601-with-Z format and
-    ``timeutil.parse_datetime``'s post-conversion contract — so mixed
-    aware/naive inputs do not raise ``TypeError``.
+    datetimes are assumed to be UTC — matching the JSONL ``timestamp``
+    field's ISO-8601-with-Z format. Note this differs from
+    ``timeutil.parse_datetime``, which assumes naive CLI input is local
+    time; both are correct for their respective contracts.
     """
     if since is None and until is None:
         return sessions

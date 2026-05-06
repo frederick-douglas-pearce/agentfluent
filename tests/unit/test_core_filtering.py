@@ -16,10 +16,7 @@ def _session(
     name: str,
     ts: datetime | None,
 ) -> SessionInfo:
-    """Build a minimal ``SessionInfo`` with the given first-message timestamp.
-
-    ``size_bytes`` and ``modified`` are required fields but irrelevant
-    to the filter logic; they get fixed dummy values."""
+    """Build a minimal ``SessionInfo`` for filter tests."""
     return SessionInfo(
         filename=f"{name}.jsonl",
         path=Path(f"/tmp/{name}.jsonl"),
@@ -45,7 +42,6 @@ class TestIdentityBehavior:
         assert result == sessions
 
     def test_no_bounds_includes_none_timestamp_sessions(self) -> None:
-        # None-timestamp sessions are only excluded when a bound is set.
         sessions = [_session("a", None), _session("b", _BASE)]
         result = filter_sessions_by_time(sessions)
         assert result == sessions
@@ -79,10 +75,9 @@ class TestUntilOnly:
     """``until`` set, ``since=None`` → strict ``first_message_timestamp < until``."""
 
     def test_excludes_session_at_until_boundary(self) -> None:
-        # Half-open: timestamp == until is OUT.
         sessions = [
             _session("before", _BASE - timedelta(minutes=1)),
-            _session("at_boundary", _BASE),
+            _session("at_boundary", _BASE),  # excluded: half-open
             _session("after", _BASE + timedelta(hours=1)),
         ]
         result = filter_sessions_by_time(sessions, until=_BASE)
