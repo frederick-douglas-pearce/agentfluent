@@ -52,6 +52,7 @@ from agentfluent.diagnostics.models import (
     DiagnosticRecommendation,
     DiagnosticSignal,
     SignalType,
+    zero_axis_scores,
 )
 
 # Single-axis classification per D022. Every ``SignalType`` maps to
@@ -197,12 +198,7 @@ def _compute_priority_score(
     has_trace_evidence: bool,
     quality_evidence_factor: float = 0.0,
 ) -> float:
-    """Composite score per the formula in this module's docstring.
-
-    ``quality_evidence_factor`` defaults to ``0.0`` so callers from
-    before #272 (none in-tree, but defensive) and any test fixture that
-    omits it produce the v0.5 score unchanged.
-    """
+    """Composite score per the formula in this module's docstring."""
     return (
         _SEVERITY_RANK[severity] * _PRIORITY_WEIGHT_SEVERITY
         + math.log1p(count) * _PRIORITY_WEIGHT_COUNT
@@ -213,15 +209,30 @@ def _compute_priority_score(
 
 
 def _signal_axis_contribution(signal: DiagnosticSignal) -> float:
-    """Per-signal contribution to its axis bucket in ``axis_scores``.
+    """Per-signal contribution to its axis bucket — Tier 1 = severity rank.
 
-    Tier 1 (#272) uses the severity rank as the single contribution
-    factor — count of signals naturally accumulates as the loop iterates.
-    Calibration deferred to #274; the function is co-located with
-    ``_compute_priority_score`` and shares ``_SEVERITY_RANK`` so weight
-    constants cannot drift between the two scoring entry points.
+    Calibration of the per-signal factor is deferred to #274.
     """
     return float(_SEVERITY_RANK[signal.severity])
+
+
+def _compute_axis_attribution(
+    signals: list[DiagnosticSignal],
+) -> tuple[dict[str, float], str]:
+    """Sum per-signal axis contributions and resolve ``primary_axis``.
+
+    Returns ``(axis_scores, primary_axis)``. ``axis_scores`` keys are
+    bare axis strings for stable JSON serialization. ``primary_axis``
+    breaks ties via D027 (quality > speed > cost).
+    """
+    axis_scores = zero_axis_scores()
+    for sig in signals:
+        axis = SIGNAL_AXIS_MAP[sig.signal_type]
+        axis_scores[axis.value] += _signal_axis_contribution(sig)
+    primary_axis = max(
+        _AXIS_TIEBREAKER, key=lambda a: axis_scores[a.value],
+    ).value
+    return axis_scores, primary_axis
 
 
 def aggregate_recommendations(
@@ -251,24 +262,16 @@ def aggregate_recommendations(
             sig.signal_type in TRACE_SIGNAL_TYPES for sig in signals
         )
         summed_savings = _summed_savings_usd(signals)
-
-        axis_scores: dict[str, float] = {a.value: 0.0 for a in Axis}
-        has_quality_evidence = False
-        for sig in signals:
-            axis = SIGNAL_AXIS_MAP[sig.signal_type]
-            axis_scores[axis.value] += _signal_axis_contribution(sig)
-            if axis is Axis.QUALITY:
-                has_quality_evidence = True
-        primary_axis = max(
-            _AXIS_TIEBREAKER, key=lambda a: axis_scores[a.value],
-        ).value
-
+        axis_scores, primary_axis = _compute_axis_attribution(signals)
+        quality_evidence_factor = (
+            1.0 if axis_scores[Axis.QUALITY.value] > 0.0 else 0.0
+        )
         priority_score = _compute_priority_score(
             severity,
             count,
             summed_savings,
             has_trace_evidence,
-            quality_evidence_factor=1.0 if has_quality_evidence else 0.0,
+            quality_evidence_factor=quality_evidence_factor,
         )
 
         aggregated.append(

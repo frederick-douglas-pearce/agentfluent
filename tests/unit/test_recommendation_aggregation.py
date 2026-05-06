@@ -8,6 +8,8 @@ remain available for verbose drill-down.
 
 import math
 
+import pytest
+
 from agentfluent.config.models import SEVERITY_RANK, Severity
 from agentfluent.diagnostics.aggregation import (
     SIGNAL_AXIS_MAP,
@@ -596,8 +598,8 @@ class TestMultiAxisScoring:
         aggregated = aggregate_recommendations([cost_pair, quality_pair])
         by_agent = {a.agent_type: a for a in aggregated}
         assert by_agent["pm"].priority_score > by_agent["explore"].priority_score
-        # The quality-axis row carries the +5.0 boost.
-        assert by_agent["pm"].priority_score - by_agent["explore"].priority_score == 5.0
+        delta = by_agent["pm"].priority_score - by_agent["explore"].priority_score
+        assert delta == pytest.approx(5.0)
 
     def test_axis_scores_keys_are_bare_strings(self) -> None:
         # JSON-serializable: dict keys must be plain ``str`` for
@@ -623,23 +625,39 @@ class TestMultiAxisScoring:
         assert agg.axis_scores == {"cost": 0.0, "speed": 0.0, "quality": 0.0}
         assert agg.primary_axis == "cost"
 
-    def test_tiebreaker_quality_wins_equal_scores(self) -> None:
-        # When axis_scores tie exactly, primary_axis resolves to quality
-        # per D027. Construct one quality + one cost signal in a single
-        # aggregated row at identical severity → identical axis contribution.
+    @pytest.mark.parametrize(
+        ("sig_a_type", "sig_b_type", "expected_primary"),
+        [
+            # D027: quality wins over cost on equal scores.
+            (SignalType.TOKEN_OUTLIER, SignalType.USER_CORRECTION, "quality"),
+            # D027: quality also wins over speed.
+            (SignalType.RETRY_LOOP, SignalType.USER_CORRECTION, "quality"),
+            # D027: speed beats cost when no quality evidence.
+            (SignalType.TOKEN_OUTLIER, SignalType.RETRY_LOOP, "speed"),
+        ],
+    )
+    def test_tiebreaker_resolves_per_d027(
+        self,
+        sig_a_type: SignalType,
+        sig_b_type: SignalType,
+        expected_primary: str,
+    ) -> None:
+        # Two signals at identical severity contribute equal axis scores,
+        # so primary_axis is decided by the D027 tiebreaker tuple
+        # (quality > speed > cost). One aggregated row carries both signals.
         agent = "explore"
-        cost_sig = DiagnosticSignal(
-            signal_type=SignalType.TOKEN_OUTLIER,
+        sig_a = DiagnosticSignal(
+            signal_type=sig_a_type,
             severity=Severity.WARNING,
             agent_type=agent,
-            message="cost",
+            message="a",
             detail={},
         )
-        quality_sig = DiagnosticSignal(
-            signal_type=SignalType.USER_CORRECTION,
+        sig_b = DiagnosticSignal(
+            signal_type=sig_b_type,
             severity=Severity.WARNING,
             agent_type=agent,
-            message="quality",
+            message="b",
             detail={},
         )
         rec_template = DiagnosticRecommendation(
@@ -647,46 +665,13 @@ class TestMultiAxisScoring:
             severity=Severity.WARNING,
             message="tied",
             agent_type=agent,
-            signal_types=[SignalType.TOKEN_OUTLIER, SignalType.USER_CORRECTION],
+            signal_types=[sig_a_type, sig_b_type],
         )
         aggregated = aggregate_recommendations(
-            [(cost_sig, rec_template), (quality_sig, rec_template)],
+            [(sig_a, rec_template), (sig_b, rec_template)],
         )
         assert len(aggregated) == 1
-        # Equal severity → equal axis contributions.
-        assert aggregated[0].axis_scores["cost"] == aggregated[0].axis_scores["quality"]
-        # Tiebreaker resolves to quality.
-        assert aggregated[0].primary_axis == "quality"
-
-    def test_tiebreaker_speed_wins_over_cost(self) -> None:
-        # Verify the second tiebreaker step: speed beats cost on equal
-        # scores (per ``_AXIS_TIEBREAKER`` order).
-        agent = "explore"
-        cost_sig = DiagnosticSignal(
-            signal_type=SignalType.TOKEN_OUTLIER,
-            severity=Severity.WARNING,
-            agent_type=agent,
-            message="cost",
-            detail={},
-        )
-        speed_sig = DiagnosticSignal(
-            signal_type=SignalType.RETRY_LOOP,
-            severity=Severity.WARNING,
-            agent_type=agent,
-            message="speed",
-            detail={},
-        )
-        rec_template = DiagnosticRecommendation(
-            target="prompt",
-            severity=Severity.WARNING,
-            message="tied",
-            agent_type=agent,
-            signal_types=[SignalType.TOKEN_OUTLIER, SignalType.RETRY_LOOP],
-        )
-        aggregated = aggregate_recommendations(
-            [(cost_sig, rec_template), (speed_sig, rec_template)],
-        )
-        assert aggregated[0].primary_axis == "speed"
+        assert aggregated[0].primary_axis == expected_primary
 
     def test_quality_recommendation_surfaces_above_cost_in_sort(self) -> None:
         # Closes the v0.5 under-recommendation gap: a pure-quality WARNING

@@ -34,6 +34,16 @@ class Axis(StrEnum):
     QUALITY = "quality"
 
 
+def zero_axis_scores() -> dict[str, float]:
+    """Build a zero-initialized ``axis_scores`` dict keyed by ``Axis`` values.
+
+    Shared default for ``AggregatedRecommendation.axis_scores`` and the
+    accumulator in ``aggregation._compute_axis_attribution`` so adding a
+    new ``Axis`` member is a one-line change.
+    """
+    return {a.value: 0.0 for a in Axis}
+
+
 class SignalType(StrEnum):
     """Types of behavior signals detected in agent invocations.
 
@@ -207,13 +217,7 @@ class AggregatedRecommendation(BaseModel):
     table is sorted by this value descending. See ``aggregation.py``
     module docstring for the formula and weight rationale."""
 
-    axis_scores: dict[str, float] = Field(
-        default_factory=lambda: {
-            Axis.COST.value: 0.0,
-            Axis.SPEED.value: 0.0,
-            Axis.QUALITY.value: 0.0,
-        },
-    )
+    axis_scores: dict[str, float] = Field(default_factory=zero_axis_scores)
     """Per-axis evidence scores (#272). Keys are bare axis strings
     (``"cost"``, ``"speed"``, ``"quality"``) for stable JSON
     serialization; values are summed per-signal contributions per D021's
