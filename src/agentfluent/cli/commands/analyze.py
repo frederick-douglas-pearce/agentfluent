@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -16,7 +17,7 @@ from agentfluent.cli.formatters.json_output import format_json_output
 from agentfluent.cli.formatters.table import format_analysis_table
 from agentfluent.config.mcp_discovery import resolve_project_disk_path
 from agentfluent.config.models import SEVERITY_RANK, Severity
-from agentfluent.core.discovery import find_project
+from agentfluent.core.discovery import SessionInfo, find_project
 from agentfluent.core.filtering import filter_sessions_by_time
 from agentfluent.core.paths import projects_dir_for
 from agentfluent.diagnostics import run_diagnostics
@@ -25,6 +26,40 @@ from agentfluent.diagnostics.delegation import (
     DEFAULT_MIN_SIMILARITY,
     SKLEARN_AVAILABLE,
 )
+
+
+def _apply_time_window(
+    session_infos: list[SessionInfo],
+    parsed_since: datetime | None,
+    parsed_until: datetime | None,
+    *,
+    verbose: bool,
+    err_console: Console,
+) -> list[SessionInfo]:
+    """Filter to ``[parsed_since, parsed_until)``; raise ``EXIT_NO_DATA`` on empty.
+
+    No-op when both bounds are ``None``. Verbose mode prints a dim
+    stderr note with resolved bounds + in-window/total counts.
+    """
+    if parsed_since is None and parsed_until is None:
+        return session_infos
+    pre_filter_count = len(session_infos)
+    filtered = filter_sessions_by_time(session_infos, parsed_since, parsed_until)
+    if not filtered:
+        err_console.print(
+            "[yellow]No sessions found in the specified time window.[/yellow] "
+            "Use [bold]agentfluent list --project P --since X --until Y[/bold] "
+            "to preview which sessions fall in a window.",
+        )
+        raise typer.Exit(code=EXIT_NO_DATA)
+    if verbose:
+        since_label = parsed_since.isoformat() if parsed_since else "—"
+        until_label = parsed_until.isoformat() if parsed_until else "—"
+        err_console.print(
+            f"[dim]Filtering: sessions from {since_label} to {until_label} "
+            f"({len(filtered)} of {pre_filter_count} sessions)[/dim]",
+        )
+    return filtered
 
 
 def _apply_min_severity(result: AnalysisResult, min_severity: Severity) -> None:
@@ -261,25 +296,10 @@ def analyze(
             err_console.print(f"[red]Session not found:[/red] {session}")
             raise typer.Exit(code=EXIT_USER_ERROR)
 
-    if parsed_since is not None or parsed_until is not None:
-        pre_filter_count = len(session_infos)
-        session_infos = filter_sessions_by_time(
-            session_infos, parsed_since, parsed_until,
-        )
-        if not session_infos:
-            err_console.print(
-                "[yellow]No sessions found in the specified time window.[/yellow] "
-                "Use [bold]agentfluent list --project P --since X --until Y[/bold] "
-                "to preview which sessions fall in a window.",
-            )
-            raise typer.Exit(code=EXIT_NO_DATA)
-        if verbose:
-            since_label = parsed_since.isoformat() if parsed_since else "—"
-            until_label = parsed_until.isoformat() if parsed_until else "—"
-            err_console.print(
-                f"[dim]Filtering: sessions from {since_label} to {until_label} "
-                f"({len(session_infos)} of {pre_filter_count} sessions)[/dim]",
-            )
+    session_infos = _apply_time_window(
+        session_infos, parsed_since, parsed_until,
+        verbose=verbose, err_console=err_console,
+    )
 
     if latest is not None and latest > 0:
         session_infos = session_infos[:latest]
