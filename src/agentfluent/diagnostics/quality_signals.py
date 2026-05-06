@@ -45,7 +45,7 @@ calibration notebook can sweep them without function-body edits.
 from __future__ import annotations
 
 import re
-from collections import defaultdict
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from agentfluent.agents.models import WRITE_TOOLS, AgentInvocation
@@ -167,6 +167,21 @@ _COMPLETION_PATTERNS = _ci(
 )
 
 
+@dataclass(slots=True)
+class _FileEditStats:
+    """Accumulator for a single file's edit activity within a session.
+
+    Bundles the three lockstep state values (``count``, ``post_completion``,
+    ``tools``) so the forward-walk update site is one record mutation
+    rather than three parallel-dict updates, and the emit site reads
+    one struct rather than threading three dicts as parameters.
+    """
+
+    count: int = 0
+    post_completion: int = 0
+    tools: set[str] = field(default_factory=set)
+
+
 def _classify_assistant(message: SessionMessage) -> tuple[bool, bool]:
     """Return ``(had_write_tool, is_question_only)`` for an assistant message.
 
@@ -252,9 +267,7 @@ def _emit_user_correction_signals(
 
 
 def _emit_file_rework_signals(
-    file_edit_counts: dict[str, int],
-    post_completion_edits: dict[str, int],
-    edit_tools_per_file: dict[str, set[str]],
+    edit_stats: dict[str, _FileEditStats],
 ) -> list[DiagnosticSignal]:
     return [
         DiagnosticSignal(
@@ -263,20 +276,18 @@ def _emit_file_rework_signals(
             agent_type=None,
             invocation_id=None,
             message=(
-                f"File '{file_path}' edited {count} times in this session"
+                f"File '{file_path}' edited {stats.count} times in this session"
             ),
             detail={
                 "file_path": file_path,
-                "edit_count": count,
-                "post_completion_edits": post_completion_edits.get(
-                    file_path, 0,
-                ),
-                "edit_tools": sorted(edit_tools_per_file[file_path]),
+                "edit_count": stats.count,
+                "post_completion_edits": stats.post_completion,
+                "edit_tools": sorted(stats.tools),
                 "completion_scope": "session",
             },
         )
-        for file_path, count in file_edit_counts.items()
-        if count >= _FILE_REWORK_THRESHOLD
+        for file_path, stats in edit_stats.items()
+        if stats.count >= _FILE_REWORK_THRESHOLD
     ]
 
 
@@ -299,18 +310,12 @@ def extract_quality_signals(
     if not messages:
         return []
 
-    # Single forward pass: track the most recently seen assistant's
-    # classification (for correction detection), file-edit counts (for
-    # rework detection), and a session-level ``completion_seen`` flag
-    # (gates ``post_completion_edits``).
     last_assistant: tuple[bool, bool] | None = None
     correction_detections: list[
         tuple[CorrectionCategory, str, str, PrecedingAction]
     ] = []
     total_user_messages = 0
-    file_edit_counts: dict[str, int] = defaultdict(int)
-    post_completion_edits: dict[str, int] = defaultdict(int)
-    edit_tools_per_file: dict[str, set[str]] = defaultdict(set)
+    edit_stats: dict[str, _FileEditStats] = {}
     completion_seen = False
 
     for msg in messages:
@@ -324,10 +329,11 @@ def extract_quality_signals(
                 fp = block.input.get("file_path")
                 if not isinstance(fp, str) or not fp:
                     continue
-                file_edit_counts[fp] += 1
-                edit_tools_per_file[fp].add(block.name)
+                stats = edit_stats.setdefault(fp, _FileEditStats())
+                stats.count += 1
+                stats.tools.add(block.name)
                 if completion_seen:
-                    post_completion_edits[fp] += 1
+                    stats.post_completion += 1
             continue
         if msg.type != "user":
             continue
@@ -361,7 +367,5 @@ def extract_quality_signals(
         *_emit_user_correction_signals(
             correction_detections, total_user_messages,
         ),
-        *_emit_file_rework_signals(
-            file_edit_counts, post_completion_edits, edit_tools_per_file,
-        ),
+        *_emit_file_rework_signals(edit_stats),
     ]

@@ -33,21 +33,37 @@ def _assistant_text(text: str) -> SessionMessage:
     )
 
 
+def _assistant_with_edits(
+    *file_paths: str,
+    text: str = "",
+    tool_name: str = "Edit",
+) -> SessionMessage:
+    """Assistant message with one Edit tool_use per file_path.
+
+    Optional leading text block when ``text`` is non-empty. Tool block
+    ids are unique within the message (``toolu_e0``, ``toolu_e1``, ...)
+    so multiple-edit messages don't collide on tool_use_id.
+    """
+    blocks: list[ContentBlock] = []
+    if text:
+        blocks.append(ContentBlock(type="text", text=text))
+    for i, fp in enumerate(file_paths):
+        blocks.append(
+            ContentBlock(
+                type="tool_use",
+                id=f"toolu_e{i}",
+                name=tool_name,
+                input={"file_path": fp},
+            ),
+        )
+    return SessionMessage(type="assistant", content_blocks=blocks)
+
+
 def _assistant_with_write_tool(
     text: str = "Editing the file now.", tool_name: str = "Edit",
 ) -> SessionMessage:
-    return SessionMessage(
-        type="assistant",
-        content_blocks=[
-            ContentBlock(type="text", text=text),
-            ContentBlock(
-                type="tool_use",
-                id="toolu_w",
-                name=tool_name,
-                input={"file_path": "/tmp/x.py"},
-            ),
-        ],
-    )
+    """Single-file convenience wrapper around ``_assistant_with_edits``."""
+    return _assistant_with_edits("/tmp/x.py", text=text, tool_name=tool_name)
 
 
 class TestUserCorrectionDetection:
@@ -292,27 +308,6 @@ class TestExtractQualitySignalsSignature:
         }
 
 
-def _assistant_with_edits(
-    *file_paths: str,
-    text: str = "",
-    tool_name: str = "Edit",
-) -> SessionMessage:
-    """Build an assistant message with one Edit tool_use per file_path."""
-    blocks: list[ContentBlock] = []
-    if text:
-        blocks.append(ContentBlock(type="text", text=text))
-    for i, fp in enumerate(file_paths):
-        blocks.append(
-            ContentBlock(
-                type="tool_use",
-                id=f"toolu_e{i}",
-                name=tool_name,
-                input={"file_path": fp},
-            ),
-        )
-    return SessionMessage(type="assistant", content_blocks=blocks)
-
-
 class TestFileReworkDetection:
     """``FILE_REWORK`` fires when a single file is edited at or above
     ``_FILE_REWORK_THRESHOLD`` (default 4) within one session. Detection
@@ -342,7 +337,12 @@ class TestFileReworkDetection:
         )
 
     def test_post_completion_edits_counted(self) -> None:
-        """Edits after completion language fire ``post_completion_edits``."""
+        """Edits after completion language fire ``post_completion_edits``.
+
+        The completion-language message itself carries an edit and the
+        flag flips before the per-block loop, so its own edit counts
+        plus the two messages after it = 3.
+        """
         messages = [
             *(_assistant_with_edits("/src/foo.py") for _ in range(2)),
             _assistant_with_edits("/src/foo.py", text="all done with this"),
@@ -351,9 +351,7 @@ class TestFileReworkDetection:
         signals = extract_quality_signals(messages)
         rework = [s for s in signals if s.signal_type == SignalType.FILE_REWORK]
         assert len(rework) == 1
-        # The completion-language message itself was an edit; the two
-        # afterward also count. Total post-completion edits >= 2.
-        assert rework[0].detail["post_completion_edits"] >= 2
+        assert rework[0].detail["post_completion_edits"] == 3
 
     def test_multiple_files_independent(self) -> None:
         """Each file is evaluated against the threshold independently."""
