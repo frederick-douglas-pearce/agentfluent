@@ -27,7 +27,7 @@ GENERAL_PURPOSE_AGENT_TYPE = "general-purpose"
 # complexity — presence of any of these signals a write workload that
 # typically needs a higher-tier model or different routing.
 WRITE_TOOLS: frozenset[str] = frozenset(
-    {"Write", "Edit", "Bash", "NotebookEdit"},
+    {"Write", "Edit", "MultiEdit", "Bash", "NotebookEdit"},
 )
 
 

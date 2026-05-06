@@ -6,6 +6,7 @@ and v0.2 output-shape regression for trace-less sessions.
 """
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ import pytest
 from agentfluent.agents.models import AgentInvocation
 from agentfluent.config.mcp_discovery import _load_json
 from agentfluent.config.models import AgentConfig, Scope, Severity
+from agentfluent.core.session import ContentBlock, SessionMessage
 from agentfluent.diagnostics import TRACE_SIGNAL_TYPES
 from agentfluent.diagnostics.delegation import MODEL_OPUS
 from agentfluent.diagnostics.mcp_assessment import McpToolCall
@@ -666,3 +668,71 @@ class TestMcpAuditWiring:
         ]
         assert len(unused) == 1
         assert unused[0].detail["server_name"] == "unused-svc"
+
+
+class TestQualitySignalsWiring:
+    """``parent_messages`` opts the caller into quality-signal extraction.
+
+    Programmatic callers that don't pass ``parent_messages`` (libraries,
+    tests) silently skip. The CLI always passes it, so the user-visible
+    path always gets quality signals.
+    """
+
+    @staticmethod
+    def _correction_messages() -> list[SessionMessage]:
+        return [
+            SessionMessage(
+                type="assistant",
+                content_blocks=[
+                    ContentBlock(type="text", text="Editing the file."),
+                    ContentBlock(
+                        type="tool_use",
+                        id="toolu_w",
+                        name="Edit",
+                        input={"file_path": "/tmp/x.py"},
+                    ),
+                ],
+            ),
+            SessionMessage(
+                type="user",
+                content_blocks=[
+                    ContentBlock(
+                        type="text",
+                        text="no, that's wrong, undo it",
+                    ),
+                ],
+            ),
+        ]
+
+    def test_parent_messages_provided_emits_quality_signals(self) -> None:
+        result = run_diagnostics(
+            [_inv()], parent_messages=self._correction_messages(),
+        )
+        quality = [
+            s for s in result.signals
+            if s.signal_type == SignalType.USER_CORRECTION
+        ]
+        assert len(quality) == 1
+
+    def test_parent_messages_none_quiet_skips_with_debug_log(
+        self, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        with caplog.at_level(
+            logging.DEBUG, logger="agentfluent.diagnostics.pipeline",
+        ):
+            result = run_diagnostics([_inv()])
+        assert not any(
+            s.signal_type == SignalType.USER_CORRECTION for s in result.signals
+        )
+        assert any(
+            "quality signals skipped: parent_messages=None" in record.message
+            for record in caplog.records
+        )
+
+    def test_parent_messages_empty_list_skips_extraction(self) -> None:
+        """Empty parent_messages goes through the extractor (which returns
+        ``[]``) without firing the quiet-skip log."""
+        result = run_diagnostics([_inv()], parent_messages=[])
+        assert not any(
+            s.signal_type == SignalType.USER_CORRECTION for s in result.signals
+        )

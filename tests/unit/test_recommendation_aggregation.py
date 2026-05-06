@@ -7,13 +7,33 @@ remain available for verbose drill-down.
 """
 
 from agentfluent.config.models import Severity
-from agentfluent.diagnostics.aggregation import aggregate_recommendations
+from agentfluent.diagnostics.aggregation import (
+    SIGNAL_AXIS_MAP,
+    aggregate_recommendations,
+)
 from agentfluent.diagnostics.models import (
     AggregatedRecommendation,
+    Axis,
     DiagnosticRecommendation,
     DiagnosticSignal,
     SignalType,
 )
+
+
+class TestSignalAxisMap:
+    """Drift-prevention contract on ``SIGNAL_AXIS_MAP``.
+
+    Per architect review on #269, every ``SignalType`` must map to
+    exactly one ``Axis``. A future contributor adding a ``SignalType``
+    without a corresponding map entry will fail this test in CI rather
+    than producing silently dropped axis attribution downstream.
+    """
+
+    def test_map_covers_every_signal_type(self) -> None:
+        assert set(SIGNAL_AXIS_MAP.keys()) == set(SignalType)
+
+    def test_every_value_is_an_axis(self) -> None:
+        assert all(isinstance(v, Axis) for v in SIGNAL_AXIS_MAP.values())
 
 
 def _token_outlier_pair(

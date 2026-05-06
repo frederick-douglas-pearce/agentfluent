@@ -46,10 +46,40 @@ from agentfluent.diagnostics.model_routing import SAVINGS_USD_KEY
 from agentfluent.diagnostics.models import (
     TRACE_SIGNAL_TYPES,
     AggregatedRecommendation,
+    Axis,
     DiagnosticRecommendation,
     DiagnosticSignal,
     SignalType,
 )
+
+# Single-axis classification per D022. Every ``SignalType`` maps to
+# exactly one ``Axis``; cross-cutting reduced-weight contributions were
+# rejected for Tier 1. ``ERROR_PATTERN``, ``PERMISSION_FAILURE``, and
+# ``MCP_MISSING_SERVER`` land on ``SPEED`` as the closest existing axis
+# for operational-health signals.
+#
+# Defined here (rather than alongside ``SignalType`` in ``models.py``)
+# because aggregation is the natural consumer — ``axis_scores`` and
+# ``primary_axis`` annotations on ``AggregatedRecommendation`` will be
+# computed by reading this map (#272). Defined-but-not-yet-consumed in
+# v0.6 #269; the drift-prevention test in
+# ``tests/unit/test_recommendation_aggregation.py`` ensures any new
+# ``SignalType`` lacking an entry fails CI.
+SIGNAL_AXIS_MAP: dict[SignalType, Axis] = {
+    SignalType.TOKEN_OUTLIER: Axis.COST,
+    SignalType.MODEL_MISMATCH: Axis.COST,
+    SignalType.MCP_UNUSED_SERVER: Axis.COST,
+    SignalType.DURATION_OUTLIER: Axis.SPEED,
+    SignalType.RETRY_LOOP: Axis.SPEED,
+    SignalType.STUCK_PATTERN: Axis.SPEED,
+    SignalType.TOOL_ERROR_SEQUENCE: Axis.SPEED,
+    SignalType.ERROR_PATTERN: Axis.SPEED,
+    SignalType.PERMISSION_FAILURE: Axis.SPEED,
+    SignalType.MCP_MISSING_SERVER: Axis.SPEED,
+    SignalType.USER_CORRECTION: Axis.QUALITY,
+    SignalType.FILE_REWORK: Axis.QUALITY,
+    SignalType.REVIEWER_CAUGHT: Axis.QUALITY,
+}
 
 # Signal types that carry comparable scalar metrics in ``detail``. Only
 # these produce a ``metric_range`` on the aggregated row.

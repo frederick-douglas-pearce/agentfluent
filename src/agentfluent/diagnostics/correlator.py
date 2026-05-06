@@ -602,6 +602,50 @@ class McpAuditRule:
         )
 
 
+class UserCorrectionRule:
+    """USER_CORRECTION -> recommend a review-style subagent.
+
+    Cross-cutting (``agent_type=None`` per ``quality_signals``), so this
+    rule does not branch on built-in vs custom agents — there is no
+    specific agent config to look up. Pattern follows ``McpAuditRule``,
+    which is also a cross-cutting rule with no ``_builtin_target`` /
+    ``_builtin_concern`` attributes.
+
+    The ``[quality]`` prefix on ``message`` is a transitional measure
+    until #273 renders axis labels from ``primary_axis`` via the
+    formatter; #273's AC includes removing this hardcoded prefix once
+    the formatter handles axis attribution uniformly.
+    """
+
+    def matches(self, signal: DiagnosticSignal, config: AgentConfig | None) -> bool:
+        return signal.signal_type == SignalType.USER_CORRECTION
+
+    def recommend(
+        self, signal: DiagnosticSignal, config: AgentConfig | None,
+    ) -> DiagnosticRecommendation:
+        observation = signal.message
+        reason = (
+            "Mid-flight corrections are evidence the parent would benefit "
+            "from independent review before acting."
+        )
+        action = (
+            "Consider delegating to a review-style subagent (architect, "
+            "code-reviewer) for design checks before implementation."
+        )
+        return DiagnosticRecommendation(
+            target="subagent",
+            severity=signal.severity,
+            message=f"[quality] {observation} {reason} {action}",
+            observation=observation,
+            reason=reason,
+            action=action,
+            agent_type=signal.agent_type,
+            invocation_id=signal.invocation_id,
+            config_file="",
+            signal_types=[signal.signal_type],
+        )
+
+
 RULES: list[CorrelationRule] = [
     AccessErrorRule(),
     ErrorHandlingRule(),
@@ -613,6 +657,7 @@ RULES: list[CorrelationRule] = [
     ErrorSequenceRule(),
     ModelRoutingRule(),
     McpAuditRule(),
+    UserCorrectionRule(),
 ]
 
 
