@@ -1,9 +1,11 @@
 """Tests for project and session discovery."""
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+from agentfluent.core import discovery as discovery_mod
 from agentfluent.core.discovery import (
     discover_projects,
     discover_sessions,
@@ -82,6 +84,92 @@ class TestDiscoverSessions:
     def test_nonexistent_directory(self, tmp_path: Path) -> None:
         sessions = discover_sessions(tmp_path / "does-not-exist")
         assert sessions == []
+
+
+class TestFirstMessageTimestamp:
+    """``SessionInfo.first_message_timestamp`` -- foundation of the
+    v0.6 date-range filter (#293). Reads the first analytical message's
+    timestamp in file order so it survives mtime churn from cloud sync
+    or backup restores."""
+
+    def test_populated_from_first_message(self, tmp_path: Path) -> None:
+        (tmp_path / "session.jsonl").write_text(
+            '{"type": "user", "timestamp": "2026-04-10T10:00:00.000Z", '
+            '"message": {"role": "user", "content": "hello"}}\n'
+            '{"type": "assistant", "timestamp": "2026-04-10T10:00:05.000Z", '
+            '"message": {"role": "assistant", "content": []}}\n',
+        )
+        sessions = discover_sessions(tmp_path)
+        assert sessions[0].first_message_timestamp == datetime(
+            2026, 4, 10, 10, 0, 0, tzinfo=UTC,
+        )
+
+    def test_none_for_empty_file(self, tmp_path: Path) -> None:
+        (tmp_path / "empty.jsonl").write_text("")
+        sessions = discover_sessions(tmp_path)
+        assert sessions[0].first_message_timestamp is None
+
+    def test_none_when_no_parseable_timestamps(self, tmp_path: Path) -> None:
+        (tmp_path / "no-ts.jsonl").write_text(
+            '{"type": "user", "message": {"role": "user", "content": "x"}}\n',
+        )
+        sessions = discover_sessions(tmp_path)
+        assert sessions[0].first_message_timestamp is None
+
+    def test_skips_until_analytical_message(self, tmp_path: Path) -> None:
+        """Non-analytical types (file-history-snapshot, system, progress)
+        are filtered by ``iter_raw_messages``; the helper picks up the
+        first analytical message after them."""
+        (tmp_path / "skip-then-real.jsonl").write_text(
+            '{"type": "file-history-snapshot", "timestamp": "2026-04-09T00:00:00.000Z"}\n'
+            '{"type": "system", "timestamp": "2026-04-09T01:00:00.000Z"}\n'
+            '{"type": "user", "timestamp": "2026-04-10T10:00:00.000Z", '
+            '"message": {"role": "user", "content": "hello"}}\n',
+        )
+        sessions = discover_sessions(tmp_path)
+        assert sessions[0].first_message_timestamp == datetime(
+            2026, 4, 10, 10, 0, 0, tzinfo=UTC,
+        )
+
+    def test_none_when_only_malformed_lines(self, tmp_path: Path) -> None:
+        (tmp_path / "malformed.jsonl").write_text(
+            "this is not json\n{also not json\n",
+        )
+        sessions = discover_sessions(tmp_path)
+        assert sessions[0].first_message_timestamp is None
+
+    def test_oserror_on_one_file_does_not_abort_discovery(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A single corrupted/locked file must not prevent discovery
+        of the other sessions in the project. Cloud-synced directories
+        may have partially-written or permission-restricted files;
+        chmod-based tests of that condition are platform-fragile, so
+        we stub the I/O layer to raise."""
+        good = tmp_path / "good.jsonl"
+        good.write_text(
+            '{"type": "user", "timestamp": "2026-04-10T10:00:00.000Z", '
+            '"message": {"role": "user", "content": "hi"}}\n',
+        )
+        bad = tmp_path / "bad.jsonl"
+        bad.write_text("ok\n")
+
+        original = discovery_mod.iter_raw_messages
+
+        def _maybe_raise(path: Path):  # type: ignore[no-untyped-def]
+            if path == bad:
+                raise PermissionError("simulated lock")
+            yield from original(path)
+
+        monkeypatch.setattr(discovery_mod, "iter_raw_messages", _maybe_raise)
+
+        sessions = discover_sessions(tmp_path)
+
+        assert {s.filename for s in sessions} == {"good.jsonl", "bad.jsonl"}
+        bad_info = next(s for s in sessions if s.filename == "bad.jsonl")
+        good_info = next(s for s in sessions if s.filename == "good.jsonl")
+        assert bad_info.first_message_timestamp is None
+        assert good_info.first_message_timestamp is not None
 
 
 class TestDiscoverProjects:
