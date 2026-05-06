@@ -733,24 +733,24 @@ class TestReviewerCaughtRule:
     @staticmethod
     def _signal(
         agent_type: str = "architect",
-        finding_count: int = 3,
+        finding_keywords: list[str] | None = None,
         parent_acted: bool = True,
     ) -> DiagnosticSignal:
+        kw = finding_keywords if finding_keywords is not None else [
+            "blocker", "issue", "must",
+        ]
         return DiagnosticSignal(
             signal_type=SignalType.REVIEWER_CAUGHT,
             severity=Severity.INFO,
             agent_type=agent_type,
             invocation_id="toolu_review",
             message=(
-                f"`{agent_type}` review surfaced {finding_count} finding-keyword(s)"
+                f"`{agent_type}` review surfaced {len(kw)} finding-keyword(s)"
             ),
             detail={
-                "agent_type": agent_type,
-                "finding_count": finding_count,
-                "finding_keywords": ["blocker", "issue", "must"],
+                "finding_keywords": kw,
                 "parent_acted": parent_acted,
                 "response_length": 1000,
-                "review_invocation_id": "toolu_review",
                 "files_mentioned": ["src/foo.py"],
                 "files_acted_on": ["src/foo.py"] if parent_acted else [],
             },

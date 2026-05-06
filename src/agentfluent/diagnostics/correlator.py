@@ -732,7 +732,8 @@ class ReviewerCaughtRule(_QualityRule):
         self, signal: DiagnosticSignal,
     ) -> tuple[str, str, str]:
         agent_type = signal.agent_type or "review-style subagent"
-        finding_count = signal.detail.get("finding_count", 0)
+        keywords = signal.detail.get("finding_keywords", [])
+        finding_count = len(keywords) if isinstance(keywords, list) else 0
         parent_acted = signal.detail.get("parent_acted", False)
         observation = (
             f"`{agent_type}` produced {finding_count} substantive "

@@ -516,7 +516,7 @@ class TestReviewerCaughtDetection:
         assert len(rev) == 1
         sig = rev[0]
         assert sig.agent_type == "architect"
-        assert sig.detail["finding_count"] >= 1
+        assert len(sig.detail["finding_keywords"]) >= 1
         assert "blocker" in sig.detail["finding_keywords"]
 
     def test_lgtm_pass_does_not_fire(self) -> None:

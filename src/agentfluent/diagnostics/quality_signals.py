@@ -373,6 +373,15 @@ def _extract_reviewer_caught_signals(
     in the review's output is edited in the following
     ``_PARENT_ACTED_WINDOW`` assistant messages.
     """
+    # Skip the per-message walk when no review-style agents ran at all
+    # — the most common case in non-review-using projects.
+    review_invocations = [
+        inv for inv in agent_invocations
+        if inv.agent_type.lower() in REVIEW_AGENT_TYPES
+    ]
+    if not review_invocations:
+        return []
+
     # tool_use_id -> index of the message containing the corresponding
     # tool_result block. Lets us scope ``parent_acted`` look-forward to
     # messages strictly after the review's result.
@@ -385,9 +394,7 @@ def _extract_reviewer_caught_signals(
                 tool_result_idx[block.tool_use_id] = idx
 
     signals: list[DiagnosticSignal] = []
-    for inv in agent_invocations:
-        if inv.agent_type.lower() not in REVIEW_AGENT_TYPES:
-            continue
+    for inv in review_invocations:
         text = inv.output_text
         if not text or len(text) < _SUBSTANTIVE_RESPONSE_MIN_CHARS:
             continue
@@ -413,12 +420,9 @@ def _extract_reviewer_caught_signals(
                     f"{len(keyword_hits)} finding-keyword(s)"
                 ),
                 detail={
-                    "agent_type": inv.agent_type,
-                    "finding_count": len(keyword_hits),
                     "finding_keywords": keyword_hits,
                     "parent_acted": bool(files_acted_on),
                     "response_length": len(text),
-                    "review_invocation_id": inv.tool_use_id,
                     "files_mentioned": sorted(files_mentioned),
                     "files_acted_on": sorted(files_acted_on),
                 },
