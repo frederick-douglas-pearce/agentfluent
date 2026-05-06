@@ -1,4 +1,4 @@
-"""Tests for ``agentfluent analyze --since/--until`` (#297).
+"""Tests for ``agentfluent analyze --since/--until``.
 
 Seeded fixture session has its first message at 2026-04-10T10:00:00Z.
 Tests pick boundaries on either side of that anchor.
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import typer
 from typer.testing import CliRunner
 
@@ -18,29 +19,24 @@ class TestFlagInteractionErrors:
     """Mutually-exclusive flag combinations and inverted intervals must
     surface ``EXIT_USER_ERROR`` with a clear message."""
 
-    def test_session_and_since_mutually_exclusive(
-        self, runner: CliRunner, cli_app: typer.Typer, populated_home: Path,
+    @pytest.mark.parametrize(
+        ("flag", "value"),
+        [("--since", "7d"), ("--until", "2026-05-01")],
+    )
+    def test_session_and_time_flags_mutually_exclusive(
+        self,
+        runner: CliRunner,
+        cli_app: typer.Typer,
+        populated_home: Path,
+        flag: str,
+        value: str,
     ) -> None:
         result = runner.invoke(
             cli_app,
             [
                 "analyze", "--project", "project",
                 "--session", "session-1.jsonl",
-                "--since", "7d",
-            ],
-        )
-        assert result.exit_code == EXIT_USER_ERROR
-        assert "--since/--until cannot be combined with --session" in result.stderr
-
-    def test_session_and_until_mutually_exclusive(
-        self, runner: CliRunner, cli_app: typer.Typer, populated_home: Path,
-    ) -> None:
-        result = runner.invoke(
-            cli_app,
-            [
-                "analyze", "--project", "project",
-                "--session", "session-1.jsonl",
-                "--until", "2026-05-01",
+                flag, value,
             ],
         )
         assert result.exit_code == EXIT_USER_ERROR
