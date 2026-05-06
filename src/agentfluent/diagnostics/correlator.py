@@ -646,6 +646,61 @@ class UserCorrectionRule:
         )
 
 
+class FileReworkRule:
+    """FILE_REWORK -> recommend a review-style subagent.
+
+    Cross-cutting (``agent_type=None``), shape mirrors ``UserCorrectionRule``.
+    Recommendation copy branches on ``post_completion_edits``: edits that
+    happened after "completion" language (a stronger signal — the work was
+    declared done before further rework) get a different remediation than
+    edits that may reflect ordinary iterative development.
+
+    The ``[quality]`` prefix is transitional pending #273 (axis labels
+    rendered uniformly from ``primary_axis``).
+    """
+
+    def matches(self, signal: DiagnosticSignal, config: AgentConfig | None) -> bool:
+        return signal.signal_type == SignalType.FILE_REWORK
+
+    def recommend(
+        self, signal: DiagnosticSignal, config: AgentConfig | None,
+    ) -> DiagnosticRecommendation:
+        observation = signal.message
+        post_completion = signal.detail.get("post_completion_edits", 0)
+        if isinstance(post_completion, int) and post_completion > 0:
+            reason = (
+                "Repeated edits after the work was declared complete "
+                "indicate a pre-implementation review would have caught "
+                "issues earlier."
+            )
+            action = (
+                "Consider an architect subagent for design review before "
+                "starting implementation in this area, or a tester subagent "
+                "to verify completion claims."
+            )
+        else:
+            reason = (
+                "High edit density on a single file suggests the parent "
+                "would benefit from upfront design or incremental testing."
+            )
+            action = (
+                "Consider an architect subagent for design review, or split "
+                "the change into smaller verifiable steps."
+            )
+        return DiagnosticRecommendation(
+            target="subagent",
+            severity=signal.severity,
+            message=f"[quality] {observation}. {reason} {action}",
+            observation=observation,
+            reason=reason,
+            action=action,
+            agent_type=signal.agent_type,
+            invocation_id=signal.invocation_id,
+            config_file="",
+            signal_types=[signal.signal_type],
+        )
+
+
 RULES: list[CorrelationRule] = [
     AccessErrorRule(),
     ErrorHandlingRule(),
@@ -658,6 +713,7 @@ RULES: list[CorrelationRule] = [
     ModelRoutingRule(),
     McpAuditRule(),
     UserCorrectionRule(),
+    FileReworkRule(),
 ]
 
 

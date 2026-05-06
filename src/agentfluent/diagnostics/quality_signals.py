@@ -13,9 +13,11 @@ Tier 1 quality signals (per the v0.6 quality-axis epic, #268):
   mid-flight ("no, do X instead", "wait, that's wrong", "revert"). High
   correction frequency in sessions without review subagents is strong
   evidence the parent would benefit from independent review. Detected
-  here in #269.
-- ``FILE_REWORK`` — same file edited N+ times within a session. Detected
-  in #270.
+  in #269.
+- ``FILE_REWORK`` — same file edited N+ times within a session,
+  especially after a feature was declared "done". High rework density
+  indicates a pre-implementation review or incremental testing would
+  have caught issues earlier. Detected in #270.
 - ``REVIEWER_CAUGHT`` — review-style subagents that ran AND produced
   substantive findings the parent acted on. Detected in #271.
 
@@ -43,6 +45,7 @@ calibration notebook can sweep them without function-body edits.
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from enum import StrEnum
 
 from agentfluent.agents.models import WRITE_TOOLS, AgentInvocation
@@ -134,6 +137,36 @@ _SOFT_PATTERN_CATEGORIES: tuple[
 _SNIPPET_MAX_CHARS = 140
 
 
+# Edit-tool subset of WRITE_TOOLS used for FILE_REWORK detection. Strict
+# subset by design: ``Bash`` is excluded because its ``input`` carries
+# ``command``, not ``file_path`` — extracting a filesystem target from a
+# shell command is out of scope and error-prone. ``NotebookEdit`` is
+# excluded because ``.ipynb`` rework is rare in our target use cases
+# (Agent SDK + Claude Code). Sync with ``WRITE_TOOLS`` if that set grows
+# with another file-path-bearing tool; the drift-prevention test in
+# ``test_quality_signals.py`` will fail if this subset escapes.
+_EDIT_TOOL_NAMES: frozenset[str] = frozenset({"Edit", "Write", "MultiEdit"})
+
+# A file edited at or above this threshold within a single session
+# fires ``FILE_REWORK``. Module-level constant for #274 calibration.
+_FILE_REWORK_THRESHOLD = 4
+
+# "Completion language" patterns. When any assistant message in the
+# session matches one of these, subsequent edits to any file are
+# counted as ``post_completion_edits``. Session-level granularity is
+# the intentional Tier 1 trade-off — per-file completion tracking
+# would require NLP to associate "done" with a specific file, which
+# is a #274 concern. ``completion_scope: "session"`` is stamped on
+# every emitted FILE_REWORK signal so calibration can measure how
+# often multi-task sessions cause false attribution.
+_COMPLETION_PATTERNS = _ci(
+    r"\b(done|complete|completed|finished)\b",
+    r"\bready\s+for\s+review\b",
+    r"\ball\s+set\b",
+    r"\bimplementation\s+complete\b",
+)
+
+
 def _classify_assistant(message: SessionMessage) -> tuple[bool, bool]:
     """Return ``(had_write_tool, is_question_only)`` for an assistant message.
 
@@ -187,36 +220,114 @@ def _build_snippet(text: str) -> str:
     return text[:_SNIPPET_MAX_CHARS].rstrip() + "…"
 
 
+def _matches_completion_phrase(text: str) -> bool:
+    return any(p.search(text) for p in _COMPLETION_PATTERNS)
+
+
+def _emit_user_correction_signals(
+    detections: list[tuple[CorrectionCategory, str, str, PrecedingAction]],
+    total_user_messages: int,
+) -> list[DiagnosticSignal]:
+    if not detections or total_user_messages == 0:
+        return []
+    session_correction_rate = len(detections) / total_user_messages
+    return [
+        DiagnosticSignal(
+            signal_type=SignalType.USER_CORRECTION,
+            severity=Severity.WARNING,
+            agent_type=None,
+            invocation_id=None,
+            message=f"User correction in parent thread: {snippet}",
+            detail={
+                "correction_text": snippet,
+                "matched_pattern": matched_phrase,
+                "matched_category": category.value,
+                "preceding_assistant_action": preceding.value,
+                "session_correction_rate": session_correction_rate,
+                "total_user_messages": total_user_messages,
+            },
+        )
+        for category, matched_phrase, snippet, preceding in detections
+    ]
+
+
+def _emit_file_rework_signals(
+    file_edit_counts: dict[str, int],
+    post_completion_edits: dict[str, int],
+    edit_tools_per_file: dict[str, set[str]],
+) -> list[DiagnosticSignal]:
+    return [
+        DiagnosticSignal(
+            signal_type=SignalType.FILE_REWORK,
+            severity=Severity.WARNING,
+            agent_type=None,
+            invocation_id=None,
+            message=(
+                f"File '{file_path}' edited {count} times in this session"
+            ),
+            detail={
+                "file_path": file_path,
+                "edit_count": count,
+                "post_completion_edits": post_completion_edits.get(
+                    file_path, 0,
+                ),
+                "edit_tools": sorted(edit_tools_per_file[file_path]),
+                "completion_scope": "session",
+            },
+        )
+        for file_path, count in file_edit_counts.items()
+        if count >= _FILE_REWORK_THRESHOLD
+    ]
+
+
 def extract_quality_signals(
     messages: list[SessionMessage],
     agent_invocations: list[AgentInvocation] | None = None,
 ) -> list[DiagnosticSignal]:
     """Extract quality-axis signals from parent-thread messages.
 
-    Currently emits ``USER_CORRECTION`` only; ``FILE_REWORK`` (#270) and
+    Emits ``USER_CORRECTION`` (#269) and ``FILE_REWORK`` (#270);
     ``REVIEWER_CAUGHT`` (#271) will land here. ``agent_invocations`` is
-    accepted but unused — locked in this signature so #271 can plug in
-    without breaking #270 mid-flight.
+    accepted but unused by the current detectors — locked in this
+    signature so #271 can plug in without breaking the existing
+    callers.
 
-    Returns an empty list when ``messages`` is empty or contains no
-    user prose. ``agent_type`` is ``None`` on every emitted signal:
-    these are cross-cutting parent-thread observations, not subagent-
-    scoped findings.
+    Returns an empty list when ``messages`` is empty. ``agent_type`` is
+    ``None`` on every emitted signal: these are cross-cutting
+    parent-thread observations, not subagent-scoped findings.
     """
     if not messages:
         return []
 
-    # Single forward pass: as we walk messages we update the most
-    # recently seen assistant's classification, and read it whenever
-    # we encounter user prose. Avoids the O(n²) backward scan that an
-    # earlier draft used.
+    # Single forward pass: track the most recently seen assistant's
+    # classification (for correction detection), file-edit counts (for
+    # rework detection), and a session-level ``completion_seen`` flag
+    # (gates ``post_completion_edits``).
     last_assistant: tuple[bool, bool] | None = None
-    detections: list[tuple[CorrectionCategory, str, str, PrecedingAction]] = []
+    correction_detections: list[
+        tuple[CorrectionCategory, str, str, PrecedingAction]
+    ] = []
     total_user_messages = 0
+    file_edit_counts: dict[str, int] = defaultdict(int)
+    post_completion_edits: dict[str, int] = defaultdict(int)
+    edit_tools_per_file: dict[str, set[str]] = defaultdict(set)
+    completion_seen = False
 
     for msg in messages:
         if msg.type == "assistant":
             last_assistant = _classify_assistant(msg)
+            if not completion_seen and _matches_completion_phrase(msg.text):
+                completion_seen = True
+            for block in msg.tool_use_blocks:
+                if block.name not in _EDIT_TOOL_NAMES:
+                    continue
+                fp = block.input.get("file_path")
+                if not isinstance(fp, str) or not fp:
+                    continue
+                file_edit_counts[fp] += 1
+                edit_tools_per_file[fp].add(block.name)
+                if completion_seen:
+                    post_completion_edits[fp] += 1
             continue
         if msg.type != "user":
             continue
@@ -242,30 +353,15 @@ def extract_quality_signals(
         else:
             preceding = PrecedingAction.TEXT_ONLY
 
-        detections.append(
+        correction_detections.append(
             (category, matched_phrase, _build_snippet(text), preceding),
         )
 
-    if not detections or total_user_messages == 0:
-        return []
-
-    session_correction_rate = len(detections) / total_user_messages
-
     return [
-        DiagnosticSignal(
-            signal_type=SignalType.USER_CORRECTION,
-            severity=Severity.WARNING,
-            agent_type=None,
-            invocation_id=None,
-            message=f"User correction in parent thread: {snippet}",
-            detail={
-                "correction_text": snippet,
-                "matched_pattern": matched_phrase,
-                "matched_category": category.value,
-                "preceding_assistant_action": preceding.value,
-                "session_correction_rate": session_correction_rate,
-                "total_user_messages": total_user_messages,
-            },
-        )
-        for category, matched_phrase, snippet, preceding in detections
+        *_emit_user_correction_signals(
+            correction_detections, total_user_messages,
+        ),
+        *_emit_file_rework_signals(
+            file_edit_counts, post_completion_edits, edit_tools_per_file,
+        ),
     ]
