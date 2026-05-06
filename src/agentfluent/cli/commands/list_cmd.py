@@ -8,6 +8,7 @@ from typing import Optional
 import typer
 from rich.console import Console
 
+from agentfluent.cli._time_args import parse_time_window
 from agentfluent.cli.exit_codes import EXIT_NO_DATA, EXIT_USER_ERROR
 from agentfluent.cli.formatters.json_output import format_json_output
 from agentfluent.cli.formatters.table import (
@@ -16,9 +17,11 @@ from agentfluent.cli.formatters.table import (
 )
 from agentfluent.core.discovery import (
     ProjectInfo,
+    SessionInfo,
     discover_projects,
     find_project,
 )
+from agentfluent.core.filtering import filter_sessions_by_time
 from agentfluent.core.parser import parse_session
 from agentfluent.core.paths import projects_dir_for
 
@@ -30,6 +33,12 @@ Examples:
 
   agentfluent list --project codefluent
       List sessions in the codefluent project.
+
+  agentfluent list --project codefluent --since 7d
+      Sessions whose first message landed in the last 7 days.
+
+  agentfluent list --project codefluent --since 2026-05-01 --until 2026-05-08
+      Sessions in the half-open interval [2026-05-01, 2026-05-08).
 
   agentfluent list --format json | jq '.data.projects[].name'
       Extract project names (command is "list-projects").
@@ -103,30 +112,45 @@ def _find_or_exit(project_slug: str, config_dir: Path | None) -> ProjectInfo:
 
 
 def _list_sessions_table(
-    project_slug: str, *, config_dir: Path | None, verbose: bool, quiet: bool,
+    project_slug: str,
+    *,
+    config_dir: Path | None,
+    verbose: bool,
+    quiet: bool,
+    sessions_override: list[SessionInfo] | None = None,
 ) -> None:
     """Display sessions for a project as a Rich table."""
     project = _find_or_exit(project_slug, config_dir)
+    sessions_list = (
+        sessions_override if sessions_override is not None else project.sessions
+    )
     if quiet:
-        console.print(f"Project {project.display_name}: {len(project.sessions)} sessions")
+        console.print(f"Project {project.display_name}: {len(sessions_list)} sessions")
         return
-    sessions = [(s, len(parse_session(s.path))) for s in project.sessions]
+    sessions = [(s, len(parse_session(s.path))) for s in sessions_list]
     format_sessions_table(console, project.display_name, sessions, verbose=verbose)
 
 
 def _list_sessions_json(
-    project_slug: str, *, config_dir: Path | None, quiet: bool,
+    project_slug: str,
+    *,
+    config_dir: Path | None,
+    quiet: bool,
+    sessions_override: list[SessionInfo] | None = None,
 ) -> None:
     """Output sessions for a project as JSON."""
     project = _find_or_exit(project_slug, config_dir)
+    sessions_list = (
+        sessions_override if sessions_override is not None else project.sessions
+    )
     if quiet:
         payload: dict[str, object] = {
             "project": project.display_name,
-            "session_count": len(project.sessions),
+            "session_count": len(sessions_list),
         }
     else:
         sessions = []
-        for s in project.sessions:
+        for s in sessions_list:
             messages = parse_session(s.path)
             sessions.append(
                 {
@@ -161,21 +185,58 @@ def list_cmd(
         "--json",
         help="Shortcut for --format json. Overrides --format when set.",
     ),
+    since: Optional[str] = typer.Option(  # noqa: UP007, UP045
+        None,
+        "--since",
+        help=(
+            "Include sessions whose first message landed at or after this "
+            "time. Accepts ISO 8601 (2026-05-05T12:00:00), date-only "
+            "(2026-05-05), or relative (7d, 12h, 30m). Requires --project."
+        ),
+    ),
+    until: Optional[str] = typer.Option(  # noqa: UP007, UP045
+        None,
+        "--until",
+        help=(
+            "Include sessions whose first message landed strictly before "
+            "this time (half-open interval). Same formats as --since. "
+            "Requires --project."
+        ),
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output."),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Show summary only."),
 ) -> None:
     """List available projects, or sessions within a project."""
     if verbose and quiet:
         raise typer.BadParameter("--verbose and --quiet are mutually exclusive")
+    if (since is not None or until is not None) and project is None:
+        err_console.print(
+            "[red]Error:[/red] --since/--until require --project "
+            "(time filtering applies to sessions, not the project list).",
+        )
+        raise typer.Exit(code=EXIT_USER_ERROR)
     if json_flag:
         format = "json"
     config_dir = ctx.obj.claude_config_dir if ctx.obj else None
     if project:
+        sessions_override: list[SessionInfo] | None = None
+        if since is not None or until is not None:
+            parsed_since, parsed_until = parse_time_window(
+                since, until, err_console=err_console,
+            )
+            project_info = _find_or_exit(project, config_dir)
+            sessions_override = filter_sessions_by_time(
+                project_info.sessions, parsed_since, parsed_until,
+            )
         if format == "json":
-            _list_sessions_json(project, config_dir=config_dir, quiet=quiet)
+            _list_sessions_json(
+                project, config_dir=config_dir, quiet=quiet,
+                sessions_override=sessions_override,
+            )
         else:
             _list_sessions_table(
                 project, config_dir=config_dir, verbose=verbose, quiet=quiet,
+                sessions_override=sessions_override,
             )
     else:
         if format == "json":
