@@ -1,38 +1,40 @@
 """Aggregate per-invocation recommendations into distinct findings.
 
-``correlate`` emits one recommendation per matched signal, which produces
-N near-identical rows when N invocations of the same agent trigger the
-same rule (e.g., four Explore invocations each firing TOKEN_OUTLIER).
-The default Recommendations table is far more actionable when those N
-rows collapse to a single aggregated row with an occurrence count and
-(for signal types that carry scalar metrics) a min–max range.
+``correlate`` emits one recommendation per matched signal, producing
+N near-identical rows when N invocations trigger the same rule. The
+default Recommendations table is more actionable when those rows
+collapse to a single row with an occurrence count and (for signal
+types with scalar metrics) a min–max range. Aggregation runs after
+``correlate`` so every output format benefits; per-invocation
+recommendations are preserved on ``DiagnosticsResult`` for
+``--verbose`` and JSON drill-down.
 
-Aggregation happens in the pipeline, after ``correlate``, so every
-output format benefits — not just the table formatter. The raw
-per-invocation list is preserved alongside the aggregated list on
-``DiagnosticsResult`` so ``--verbose`` and JSON consumers can drill in.
-
-**Priority scoring (#172).** Each aggregated row carries a
-``priority_score: float`` so the default table can sort by impact.
-The score is a weighted composite:
+**Priority scoring (#172, #272).** Each aggregated row carries a
+``priority_score`` for sort-by-impact:
 
     score = severity_rank * W_SEVERITY
           + log1p(count) * W_COUNT
           + summed_savings_usd * W_COST
           + has_trace_evidence * W_TRACE
+          + quality_evidence_factor * W_QUALITY
 
-Severity dominates: ``W_SEVERITY = 100`` is large enough that a
-single CRITICAL outranks any volume of WARNINGs. ``log1p(count)``
-gives diminishing returns so 100 occurrences score ~5x a single
-one, not 100x. ``summed_savings_usd`` is summed across contributing
-``MODEL_MISMATCH`` signals; each signal's ``estimated_savings_usd``
-is **already an agent-type aggregate** (model_routing emits one
-signal per agent_type), so summing across contributors only
-double-counts when multiple agent_types share the same
-``(target, signal_types)`` shape — vanishing-rare. Trace-signal
-evidence (``STUCK_PATTERN``, ``RETRY_LOOP``, ``PERMISSION_FAILURE``,
-``TOOL_ERROR_SEQUENCE``) adds a modest boost so deep findings
-outrank metadata-only ones at the same severity + count.
+Severity dominates (``W_SEVERITY = 100``): one CRITICAL outranks any
+volume of WARNINGs. ``log1p(count)`` damps repeats. Trace evidence
+(``STUCK_PATTERN``, ``RETRY_LOOP``, ``PERMISSION_FAILURE``,
+``TOOL_ERROR_SEQUENCE``) gets a modest boost over metadata-only
+signals.
+
+The ``quality_evidence_factor`` (D021) is ``1.0`` when any
+contributing signal maps to ``Axis.QUALITY``, else ``0.0``. The
+annotations approach preserves backward compatibility: recommendations
+without quality signals score identically to v0.5, so post-upgrade
+``diff`` shows zero ``priority_score_delta`` for persisting
+non-quality recommendations.
+
+**Axis attribution (#272, D021/D022/D027).** ``axis_scores`` sums
+each signal's severity-rank contribution into the axis bucket assigned
+by ``SIGNAL_AXIS_MAP``. ``primary_axis`` is the largest bucket; ties
+resolve via ``_AXIS_TIEBREAKER`` (quality > speed > cost) per D027.
 """
 
 from __future__ import annotations
@@ -50,21 +52,17 @@ from agentfluent.diagnostics.models import (
     DiagnosticRecommendation,
     DiagnosticSignal,
     SignalType,
+    zero_axis_scores,
 )
 
 # Single-axis classification per D022. Every ``SignalType`` maps to
 # exactly one ``Axis``; cross-cutting reduced-weight contributions were
 # rejected for Tier 1. ``ERROR_PATTERN``, ``PERMISSION_FAILURE``, and
 # ``MCP_MISSING_SERVER`` land on ``SPEED`` as the closest existing axis
-# for operational-health signals.
-#
-# Defined here (rather than alongside ``SignalType`` in ``models.py``)
-# because aggregation is the natural consumer — ``axis_scores`` and
-# ``primary_axis`` annotations on ``AggregatedRecommendation`` will be
-# computed by reading this map (#272). Defined-but-not-yet-consumed in
-# v0.6 #269; the drift-prevention test in
-# ``tests/unit/test_recommendation_aggregation.py`` ensures any new
-# ``SignalType`` lacking an entry fails CI.
+# for operational-health signals. Defined here rather than in
+# ``models.py`` because aggregation is the natural consumer; the
+# drift-prevention test in ``tests/unit/test_recommendation_aggregation``
+# ensures any new ``SignalType`` lacking an entry fails CI.
 SIGNAL_AXIS_MAP: dict[SignalType, Axis] = {
     SignalType.TOKEN_OUTLIER: Axis.COST,
     SignalType.MODEL_MISMATCH: Axis.COST,
@@ -87,14 +85,21 @@ _SCALAR_METRIC_SIGNALS: frozenset[SignalType] = frozenset(
     {SignalType.TOKEN_OUTLIER, SignalType.DURATION_OUTLIER},
 )
 
-# Priority-score weights (#172). Tuned so severity dominates: a single
-# CRITICAL (rank 3) outranks any volume of WARNING (rank 2). Calibration
-# pass against multi-contributor data is a v0.6 follow-up if dogfood
-# shows the ranking is off.
+# Priority-score weights (#172, #272). Tuned so severity dominates: a
+# single CRITICAL (rank 3) outranks any volume of WARNING (rank 2).
+# Calibration pass against multi-contributor data is a v0.6 follow-up
+# if dogfood shows the ranking is off (#274).
 _PRIORITY_WEIGHT_SEVERITY = 100.0
 _PRIORITY_WEIGHT_COUNT = 10.0
 _PRIORITY_WEIGHT_COST = 1.0
 _PRIORITY_WEIGHT_TRACE = 5.0
+_PRIORITY_WEIGHT_QUALITY = 5.0
+
+# D027: deterministic tiebreaker for ``primary_axis`` when two or more
+# axes carry equal ``axis_scores``. Quality wins ties so the v0.6
+# headline axis stays visible by default; see decisions.md D027 for
+# the product rationale and tradeoffs.
+_AXIS_TIEBREAKER: tuple[Axis, ...] = (Axis.QUALITY, Axis.SPEED, Axis.COST)
 
 # Shape key for grouping per-invocation recommendations. ``agent_type``
 # is ``None`` for cross-cutting recommendations (MCP audit) which form
@@ -191,6 +196,7 @@ def _compute_priority_score(
     count: int,
     summed_savings: float,
     has_trace_evidence: bool,
+    quality_evidence_factor: float = 0.0,
 ) -> float:
     """Composite score per the formula in this module's docstring."""
     return (
@@ -198,7 +204,35 @@ def _compute_priority_score(
         + math.log1p(count) * _PRIORITY_WEIGHT_COUNT
         + summed_savings * _PRIORITY_WEIGHT_COST
         + (1.0 if has_trace_evidence else 0.0) * _PRIORITY_WEIGHT_TRACE
+        + quality_evidence_factor * _PRIORITY_WEIGHT_QUALITY
     )
+
+
+def _signal_axis_contribution(signal: DiagnosticSignal) -> float:
+    """Per-signal contribution to its axis bucket — Tier 1 = severity rank.
+
+    Calibration of the per-signal factor is deferred to #274.
+    """
+    return float(_SEVERITY_RANK[signal.severity])
+
+
+def _compute_axis_attribution(
+    signals: list[DiagnosticSignal],
+) -> tuple[dict[str, float], str]:
+    """Sum per-signal axis contributions and resolve ``primary_axis``.
+
+    Returns ``(axis_scores, primary_axis)``. ``axis_scores`` keys are
+    bare axis strings for stable JSON serialization. ``primary_axis``
+    breaks ties via D027 (quality > speed > cost).
+    """
+    axis_scores = zero_axis_scores()
+    for sig in signals:
+        axis = SIGNAL_AXIS_MAP[sig.signal_type]
+        axis_scores[axis.value] += _signal_axis_contribution(sig)
+    primary_axis = max(
+        _AXIS_TIEBREAKER, key=lambda a: axis_scores[a.value],
+    ).value
+    return axis_scores, primary_axis
 
 
 def aggregate_recommendations(
@@ -228,8 +262,16 @@ def aggregate_recommendations(
             sig.signal_type in TRACE_SIGNAL_TYPES for sig in signals
         )
         summed_savings = _summed_savings_usd(signals)
+        axis_scores, primary_axis = _compute_axis_attribution(signals)
+        quality_evidence_factor = (
+            1.0 if axis_scores[Axis.QUALITY.value] > 0.0 else 0.0
+        )
         priority_score = _compute_priority_score(
-            severity, count, summed_savings, has_trace_evidence,
+            severity,
+            count,
+            summed_savings,
+            has_trace_evidence,
+            quality_evidence_factor=quality_evidence_factor,
         )
 
         aggregated.append(
@@ -246,6 +288,8 @@ def aggregate_recommendations(
                 is_builtin=recs[0].is_builtin,
                 contributing_recommendations=recs,
                 priority_score=priority_score,
+                axis_scores=axis_scores,
+                primary_axis=primary_axis,
             ),
         )
 

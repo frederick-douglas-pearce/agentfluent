@@ -6,7 +6,11 @@ round-trip through ``DiagnosticsResult`` so the raw recommendations
 remain available for verbose drill-down.
 """
 
-from agentfluent.config.models import Severity
+import math
+
+import pytest
+
+from agentfluent.config.models import SEVERITY_RANK, Severity
 from agentfluent.diagnostics.aggregation import (
     SIGNAL_AXIS_MAP,
     aggregate_recommendations,
@@ -455,3 +459,227 @@ class TestPriorityScore:
         assert scores == sorted(scores, reverse=True)
         # Critical first.
         assert aggregated[0].severity == Severity.CRITICAL
+
+
+def _quality_pair(
+    signal_type: SignalType,
+    agent_type: str,
+    severity: Severity = Severity.WARNING,
+    target: str = "prompt",
+) -> tuple[DiagnosticSignal, DiagnosticRecommendation]:
+    """Helper for quality-axis signals (USER_CORRECTION, FILE_REWORK,
+    REVIEWER_CAUGHT). Mirrors the structure used by the production
+    quality_signals module — agent_type-scoped, target=prompt by default."""
+    signal = DiagnosticSignal(
+        signal_type=signal_type,
+        severity=severity,
+        agent_type=agent_type,
+        message=f"[quality] {signal_type.value} signal for '{agent_type}'.",
+        detail={},
+    )
+    rec = DiagnosticRecommendation(
+        target=target,
+        severity=severity,
+        message=f"[quality] {signal_type.value}: tighten '{agent_type}' prompt.",
+        observation=f"{signal_type.value} pattern observed.",
+        reason="Quality signal indicates a configuration gap.",
+        action="Tighten the agent's prompt.",
+        agent_type=agent_type,
+        signal_types=[signal_type],
+    )
+    return signal, rec
+
+
+class TestMultiAxisScoring:
+    """Multi-axis scoring (#272). Quality signals contribute additive
+    boost via ``quality_evidence_factor``; ``axis_scores`` and
+    ``primary_axis`` are post-hoc annotations per D021. Backward compat
+    invariant: non-quality recommendations score identically to v0.5."""
+
+    def test_quality_recommendation_primary_axis_is_quality(self) -> None:
+        # USER_CORRECTION-only → primary_axis="quality" and the quality
+        # bucket carries all the evidence.
+        pair = _quality_pair(SignalType.USER_CORRECTION, "explore")
+        aggregated = aggregate_recommendations([pair])
+        assert len(aggregated) == 1
+        assert aggregated[0].primary_axis == "quality"
+        assert aggregated[0].axis_scores["quality"] > 0.0
+        assert aggregated[0].axis_scores["cost"] == 0.0
+        assert aggregated[0].axis_scores["speed"] == 0.0
+
+    def test_cost_recommendation_primary_axis_is_cost(self) -> None:
+        # TOKEN_OUTLIER → cost axis.
+        pair = _token_outlier_pair("explore", 4.0)
+        aggregated = aggregate_recommendations([pair])
+        assert aggregated[0].primary_axis == "cost"
+        assert aggregated[0].axis_scores["cost"] > 0.0
+        assert aggregated[0].axis_scores["quality"] == 0.0
+
+    def test_speed_recommendation_primary_axis_is_speed(self) -> None:
+        # STUCK_PATTERN → speed axis.
+        pair = _stuck_pattern_pair("architect")
+        aggregated = aggregate_recommendations([pair])
+        assert aggregated[0].primary_axis == "speed"
+        assert aggregated[0].axis_scores["speed"] > 0.0
+        assert aggregated[0].axis_scores["quality"] == 0.0
+
+    def test_mixed_signal_recommendation_picks_dominant_axis(self) -> None:
+        # Construct a single recommendation whose signal_types list spans
+        # cost + speed + quality (e.g., a hypothetical multi-evidence rec).
+        # The aggregation grouping key is shared, so all signals contribute
+        # to the same axis_scores. Two cost signals + one speed = cost wins.
+        agent = "pm"
+        cost_sig_a = DiagnosticSignal(
+            signal_type=SignalType.TOKEN_OUTLIER,
+            severity=Severity.WARNING,
+            agent_type=agent,
+            message="cost a",
+            detail={},
+        )
+        cost_sig_b = DiagnosticSignal(
+            signal_type=SignalType.MODEL_MISMATCH,
+            severity=Severity.WARNING,
+            agent_type=agent,
+            message="cost b",
+            detail={},
+        )
+        speed_sig = DiagnosticSignal(
+            signal_type=SignalType.RETRY_LOOP,
+            severity=Severity.WARNING,
+            agent_type=agent,
+            message="speed",
+            detail={},
+        )
+        # All three roll up into a single aggregated row because they
+        # share (agent_type, target, signal_types). Use the same
+        # signal_types list on each recommendation.
+        signal_types = [
+            SignalType.TOKEN_OUTLIER,
+            SignalType.MODEL_MISMATCH,
+            SignalType.RETRY_LOOP,
+        ]
+        rec_template = DiagnosticRecommendation(
+            target="prompt",
+            severity=Severity.WARNING,
+            message="multi",
+            agent_type=agent,
+            signal_types=signal_types,
+        )
+        aggregated = aggregate_recommendations(
+            [(cost_sig_a, rec_template), (cost_sig_b, rec_template), (speed_sig, rec_template)],
+        )
+        assert len(aggregated) == 1
+        # Two cost signals (rank 2 each = 4.0) vs one speed signal (2.0).
+        assert aggregated[0].axis_scores["cost"] > aggregated[0].axis_scores["speed"]
+        assert aggregated[0].primary_axis == "cost"
+
+    def test_backward_compat_non_quality_score_unchanged(self) -> None:
+        # The diff-stability invariant. A pure-cost recommendation must
+        # produce the same priority_score as the v0.5 formula
+        # (severity_rank * W_SEVERITY + log1p(count) * W_COUNT + ...
+        #  with quality_evidence_factor = 0). Computed manually here.
+        pair = _model_mismatch_pair("explore", 25.0)
+        aggregated = aggregate_recommendations([pair])
+        expected = (
+            SEVERITY_RANK[Severity.WARNING] * 100.0  # W_SEVERITY
+            + math.log1p(1) * 10.0                    # W_COUNT
+            + 25.0 * 1.0                              # W_COST
+            + 0.0 * 5.0                               # W_TRACE (no trace)
+            + 0.0 * 5.0                               # W_QUALITY (no quality)
+        )
+        assert aggregated[0].priority_score == expected
+
+    def test_quality_signal_elevates_priority_score(self) -> None:
+        # A pure-quality WARNING outranks a pure-cost WARNING with no
+        # cost savings, because the quality_evidence_factor adds
+        # W_QUALITY = 5.0 to the composite.
+        cost_pair = _token_outlier_pair("explore", 2.0)  # no savings
+        quality_pair = _quality_pair(SignalType.USER_CORRECTION, "pm")
+        aggregated = aggregate_recommendations([cost_pair, quality_pair])
+        by_agent = {a.agent_type: a for a in aggregated}
+        assert by_agent["pm"].priority_score > by_agent["explore"].priority_score
+        delta = by_agent["pm"].priority_score - by_agent["explore"].priority_score
+        assert delta == pytest.approx(5.0)
+
+    def test_axis_scores_keys_are_bare_strings(self) -> None:
+        # JSON-serializable: dict keys must be plain ``str`` for
+        # downstream consumers (#273 CLI labels). Pydantic dump round-trip
+        # confirms axis_scores survives as a string-keyed dict.
+        pair = _quality_pair(SignalType.FILE_REWORK, "explore")
+        aggregated = aggregate_recommendations([pair])
+        dumped = aggregated[0].model_dump(mode="json")
+        assert dumped["primary_axis"] == "quality"
+        assert set(dumped["axis_scores"].keys()) == {"cost", "speed", "quality"}
+        assert all(isinstance(k, str) for k in dumped["axis_scores"].keys())
+
+    def test_default_axis_scores_when_no_signals(self) -> None:
+        # The model default — used when JSON consumers deserialize a
+        # v0.5 envelope that lacks axis_scores. All zeros, primary_axis
+        # falls back to "cost".
+        agg = AggregatedRecommendation(
+            agent_type="pm",
+            target="prompt",
+            severity=Severity.WARNING,
+            representative_message="ok",
+        )
+        assert agg.axis_scores == {"cost": 0.0, "speed": 0.0, "quality": 0.0}
+        assert agg.primary_axis == "cost"
+
+    @pytest.mark.parametrize(
+        ("sig_a_type", "sig_b_type", "expected_primary"),
+        [
+            # D027: quality wins over cost on equal scores.
+            (SignalType.TOKEN_OUTLIER, SignalType.USER_CORRECTION, "quality"),
+            # D027: quality also wins over speed.
+            (SignalType.RETRY_LOOP, SignalType.USER_CORRECTION, "quality"),
+            # D027: speed beats cost when no quality evidence.
+            (SignalType.TOKEN_OUTLIER, SignalType.RETRY_LOOP, "speed"),
+        ],
+    )
+    def test_tiebreaker_resolves_per_d027(
+        self,
+        sig_a_type: SignalType,
+        sig_b_type: SignalType,
+        expected_primary: str,
+    ) -> None:
+        # Two signals at identical severity contribute equal axis scores,
+        # so primary_axis is decided by the D027 tiebreaker tuple
+        # (quality > speed > cost). One aggregated row carries both signals.
+        agent = "explore"
+        sig_a = DiagnosticSignal(
+            signal_type=sig_a_type,
+            severity=Severity.WARNING,
+            agent_type=agent,
+            message="a",
+            detail={},
+        )
+        sig_b = DiagnosticSignal(
+            signal_type=sig_b_type,
+            severity=Severity.WARNING,
+            agent_type=agent,
+            message="b",
+            detail={},
+        )
+        rec_template = DiagnosticRecommendation(
+            target="prompt",
+            severity=Severity.WARNING,
+            message="tied",
+            agent_type=agent,
+            signal_types=[sig_a_type, sig_b_type],
+        )
+        aggregated = aggregate_recommendations(
+            [(sig_a, rec_template), (sig_b, rec_template)],
+        )
+        assert len(aggregated) == 1
+        assert aggregated[0].primary_axis == expected_primary
+
+    def test_quality_recommendation_surfaces_above_cost_in_sort(self) -> None:
+        # Closes the v0.5 under-recommendation gap: a pure-quality WARNING
+        # ranks above a pure-cost WARNING with no savings, so quality
+        # findings are visible in the default top-N table.
+        cost_pair = _token_outlier_pair("explore", 2.0)
+        quality_pair = _quality_pair(SignalType.REVIEWER_CAUGHT, "pm")
+        aggregated = aggregate_recommendations([cost_pair, quality_pair])
+        # Quality row sorts first by priority_score desc.
+        assert aggregated[0].agent_type == "pm"
+        assert aggregated[0].primary_axis == "quality"
