@@ -675,3 +675,53 @@ class TestUserCorrectionRule:
         )
         recs = correlate([unrelated])
         assert all(rec.target != "subagent" for rec in recs)
+
+
+class TestFileReworkRule:
+    """FILE_REWORK -> ``target='subagent'`` recommendation, copy
+    branches on ``post_completion_edits``."""
+
+    @staticmethod
+    def _signal(post_completion: int = 0) -> DiagnosticSignal:
+        return DiagnosticSignal(
+            signal_type=SignalType.FILE_REWORK,
+            severity=Severity.WARNING,
+            agent_type=None,
+            invocation_id=None,
+            message="File '/src/foo.py' edited 5 times in this session",
+            detail={
+                "file_path": "/src/foo.py",
+                "edit_count": 5,
+                "post_completion_edits": post_completion,
+                "edit_tools": ["Edit"],
+                "completion_scope": "session",
+            },
+        )
+
+    def test_emits_subagent_target(self) -> None:
+        recs = correlate([self._signal()])
+        assert len(recs) == 1
+        rec = recs[0]
+        assert rec.target == "subagent"
+        assert rec.severity == Severity.WARNING
+        assert rec.agent_type is None
+        assert rec.signal_types == [SignalType.FILE_REWORK]
+
+    def test_message_carries_quality_prefix(self) -> None:
+        recs = correlate([self._signal()])
+        assert "[quality]" in recs[0].message
+
+    def test_recommends_review_subagent_iterative(self) -> None:
+        recs = correlate([self._signal(post_completion=0)])
+        action = recs[0].action.lower()
+        assert "architect" in action
+        assert "smaller" in action
+
+    def test_recommends_tester_for_post_completion_rework(self) -> None:
+        """When post_completion_edits > 0 the recommendation copy
+        mentions tester (verifying completion claims) in addition to
+        architect (design review)."""
+        recs = correlate([self._signal(post_completion=2)])
+        action = recs[0].action.lower()
+        assert "architect" in action
+        assert "tester" in action

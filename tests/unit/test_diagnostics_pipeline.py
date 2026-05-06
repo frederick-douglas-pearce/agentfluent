@@ -736,3 +736,34 @@ class TestQualitySignalsWiring:
         assert not any(
             s.signal_type == SignalType.USER_CORRECTION for s in result.signals
         )
+
+    def test_user_correction_and_file_rework_coexist(self) -> None:
+        """Both quality signals fire on the same session when the
+        evidence is present — they are independent observations
+        (architect Q5 on #270)."""
+        edit_block = ContentBlock(
+            type="tool_use",
+            id="toolu_e",
+            name="Edit",
+            input={"file_path": "/src/foo.py"},
+        )
+        # Four assistant messages each with an Edit on /src/foo.py
+        # (threshold = 4) — the last one is also followed by a strong
+        # correction, so USER_CORRECTION fires too.
+        messages: list[SessionMessage] = []
+        for _ in range(4):
+            messages.append(
+                SessionMessage(type="assistant", content_blocks=[edit_block]),
+            )
+        messages.append(
+            SessionMessage(
+                type="user",
+                content_blocks=[
+                    ContentBlock(type="text", text="that's wrong, undo it"),
+                ],
+            ),
+        )
+        result = run_diagnostics([_inv()], parent_messages=messages)
+        kinds = {s.signal_type for s in result.signals}
+        assert SignalType.USER_CORRECTION in kinds
+        assert SignalType.FILE_REWORK in kinds

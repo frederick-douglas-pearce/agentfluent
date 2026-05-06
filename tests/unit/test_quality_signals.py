@@ -8,11 +8,12 @@ even when #274 calibration tunes thresholds.
 
 from __future__ import annotations
 
-from agentfluent.agents.models import AgentInvocation
+from agentfluent.agents.models import WRITE_TOOLS, AgentInvocation
 from agentfluent.config.models import Severity
 from agentfluent.core.session import ContentBlock, SessionMessage
 from agentfluent.diagnostics.models import SignalType
 from agentfluent.diagnostics.quality_signals import (
+    _EDIT_TOOL_NAMES,
     REVIEW_AGENT_TYPES,
     extract_quality_signals,
 )
@@ -32,21 +33,37 @@ def _assistant_text(text: str) -> SessionMessage:
     )
 
 
+def _assistant_with_edits(
+    *file_paths: str,
+    text: str = "",
+    tool_name: str = "Edit",
+) -> SessionMessage:
+    """Assistant message with one Edit tool_use per file_path.
+
+    Optional leading text block when ``text`` is non-empty. Tool block
+    ids are unique within the message (``toolu_e0``, ``toolu_e1``, ...)
+    so multiple-edit messages don't collide on tool_use_id.
+    """
+    blocks: list[ContentBlock] = []
+    if text:
+        blocks.append(ContentBlock(type="text", text=text))
+    for i, fp in enumerate(file_paths):
+        blocks.append(
+            ContentBlock(
+                type="tool_use",
+                id=f"toolu_e{i}",
+                name=tool_name,
+                input={"file_path": fp},
+            ),
+        )
+    return SessionMessage(type="assistant", content_blocks=blocks)
+
+
 def _assistant_with_write_tool(
     text: str = "Editing the file now.", tool_name: str = "Edit",
 ) -> SessionMessage:
-    return SessionMessage(
-        type="assistant",
-        content_blocks=[
-            ContentBlock(type="text", text=text),
-            ContentBlock(
-                type="tool_use",
-                id="toolu_w",
-                name=tool_name,
-                input={"file_path": "/tmp/x.py"},
-            ),
-        ],
-    )
+    """Single-file convenience wrapper around ``_assistant_with_edits``."""
+    return _assistant_with_edits("/tmp/x.py", text=text, tool_name=tool_name)
 
 
 class TestUserCorrectionDetection:
@@ -289,3 +306,153 @@ class TestExtractQualitySignalsSignature:
         assert REVIEW_AGENT_TYPES >= {
             "architect", "code-reviewer", "tester", "security-review",
         }
+
+
+class TestFileReworkDetection:
+    """``FILE_REWORK`` fires when a single file is edited at or above
+    ``_FILE_REWORK_THRESHOLD`` (default 4) within one session. Detection
+    is cross-cutting — ``agent_type=None``."""
+
+    def test_fires_at_threshold(self) -> None:
+        messages = [
+            _assistant_with_edits("/src/foo.py") for _ in range(4)
+        ]
+        signals = extract_quality_signals(messages)
+        rework = [s for s in signals if s.signal_type == SignalType.FILE_REWORK]
+        assert len(rework) == 1
+        sig = rework[0]
+        assert sig.agent_type is None
+        assert sig.detail["file_path"] == "/src/foo.py"
+        assert sig.detail["edit_count"] == 4
+        assert sig.detail["post_completion_edits"] == 0
+        assert sig.detail["completion_scope"] == "session"
+
+    def test_below_threshold_does_not_fire(self) -> None:
+        messages = [
+            _assistant_with_edits("/src/foo.py") for _ in range(3)
+        ]
+        signals = extract_quality_signals(messages)
+        assert not any(
+            s.signal_type == SignalType.FILE_REWORK for s in signals
+        )
+
+    def test_post_completion_edits_counted(self) -> None:
+        """Edits after completion language fire ``post_completion_edits``.
+
+        The completion-language message itself carries an edit and the
+        flag flips before the per-block loop, so its own edit counts
+        plus the two messages after it = 3.
+        """
+        messages = [
+            *(_assistant_with_edits("/src/foo.py") for _ in range(2)),
+            _assistant_with_edits("/src/foo.py", text="all done with this"),
+            *(_assistant_with_edits("/src/foo.py") for _ in range(2)),
+        ]
+        signals = extract_quality_signals(messages)
+        rework = [s for s in signals if s.signal_type == SignalType.FILE_REWORK]
+        assert len(rework) == 1
+        assert rework[0].detail["post_completion_edits"] == 3
+
+    def test_multiple_files_independent(self) -> None:
+        """Each file is evaluated against the threshold independently."""
+        messages = [
+            _assistant_with_edits("/a.py", "/b.py") for _ in range(2)
+        ] + [
+            _assistant_with_edits("/a.py", "/a.py") for _ in range(2)
+        ]
+        # /a.py: 6 edits (2 messages with 1 each + 2 messages with 2 each)
+        # /b.py: 2 edits
+        signals = extract_quality_signals(messages)
+        rework = {
+            s.detail["file_path"]: s for s in signals
+            if s.signal_type == SignalType.FILE_REWORK
+        }
+        assert "/a.py" in rework
+        assert "/b.py" not in rework
+
+    def test_multi_edit_counted(self) -> None:
+        """``MultiEdit`` is in ``_EDIT_TOOL_NAMES`` and contributes."""
+        messages = [
+            _assistant_with_edits("/x.py", tool_name="MultiEdit")
+            for _ in range(4)
+        ]
+        signals = extract_quality_signals(messages)
+        rework = [s for s in signals if s.signal_type == SignalType.FILE_REWORK]
+        assert len(rework) == 1
+        assert "MultiEdit" in rework[0].detail["edit_tools"]
+
+    def test_bash_ignored(self) -> None:
+        """``Bash`` is excluded from ``_EDIT_TOOL_NAMES`` (no
+        single ``file_path`` input — shell-command parsing is out of
+        scope for FILE_REWORK)."""
+        messages = [
+            SessionMessage(
+                type="assistant",
+                content_blocks=[
+                    ContentBlock(
+                        type="tool_use",
+                        id=f"toolu_b{i}",
+                        name="Bash",
+                        input={"command": "echo hello"},
+                    ),
+                ],
+            )
+            for i in range(5)
+        ]
+        signals = extract_quality_signals(messages)
+        assert not any(
+            s.signal_type == SignalType.FILE_REWORK for s in signals
+        )
+
+    def test_missing_file_path_skipped(self) -> None:
+        """An Edit block whose ``input`` lacks ``file_path`` (or has a
+        non-string value) is silently skipped — no ``None``-keyed entries
+        in the per-file count dict."""
+        messages = [
+            SessionMessage(
+                type="assistant",
+                content_blocks=[
+                    ContentBlock(
+                        type="tool_use",
+                        id=f"toolu_m{i}",
+                        name="Edit",
+                        input={},  # no file_path
+                    ),
+                ],
+            )
+            for i in range(5)
+        ]
+        signals = extract_quality_signals(messages)
+        assert not any(
+            s.signal_type == SignalType.FILE_REWORK for s in signals
+        )
+
+    def test_non_string_file_path_skipped(self) -> None:
+        messages = [
+            SessionMessage(
+                type="assistant",
+                content_blocks=[
+                    ContentBlock(
+                        type="tool_use",
+                        id=f"toolu_n{i}",
+                        name="Edit",
+                        input={"file_path": 42},  # type: ignore[dict-item]
+                    ),
+                ],
+            )
+            for i in range(5)
+        ]
+        signals = extract_quality_signals(messages)
+        assert not any(
+            s.signal_type == SignalType.FILE_REWORK for s in signals
+        )
+
+
+class TestEditToolNamesContract:
+    """Drift-prevention: ``_EDIT_TOOL_NAMES`` is a strict subset of
+    ``WRITE_TOOLS``. If ``WRITE_TOOLS`` ever gains a new file-path-bearing
+    tool, this test fails as a reminder to consider extending the
+    rework detector to include it."""
+
+    def test_edit_tool_names_subset_of_write_tools(self) -> None:
+        assert _EDIT_TOOL_NAMES <= WRITE_TOOLS
