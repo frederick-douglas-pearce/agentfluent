@@ -425,6 +425,133 @@ class TestForwardCompat:
         assert result.resolved_count == 0
 
 
+class TestAxisAttributionInDiff:
+    """Axis attribution propagation (#273). The diff layer reads
+    ``primary_axis`` off each side and exposes ``baseline_primary_axis``
+    / ``current_primary_axis`` plus a derived ``axis_shifted`` flag.
+    Pre-v0.6 envelopes (no ``primary_axis``) deserialize to ``None``
+    on the missing side and never trigger ``axis_shifted``."""
+
+    def test_persisting_carries_both_axes_when_present(self) -> None:
+        baseline = _envelope(aggregated_recs=[
+            _agg_rec(
+                agent_type="pm", target="prompt", signal_types=["retry_loop"],
+                priority_score=10.0,
+            ) | {"primary_axis": "cost"},
+        ])
+        current = _envelope(aggregated_recs=[
+            _agg_rec(
+                agent_type="pm", target="prompt", signal_types=["retry_loop"],
+                priority_score=15.0,
+            ) | {"primary_axis": "cost"},
+        ])
+
+        result = compute_diff(baseline, current)
+
+        assert result.persisting_count == 1
+        rec = result.recommendations[0]
+        assert rec.baseline_primary_axis == "cost"
+        assert rec.current_primary_axis == "cost"
+        assert rec.axis_shifted is False
+
+    def test_axis_shift_detected_on_persisting(self) -> None:
+        baseline = _envelope(aggregated_recs=[
+            _agg_rec(
+                agent_type="pm", target="prompt", signal_types=["retry_loop"],
+            ) | {"primary_axis": "cost"},
+        ])
+        current = _envelope(aggregated_recs=[
+            _agg_rec(
+                agent_type="pm", target="prompt", signal_types=["retry_loop"],
+            ) | {"primary_axis": "quality"},
+        ])
+
+        result = compute_diff(baseline, current)
+
+        rec = result.recommendations[0]
+        assert rec.status == "persisting"
+        assert rec.baseline_primary_axis == "cost"
+        assert rec.current_primary_axis == "quality"
+        assert rec.axis_shifted is True
+
+    def test_legacy_baseline_no_primary_axis_does_not_trigger_shift(self) -> None:
+        # Pre-v0.6 envelope: no primary_axis key on the rec at all.
+        # Architect-mandated: baseline_primary_axis stays None and
+        # axis_shifted is False even though current has an axis.
+        baseline = _envelope(aggregated_recs=[
+            _agg_rec(
+                agent_type="pm", target="prompt", signal_types=["retry_loop"],
+            ),  # no primary_axis
+        ])
+        current = _envelope(aggregated_recs=[
+            _agg_rec(
+                agent_type="pm", target="prompt", signal_types=["retry_loop"],
+            ) | {"primary_axis": "quality"},
+        ])
+
+        result = compute_diff(baseline, current)
+
+        rec = result.recommendations[0]
+        assert rec.status == "persisting"
+        assert rec.baseline_primary_axis is None
+        assert rec.current_primary_axis == "quality"
+        assert rec.axis_shifted is False
+
+    def test_new_status_baseline_axis_is_none(self) -> None:
+        baseline = _envelope(aggregated_recs=[])
+        current = _envelope(aggregated_recs=[
+            _agg_rec(
+                agent_type="pm", target="prompt", signal_types=["retry_loop"],
+            ) | {"primary_axis": "speed"},
+        ])
+
+        result = compute_diff(baseline, current)
+
+        rec = result.recommendations[0]
+        assert rec.status == "new"
+        assert rec.baseline_primary_axis is None
+        assert rec.current_primary_axis == "speed"
+        assert rec.axis_shifted is False
+
+    def test_resolved_status_current_axis_is_none(self) -> None:
+        baseline = _envelope(aggregated_recs=[
+            _agg_rec(
+                agent_type="pm", target="prompt", signal_types=["retry_loop"],
+            ) | {"primary_axis": "quality"},
+        ])
+        current = _envelope(aggregated_recs=[])
+
+        result = compute_diff(baseline, current)
+
+        rec = result.recommendations[0]
+        assert rec.status == "resolved"
+        assert rec.baseline_primary_axis == "quality"
+        assert rec.current_primary_axis is None
+        assert rec.axis_shifted is False
+
+    def test_axis_shifted_serializes_in_json_dump(self) -> None:
+        # Pydantic computed_field must round-trip through model_dump so
+        # JSON envelope consumers see the axis_shifted flag without
+        # having to recompute from the two axis fields.
+        baseline = _envelope(aggregated_recs=[
+            _agg_rec(
+                agent_type="pm", target="prompt", signal_types=["retry_loop"],
+            ) | {"primary_axis": "cost"},
+        ])
+        current = _envelope(aggregated_recs=[
+            _agg_rec(
+                agent_type="pm", target="prompt", signal_types=["retry_loop"],
+            ) | {"primary_axis": "quality"},
+        ])
+
+        result = compute_diff(baseline, current)
+        dumped = result.model_dump(mode="json")
+        rec_dumped = dumped["recommendations"][0]
+        assert rec_dumped["baseline_primary_axis"] == "cost"
+        assert rec_dumped["current_primary_axis"] == "quality"
+        assert rec_dumped["axis_shifted"] is True
+
+
 class TestDiffResultSerialization:
     def test_model_dump_round_trips(self) -> None:
         baseline = _envelope(aggregated_recs=[

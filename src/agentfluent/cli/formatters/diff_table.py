@@ -14,6 +14,8 @@ from rich.table import Table
 
 from agentfluent.cli.formatters.helpers import (
     GLOBAL_AGENT_LABEL,
+    axis_label,
+    axis_shift_label,
     format_cost,
     format_tokens,
     severity_cell,
@@ -144,13 +146,18 @@ def _print_rec_table(
             count_cell = str(base_count)
             priority_cell = f"{base_priority:.1f}"
 
+        prefix = _axis_prefix(row)
+        message_body = truncate(escape(row.representative_message), 80)
+        message_cell = (
+            f"{prefix} {message_body}" if prefix else message_body
+        )
         table.add_row(
             severity_cell(row.severity),
             agent,
             row.target,
             count_cell,
             priority_cell,
-            truncate(escape(row.representative_message), 80),
+            message_cell,
         )
 
     console.print(table)
@@ -269,6 +276,22 @@ def _render_regression_footer(console: Console, result: DiffResult) -> None:
 # ---------------------------------------------------------------------------
 # Cell formatters
 # ---------------------------------------------------------------------------
+
+
+def _axis_prefix(row: RecommendationDelta) -> str:
+    """Render the axis-attribution prefix for a delta's message cell.
+
+    Returns an empty string when neither side carries a ``primary_axis``
+    (e.g., diffing two pre-v0.6 envelopes).
+    """
+    if row.axis_shifted:
+        assert row.baseline_primary_axis is not None
+        assert row.current_primary_axis is not None
+        return axis_shift_label(row.baseline_primary_axis, row.current_primary_axis)
+    axis = row.current_primary_axis or row.baseline_primary_axis
+    if axis is None:
+        return ""
+    return axis_label(axis)
 
 
 def _signed(value: float, formatted_abs: str) -> str:
