@@ -19,7 +19,7 @@ from agentfluent.diagnostics.models import (
 
 def make_agg(
     *,
-    agent_type: str = "pm",
+    agent_type: str | None = "pm",
     severity: Severity = Severity.WARNING,
     target: str = "prompt",
     count: int = 1,

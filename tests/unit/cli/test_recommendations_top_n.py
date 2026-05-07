@@ -1,9 +1,10 @@
-"""Tests for the Top-N priority-fixes summary block (#172).
+"""Tests for the Top-N priority-fixes pointer block (#172, redesigned in #285).
 
 Covers the `_format_top_recommendations` block that renders above the
 full Recommendations table and the index column on the full table that
-matches the summary numbers. Suppression rules (top_n=0, no aggregated
-rows, verbose mode) are exercised via `_format_diagnostics_table`.
+matches the summary numbers. The block is a pointer list, not a copy
+of the table — it surfaces severity/agent/count/target/axis only and
+relies on the table below for the recommendation prose.
 """
 
 from __future__ import annotations
@@ -31,8 +32,10 @@ class TestTopRecommendationsBlock:
         )
         text = render_top_only(diag, top_n=5)
         assert "Top 5 priority fixes" in text
+        assert "see Recommendations table below for detail" in text
         for i in range(5):
             assert f"agent-{i}" in text
+            assert f"#{i + 1}" in text
         # 6th, 7th, 8th NOT in summary.
         assert "agent-5" not in text
         assert "agent-7" not in text
@@ -61,7 +64,7 @@ class TestTopRecommendationsBlock:
         text = render_top_only(diag, top_n=5)
         assert text == ""
 
-    def test_count_suffix_only_when_gt_one(self) -> None:
+    def test_count_always_rendered_in_column(self) -> None:
         diag = DiagnosticsResult(
             aggregated_recommendations=[
                 make_agg(agent_type="single", count=1),
@@ -69,15 +72,55 @@ class TestTopRecommendationsBlock:
             ],
         )
         text = render_top_only(diag, top_n=5)
-        # No count suffix on count=1 rows (the "(1×)" would be noise).
         single_line = next(
             line for line in text.split("\n") if "single" in line
         )
         multi_line = next(
             line for line in text.split("\n") if "multi" in line
         )
-        assert "(1×)" not in single_line
-        assert "(4×)" in multi_line
+        assert "1×" in single_line
+        assert "4×" in multi_line
+
+    def test_does_not_duplicate_representative_message(self) -> None:
+        # The whole point of #285: the pointer block must not repeat
+        # the prose that the Recommendations table below already carries.
+        unique_prose = "Pin the model to claude-haiku-4-5 to cap unit cost."
+        diag = DiagnosticsResult(
+            aggregated_recommendations=[
+                make_agg(agent_type="pm", representative_message=unique_prose),
+            ],
+        )
+        text = render_top_only(diag, top_n=5)
+        assert unique_prose not in text
+
+    def test_pointer_row_contains_severity_agent_target_and_axis(self) -> None:
+        diag = DiagnosticsResult(
+            aggregated_recommendations=[
+                make_agg(
+                    agent_type="distinct-agent",
+                    severity=Severity.CRITICAL,
+                    target="tools",
+                    count=3,
+                    primary_axis="quality",
+                ),
+            ],
+        )
+        text = render_top_only(diag, top_n=5)
+        row_line = next(
+            line for line in text.split("\n") if "distinct-agent" in line
+        )
+        assert "#1" in row_line
+        assert "critical" in row_line
+        assert "3×" in row_line
+        assert "target: tools" in row_line
+        assert "[quality]" in row_line
+
+    def test_global_agent_label_renders_when_agent_type_none(self) -> None:
+        diag = DiagnosticsResult(
+            aggregated_recommendations=[make_agg(agent_type=None)],
+        )
+        text = render_top_only(diag, top_n=5)
+        assert "(global)" in text
 
 
 class TestFullTableIndexColumn:
@@ -102,11 +145,16 @@ class TestFullTableIndexColumn:
             ],
         )
         text = render_section(diag, top_n=2, width=120)
-        summary_alpha_idx = text.index("1. ")
-        rec_section = text[text.index("Recommendations"):]
-        assert "alpha" in rec_section
+        # The header now contains "see Recommendations table" inline, so
+        # locate the actual table by its rightmost occurrence (the
+        # centered title rendered by Rich).
+        table_idx = text.rindex("Recommendations")
+        summary_text = text[text.index("Top 2 priority fixes"):table_idx]
+        rec_section = text[table_idx:]
+        assert "alpha" in summary_text
+        assert "beta" in summary_text
         # gamma is NOT in the summary (top_n=2) but IS in the full table.
-        assert "gamma" not in text[:summary_alpha_idx]
+        assert "gamma" not in summary_text
         assert "gamma" in rec_section
 
 
