@@ -126,12 +126,25 @@ def _normalize_content(raw_content: str | list[dict[str, Any]] | None) -> list[C
                     )
                 )
             elif block_type == "tool_result":
-                # `content` can be a string or a list of sub-blocks; richer
-                # sub-block shapes are captured as None pending a use case.
+                # ``content`` is either a string (single-line tool output) or
+                # a list of sub-blocks. Agent results in particular use the
+                # list form ``[{"type": "text", "text": "..."}]``; the prior
+                # implementation dropped them as None, leaving downstream
+                # consumers (e.g. REVIEWER_CAUGHT detection) with no input.
+                # Concatenate the text-typed sub-blocks; non-text shapes
+                # remain unsupported but are preserved as a fallback.
                 result_content = item.get("content")
-                result_text = (
-                    result_content if isinstance(result_content, str) else None
-                )
+                if isinstance(result_content, str):
+                    result_text: str | None = result_content
+                elif isinstance(result_content, list):
+                    parts = [
+                        sub.get("text", "")
+                        for sub in result_content
+                        if isinstance(sub, dict) and sub.get("type") == "text"
+                    ]
+                    result_text = "\n".join(p for p in parts if p) or None
+                else:
+                    result_text = None
                 blocks.append(
                     ContentBlock(
                         type="tool_result",
