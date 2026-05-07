@@ -417,17 +417,16 @@ def _format_top_recommendations(
     *,
     top_n: int,
 ) -> None:
-    """Render a compact "Top N priority fixes" block above the full table.
+    """Render a compact "Top N priority fixes" pointer block above the full table.
 
-    Each row uses the same index that appears in the full
-    Recommendations table's leading ``#`` column, so users can scan the
-    summary and find the matching detail row by number. Suppressed when
-    ``top_n == 0`` or no aggregated rows exist.
-
-    Format: ``  N. [axis] [severity] agent (count×): representative_message``.
-    The aggregated list is already sorted by ``priority_score`` desc
-    (see ``aggregation.aggregate_recommendations``), so the top N rows
-    are the top N priorities by definition.
+    Each row's ``#N`` index matches the same row's index in the
+    Recommendations table below — the summary is a pointer list, not a
+    second copy of the table. Drops ``representative_message`` (the
+    table immediately below carries it) and surfaces only the
+    load-bearing scan signals: severity, agent, count, target, axis.
+    Suppressed when ``top_n == 0`` or no aggregated rows exist. The
+    aggregated list is already sorted by ``priority_score`` desc, so
+    the top N rows are the top N priorities by definition.
     """
     if top_n <= 0:
         return
@@ -436,16 +435,29 @@ def _format_top_recommendations(
         return
     shown = min(top_n, len(aggs))
 
-    console.print(f"\n[bold]Top {shown} priority fixes[/bold]")
+    console.print(
+        f"\n[bold]Top {shown} priority fixes "
+        "(see Recommendations table below for detail):[/bold]",
+    )
+
+    table = Table(show_header=False, box=None, padding=(0, 1))
+    table.add_column("#", style="dim", justify="right")
+    table.add_column("Severity")
+    table.add_column("Agent", style="cyan")
+    table.add_column("Count", justify="right")
+    table.add_column("Target")
+    table.add_column("Axis")
+
     for idx, agg in enumerate(aggs[:shown], start=1):
-        axis = axis_label(Axis(agg.primary_axis))
-        severity = severity_cell(agg.severity)
-        agent = escape(agg.agent_type or GLOBAL_AGENT_LABEL)
-        count_suffix = f" ({agg.count}×)" if agg.count > 1 else ""
-        message = escape(agg.representative_message)
-        console.print(
-            f"  {idx}. {axis} {severity} [cyan]{agent}[/cyan]{count_suffix}: {message}",
+        table.add_row(
+            f"#{idx}",
+            severity_cell(agg.severity),
+            escape(agg.agent_type or GLOBAL_AGENT_LABEL),
+            f"{agg.count}×",
+            f"target: {escape(agg.target)}",
+            axis_label(Axis(agg.primary_axis)),
         )
+    console.print(table)
 
 
 def _format_deep_diagnostics(
