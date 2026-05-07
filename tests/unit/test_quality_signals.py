@@ -14,6 +14,7 @@ from agentfluent.core.session import ContentBlock, SessionMessage
 from agentfluent.diagnostics.models import SignalType
 from agentfluent.diagnostics.quality_signals import (
     _EDIT_TOOL_NAMES,
+    _FILE_REWORK_THRESHOLD,
     REVIEW_AGENT_TYPES,
     extract_quality_signals,
 )
@@ -68,13 +69,7 @@ def _assistant_with_write_tool(
 
 class TestUserCorrectionDetection:
     def test_three_corrections_in_ten_user_messages_emits_three_signals(self) -> None:
-        """AC fixture: 3 corrections in 10 user messages -> 3 USER_CORRECTION signals.
-
-        The fixture's repeated edits to a single file also trigger
-        FILE_REWORK under #274's POST_COMPLETION_BOOST; filter to the
-        correction signals so this test stays focused on the correction
-        AC instead of cross-contaminating with rework behavior.
-        """
+        """AC fixture: 3 corrections in 10 user messages -> 3 signals."""
         messages: list[SessionMessage] = []
         # 7 non-correction user messages (preceded by a non-write assistant
         # text) interleaved with 3 corrections (preceded by write tools).
@@ -85,12 +80,10 @@ class TestUserCorrectionDetection:
             messages.append(_assistant_with_write_tool(f"Edited file {i}"))
             messages.append(_user(f"no, do something different ({i})"))
 
-        signals = [
-            s for s in extract_quality_signals(messages)
-            if s.signal_type == SignalType.USER_CORRECTION
-        ]
+        signals = extract_quality_signals(messages)
 
         assert len(signals) == 3
+        assert all(s.signal_type == SignalType.USER_CORRECTION for s in signals)
         # session_correction_rate stamped on every signal: 3 / 10 = 0.3
         rate = signals[0].detail["session_correction_rate"]
         assert isinstance(rate, float)
@@ -323,7 +316,8 @@ class TestFileReworkDetection:
 
     def test_fires_at_threshold(self) -> None:
         messages = [
-            _assistant_with_edits("/src/foo.py") for _ in range(4)
+            _assistant_with_edits("/src/foo.py")
+            for _ in range(_FILE_REWORK_THRESHOLD)
         ]
         signals = extract_quality_signals(messages)
         rework = [s for s in signals if s.signal_type == SignalType.FILE_REWORK]
@@ -331,13 +325,14 @@ class TestFileReworkDetection:
         sig = rework[0]
         assert sig.agent_type is None
         assert sig.detail["file_path"] == "/src/foo.py"
-        assert sig.detail["edit_count"] == 4
+        assert sig.detail["edit_count"] == _FILE_REWORK_THRESHOLD
         assert sig.detail["post_completion_edits"] == 0
         assert sig.detail["completion_scope"] == "session"
 
     def test_below_threshold_does_not_fire(self) -> None:
         messages = [
-            _assistant_with_edits("/src/foo.py") for _ in range(3)
+            _assistant_with_edits("/src/foo.py")
+            for _ in range(_FILE_REWORK_THRESHOLD - 1)
         ]
         signals = extract_quality_signals(messages)
         assert not any(
@@ -345,31 +340,33 @@ class TestFileReworkDetection:
         )
 
     def test_post_completion_edits_counted(self) -> None:
-        """Edits after completion language fire ``post_completion_edits``.
-
-        The completion-language message itself carries an edit and the
-        flag flips before the per-block loop, so its own edit counts
-        plus the two messages after it = 3.
-        """
+        """Edits after completion language are still tallied on ``detail``
+        even when ``POST_COMPLETION_BOOST`` is disabled — the field
+        itself remains useful for downstream analysis."""
+        n = _FILE_REWORK_THRESHOLD
+        # Spread n edits across pre/post-completion messages: 2 before,
+        # n-2 after a completion phrase. The signal still fires (count
+        # >= threshold) and detail.post_completion_edits reflects the
+        # count after the flag flipped.
         messages = [
             *(_assistant_with_edits("/src/foo.py") for _ in range(2)),
             _assistant_with_edits("/src/foo.py", text="all done with this"),
-            *(_assistant_with_edits("/src/foo.py") for _ in range(2)),
+            *(_assistant_with_edits("/src/foo.py") for _ in range(n - 3)),
         ]
         signals = extract_quality_signals(messages)
         rework = [s for s in signals if s.signal_type == SignalType.FILE_REWORK]
         assert len(rework) == 1
-        assert rework[0].detail["post_completion_edits"] == 3
+        # 1 (the completion-language message itself) + (n - 3) after = n - 2.
+        assert rework[0].detail["post_completion_edits"] == n - 2
 
     def test_multiple_files_independent(self) -> None:
         """Each file is evaluated against the threshold independently."""
-        messages = [
-            _assistant_with_edits("/a.py", "/b.py") for _ in range(2)
-        ] + [
-            _assistant_with_edits("/a.py", "/a.py") for _ in range(2)
-        ]
-        # /a.py: 6 edits (2 messages with 1 each + 2 messages with 2 each)
-        # /b.py: 2 edits
+        # /a.py: edited above threshold; /b.py: edited just twice.
+        a_edits = _FILE_REWORK_THRESHOLD
+        messages = (
+            [_assistant_with_edits("/a.py", "/b.py") for _ in range(2)]
+            + [_assistant_with_edits("/a.py") for _ in range(a_edits - 2)]
+        )
         signals = extract_quality_signals(messages)
         rework = {
             s.detail["file_path"]: s for s in signals
@@ -382,7 +379,7 @@ class TestFileReworkDetection:
         """``MultiEdit`` is in ``_EDIT_TOOL_NAMES`` and contributes."""
         messages = [
             _assistant_with_edits("/x.py", tool_name="MultiEdit")
-            for _ in range(4)
+            for _ in range(_FILE_REWORK_THRESHOLD)
         ]
         signals = extract_quality_signals(messages)
         rework = [s for s in signals if s.signal_type == SignalType.FILE_REWORK]
@@ -713,31 +710,47 @@ class TestUserCorrectionEmissionGates:
 
 
 class TestFileReworkPostCompletionBoost:
-    """``POST_COMPLETION_BOOST=True`` lowers ``_FILE_REWORK_THRESHOLD``
-    by 1 (floored at 2) for files with any post-completion edits."""
+    """``POST_COMPLETION_BOOST`` is disabled by default after #274
+    calibration — completion-language phrases are too common in
+    normal dev prose for the boost to be meaningful. These tests
+    pin the off-by-default behavior so a future change to the flag
+    surfaces here. The boost mechanism itself (lower threshold by
+    1, floored at 2) is exercised via patching when re-enabled."""
 
-    def test_boost_lowers_threshold_to_three(self) -> None:
-        # 3 edits, completion language at edit 2 → boosted threshold = 3, fires.
+    def test_no_boost_at_default_when_below_threshold(self) -> None:
+        # threshold-1 edits with completion language → no signal.
+        n = _FILE_REWORK_THRESHOLD - 1
         messages = [
-            _assistant_with_edits("/src/foo.py"),
+            _assistant_with_edits("/src/foo.py") for _ in range(n - 1)
+        ] + [
             _assistant_with_edits("/src/foo.py", text="all done with this"),
-            _assistant_with_edits("/src/foo.py"),
-        ]
-        signals = extract_quality_signals(messages)
-        rework = [s for s in signals if s.signal_type == SignalType.FILE_REWORK]
-        assert len(rework) == 1
-        assert rework[0].detail["edit_count"] == 3
-        assert rework[0].detail["post_completion_edits"] >= 1
-
-    def test_no_boost_when_no_post_completion(self) -> None:
-        # 3 edits, 0 post-completion → unboosted threshold = 4, suppressed.
-        messages = [
-            _assistant_with_edits("/src/foo.py") for _ in range(3)
         ]
         signals = extract_quality_signals(messages)
         assert not any(
             s.signal_type == SignalType.FILE_REWORK for s in signals
         )
+
+    def test_boost_helper_lowers_threshold_when_enabled(self) -> None:
+        # Patch the module-level flag to True; threshold-1 edits then fire.
+        from agentfluent.diagnostics import quality_signals as qs
+        original = qs.POST_COMPLETION_BOOST
+        qs.POST_COMPLETION_BOOST = True
+        try:
+            n = _FILE_REWORK_THRESHOLD - 1
+            messages = [
+                _assistant_with_edits("/src/foo.py")
+                for _ in range(n - 1)
+            ] + [
+                _assistant_with_edits("/src/foo.py", text="all done with this"),
+            ]
+            signals = extract_quality_signals(messages)
+            rework = [
+                s for s in signals if s.signal_type == SignalType.FILE_REWORK
+            ]
+            assert len(rework) == 1
+            assert rework[0].detail["edit_count"] == n
+        finally:
+            qs.POST_COMPLETION_BOOST = original
 
 
 class TestReviewerCaughtRateGate:

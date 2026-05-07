@@ -158,15 +158,21 @@ MIN_CORRECTION_RATE = 0.10
 _EDIT_TOOL_NAMES: frozenset[str] = frozenset({"Edit", "Write", "MultiEdit"})
 
 # A file edited at or above this threshold within a single session
-# fires ``FILE_REWORK``. Module-level constant for #274 calibration.
-_FILE_REWORK_THRESHOLD = 4
+# fires ``FILE_REWORK``. Calibrated in #274 against agentfluent dogfood
+# data: edit_count distribution was p25=4, median=5, p75=8, p90=12 —
+# the prior default of 4 sat at the noise floor and over-fired on
+# normal iterative dev. Raised to 8 to land above the p75, in the
+# right tail where edits-per-file plausibly indicate a quality miss.
+_FILE_REWORK_THRESHOLD = 8
 
 # When ``True``, lower the FILE_REWORK threshold by 1 for files that
-# received any post-completion edits — the "we said done but kept
-# editing" pattern is a stronger quality miss than raw rework count.
-# Boolean (not magnitude) by design: calibration answers "should we
-# boost?", not "by how much?".
-POST_COMPLETION_BOOST = True
+# received any post-completion edits. Disabled in #274 calibration:
+# completion-language patterns (``done``/``complete``/``finished``)
+# are ubiquitous in normal dev prose, so the boost effectively meant
+# "always lower the threshold by 1" — defeating the very signal it
+# was supposed to encode. Re-enable only after ``_COMPLETION_PATTERNS``
+# is tightened to require explicit ship claims.
+POST_COMPLETION_BOOST = False
 
 # "Completion language" patterns. When any assistant message in the
 # session matches one of these, subsequent edits to any file are

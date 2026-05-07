@@ -1589,7 +1589,7 @@ for sess in (cohort_with + cohort_without):
         for s in rework
     ])
 
-threshold_grid = [3, 4, 5, 7]
+threshold_grid = [3, 4, 5, 7, 8, 12]
 rows = []
 for thr, boost in itertools.product(threshold_grid, [False, True]):
     fired = 0
@@ -1953,21 +1953,23 @@ _show_recs("WITHOUT-cohort quality recommendations", without_recs, k=3)
 
     cells.append(md(r"""## 12.6 · Findings and chosen values
 
-| Constant | Default | Sweep range | Chosen | Rationale |
+| Constant | Prior | Sweep range | Chosen | Rationale |
 |---|---|---|---|---|
 | `MIN_CORRECTIONS_PER_SESSION` | 2 | {1, 2, 3, 5} | **keep 2** | Single-correction floor against noise; sweep table above shows session-fire counts at each value. PM-revised to OR-gate with rate. |
 | `MIN_CORRECTION_RATE` | 0.10 | {0.05, 0.10, 0.15, 0.20} | **keep 0.10** | Rate gate ensures dense correction sessions surface even at low absolute counts. OR'd with count gate above. |
-| `_FILE_REWORK_THRESHOLD` | 4 | {3, 4, 5, 7} | **keep 4** | Conservative-defaults rule: prefer false negatives. Sweep shows the difference fire-count between 3 and 4 is small on this dataset. |
-| `POST_COMPLETION_BOOST` | True | {False, True} | **keep True** | The "we said done but kept editing" pattern is stronger evidence than raw rework count; boolean by design. |
+| `_FILE_REWORK_THRESHOLD` | 4 | {3, 4, 5, 7, 8} | **raised to 8** | Drill-down (§12.5) showed edit_count distribution `p25=4, median=5, p75=8, p90=12` — the prior default sat at the noise floor. Top flagged files were README, test files, the calibration notebook itself: legitimate iterative dev, not quality misses. New default lands above p75 in the right tail. |
+| `POST_COMPLETION_BOOST` | True | {False, True} | **disabled (False)** | Completion-language patterns (`done`/`complete`/`finished`) are ubiquitous in normal dev prose, so the boost effectively meant "always lower the threshold by 1." Drill-down showed nearly every flagged file had `post_completion_edits == edit_count`. Re-enable only after `_COMPLETION_PATTERNS` is tightened to require explicit ship claims. |
 | `MIN_FINDING_KEYWORDS` | 1 | {1, 2, 3} | **keep 1** | Default unchanged from #271 to preserve existing behavior; calibration is the mechanism for raising it. |
 | `_SUBSTANTIVE_RESPONSE_MIN_CHARS` | 500 | {200, 500, 1000} | **keep 500** | Default already empirically informed by #271; sweep on thin data wouldn't shift it. |
-| `MIN_REVIEWER_CAUGHT_RATE` | 0.5 | {0.3, 0.5, 0.7} | **keep 0.5** | Per-(session, agent_type). Reviewer must earn its keep on at least half of its invocations within a session for the signal to fire. |
+| `MIN_REVIEWER_CAUGHT_RATE` | 0.5 | {0.3, 0.5, 0.7} | **keep 0.5** (gate untestable) | Per-(session, agent_type). On dogfood data, all 60 architect invocations had `output_text` length 0 — the data feed is not populated. Calibration of this signal is blocked on a parser/extraction fix tracked in [#319](https://github.com/frederick-douglas-pearce/agentfluent/issues/319). |
 
-**No constants changed in this PR.** Conservative defaults across all
-seven knobs hold against the single-contributor sweep — the data is
-not strong enough to motivate a change. The notebook section is the
-calibration harness, ready for a re-run when multi-contributor data
-is available."""))
+**Two constants changed; one signal blocked on data-feed bug.** The
+calibration apparatus did its job: `_FILE_REWORK_THRESHOLD` raised
+from 4 to 8, `POST_COMPLETION_BOOST` flipped to False. Both changes
+land in this PR alongside the notebook section. REVIEWER_CAUGHT
+remains structurally defined; the threshold gates stay at their
+conservative defaults until the empty-`output_text` issue is
+diagnosed and fixed."""))
 
     cells.append(md(r"""## 12.7 · Manual validation (Fred sign-off required before merge)
 
