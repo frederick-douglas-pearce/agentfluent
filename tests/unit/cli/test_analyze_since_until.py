@@ -13,6 +13,7 @@ import typer
 from typer.testing import CliRunner
 
 from agentfluent.cli.exit_codes import EXIT_NO_DATA, EXIT_OK, EXIT_USER_ERROR
+from agentfluent.cli.formatters.json_output import parse_json_output
 
 
 class TestFlagInteractionErrors:
@@ -182,3 +183,73 @@ class TestNoChangeWhenFlagsAbsent:
         )
         assert result.exit_code == EXIT_OK
         assert "Filtering: sessions from" not in result.stderr
+
+
+class TestWindowMetadataInJsonOutput:
+    """``data.window`` echoes the resolved exclusive UTC bounds plus
+    pre-/post-filter session counts when ``--since``/``--until`` are
+    supplied; ``None`` (JSON null) when no filter is applied (#298).
+    """
+
+    def test_since_only_populates_window_with_null_until(
+        self, runner: CliRunner, cli_app: typer.Typer, populated_home: Path,
+    ) -> None:
+        result = runner.invoke(
+            cli_app,
+            [
+                "analyze", "--project", "project",
+                "--since", "2026-04-01",
+                "--json",
+            ],
+        )
+        assert result.exit_code == EXIT_OK
+        data = parse_json_output(result.stdout, expected_command="analyze")
+        assert isinstance(data, dict)
+        window = data.get("window")
+        assert window is not None, "window must be populated when --since is set"
+        assert isinstance(window["since"], str)
+        assert window["since"].startswith("2026-04-01")
+        assert window["until"] is None
+        # Fixture has exactly one session, and it falls inside the window.
+        assert window["session_count_before_filter"] == 1
+        assert window["session_count_after_filter"] == 1
+
+    def test_no_time_flags_yields_null_window(
+        self, runner: CliRunner, cli_app: typer.Typer, populated_home: Path,
+    ) -> None:
+        result = runner.invoke(
+            cli_app,
+            ["analyze", "--project", "project", "--json"],
+        )
+        assert result.exit_code == EXIT_OK
+        data = parse_json_output(result.stdout, expected_command="analyze")
+        assert isinstance(data, dict)
+        # Field is present but null when no time filter is applied.
+        assert "window" in data
+        assert data["window"] is None
+
+    def test_since_and_until_populate_both_bounds(
+        self, runner: CliRunner, cli_app: typer.Typer, populated_home: Path,
+    ) -> None:
+        result = runner.invoke(
+            cli_app,
+            [
+                "analyze", "--project", "project",
+                "--since", "2026-04-01",
+                "--until", "2026-05-01",
+                "--json",
+            ],
+        )
+        assert result.exit_code == EXIT_OK
+        data = parse_json_output(result.stdout, expected_command="analyze")
+        assert isinstance(data, dict)
+        window = data.get("window")
+        assert window is not None
+        assert isinstance(window["since"], str)
+        assert window["since"].startswith("2026-04-01")
+        # `until` echoes the resolved exclusive UTC bound matching the
+        # half-open `[since, until)` semantics.
+        assert isinstance(window["until"], str)
+        assert window["until"].startswith("2026-05-01")
+        assert window["session_count_before_filter"] == 1
+        assert window["session_count_after_filter"] == 1

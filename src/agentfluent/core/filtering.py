@@ -9,7 +9,27 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from pydantic import BaseModel
+
 from agentfluent.core.discovery import SessionInfo
+
+
+class WindowMetadata(BaseModel):
+    """Resolved time-filter window metadata for self-documenting JSON output.
+
+    Populated by the CLI ``analyze`` (and later ``list``) commands when
+    ``--since`` / ``--until`` are supplied. ``since``/``until`` are the
+    resolved absolute UTC bounds the filter actually applied (matching
+    the half-open ``[since, until)`` semantics of
+    :func:`filter_sessions_by_time`); ``None`` mirrors an open-ended
+    bound. Counts let downstream consumers see filter cardinality
+    without re-walking session metadata.
+    """
+
+    since: datetime | None = None
+    until: datetime | None = None
+    session_count_before_filter: int = 0
+    session_count_after_filter: int = 0
 
 
 def filter_sessions_by_time(
