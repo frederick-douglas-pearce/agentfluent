@@ -28,7 +28,7 @@ from agentfluent.cli.formatters.helpers import (
     severity_cell,
     truncate,
 )
-from agentfluent.diagnostics.models import SignalType
+from agentfluent.diagnostics.models import Axis, SignalType
 
 API_RATE_FOOTNOTE = (
     "API rate — pay-per-token equivalent. "
@@ -333,14 +333,6 @@ def _format_diagnostics_table(
     summary is suppressed in ``--verbose`` (where per-row priority
     breakdown lines convey the same info at higher granularity) and
     when ``top_n == 0`` or no aggregated rows exist.
-
-    Verbose mode (#273): replaces the legacy raw unaggregated
-    ``recommendations`` rendering with the aggregated table plus a
-    per-row dim breakdown line showing the composite ``priority_score``
-    and per-axis contributions. The raw, unaggregated list is dropped
-    intentionally — its structural duplication of aggregated rows
-    confused users more than it helped, and the breakdown line gives a
-    finer-grained view of the same data without that redundancy.
     """
     if diag.signals:
         sig_table = Table(title="Diagnostic Signals", show_header=True)
@@ -372,7 +364,7 @@ def _format_diagnostics_table(
         rec_table.add_column("Recommendation")
 
         for idx, agg in enumerate(diag.aggregated_recommendations, start=1):
-            message = f"{axis_label(agg.primary_axis)} {escape(agg.representative_message)}"
+            message = f"{axis_label(Axis(agg.primary_axis))} {escape(agg.representative_message)}"
             rec_table.add_row(
                 str(idx),
                 escape(agg.agent_type or GLOBAL_AGENT_LABEL),
@@ -435,9 +427,7 @@ def _format_top_recommendations(
     Format: ``  N. [axis] [severity] agent (count×): representative_message``.
     The aggregated list is already sorted by ``priority_score`` desc
     (see ``aggregation.aggregate_recommendations``), so the top N rows
-    are the top N priorities by definition. The ``[axis]`` prefix
-    (#273) surfaces ``primary_axis`` attribution at a glance using the
-    ``AXIS_COLORS`` palette.
+    are the top N priorities by definition.
     """
     if top_n <= 0:
         return
@@ -448,7 +438,7 @@ def _format_top_recommendations(
 
     console.print(f"\n[bold]Top {shown} priority fixes[/bold]")
     for idx, agg in enumerate(aggs[:shown], start=1):
-        axis = axis_label(agg.primary_axis)
+        axis = axis_label(Axis(agg.primary_axis))
         severity = severity_cell(agg.severity)
         agent = escape(agg.agent_type or GLOBAL_AGENT_LABEL)
         count_suffix = f" ({agg.count}×)" if agg.count > 1 else ""

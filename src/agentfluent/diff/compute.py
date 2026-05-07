@@ -17,7 +17,7 @@ from typing import Any
 
 from agentfluent.analytics.tokens import Origin
 from agentfluent.config.models import SEVERITY_RANK, Severity
-from agentfluent.diagnostics.models import SignalType
+from agentfluent.diagnostics.models import Axis, SignalType
 from agentfluent.diff.models import (
     AgentTypeDelta,
     DeltaStatus,
@@ -161,11 +161,8 @@ def _make_delta(
     severity = _coerce_severity(sample.get("severity"))
     representative = str(sample.get("representative_message", ""))
 
-    # Axis attribution (#273). ``.get("primary_axis")`` returns ``None``
-    # when the field is absent (pre-v0.6 envelopes) — we propagate that
-    # ``None`` instead of defaulting to ``"cost"`` so legacy envelopes
-    # don't trigger spurious axis-shift indicators against a current
-    # envelope that does carry the attribution.
+    # Pre-v0.6 envelopes lack ``primary_axis``; ``None`` propagation keeps
+    # ``axis_shifted`` quiet when one side has no attribution at all.
     baseline_axis = _coerce_axis((baseline or {}).get("primary_axis"))
     current_axis = _coerce_axis((current or {}).get("primary_axis"))
 
@@ -188,18 +185,18 @@ def _make_delta(
     )
 
 
-def _coerce_axis(value: Any) -> str | None:
-    """Normalize ``primary_axis`` from JSON to ``str | None``.
+def _coerce_axis(value: Any) -> Axis | None:
+    """Normalize a JSON ``primary_axis`` value to an :class:`Axis` member.
 
-    Returns ``None`` for missing/blank values so the ``axis_shifted``
-    computed field on ``RecommendationDelta`` stays quiet against
-    pre-v0.6 envelopes that lack the attribution entirely.
+    Returns ``None`` for missing, blank, or unrecognized values so legacy
+    envelopes and forward-compat axes don't crash the diff.
     """
-    if value is None:
+    if not isinstance(value, str) or not value:
         return None
-    if not isinstance(value, str):
+    try:
+        return Axis(value)
+    except ValueError:
         return None
-    return value or None
 
 
 def _coerce_severity(value: Any) -> Severity:

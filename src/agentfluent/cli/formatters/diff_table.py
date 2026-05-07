@@ -13,9 +13,9 @@ from rich.markup import escape
 from rich.table import Table
 
 from agentfluent.cli.formatters.helpers import (
-    AXIS_COLORS,
     GLOBAL_AGENT_LABEL,
     axis_label,
+    axis_shift_label,
     format_cost,
     format_tokens,
     severity_cell,
@@ -281,31 +281,13 @@ def _render_regression_footer(console: Console, result: DiffResult) -> None:
 def _axis_prefix(row: RecommendationDelta) -> str:
     """Render the axis-attribution prefix for a delta's message cell.
 
-    Three shapes:
-
-    - ``status='new'``: ``[<current_axis>]`` using the current axis color.
-    - ``status='resolved'``: ``[<baseline_axis>]`` using the baseline axis
-      color (the side that has the rec).
-    - ``status='persisting'``: ``[<axis>]`` when both sides agree, or
-      ``[<baseline> → <current>]`` when ``axis_shifted``. Both axes
-      retain their respective colors so the shift is visually scannable.
-
     Returns an empty string when neither side carries a ``primary_axis``
-    (e.g., diffing two pre-v0.6 envelopes — no info to show).
+    (e.g., diffing two pre-v0.6 envelopes).
     """
     if row.axis_shifted:
-        # ``axis_shifted`` is only True when both sides are non-None.
-        # The leading ``[`` is escaped via ``\[`` so Rich emits it as
-        # plain text instead of consuming ``[<axis-name>`` as an unknown
-        # style tag. The trailing ``]`` is fine as-is.
-        baseline = row.baseline_primary_axis or ""
-        current = row.current_primary_axis or ""
-        baseline_color = AXIS_COLORS.get(baseline, "white")
-        current_color = AXIS_COLORS.get(current, "white")
-        return (
-            f"\\[[{baseline_color}]{baseline}[/{baseline_color}] → "
-            f"[{current_color}]{current}[/{current_color}]]"
-        )
+        assert row.baseline_primary_axis is not None
+        assert row.current_primary_axis is not None
+        return axis_shift_label(row.baseline_primary_axis, row.current_primary_axis)
     axis = row.current_primary_axis or row.baseline_primary_axis
     if axis is None:
         return ""

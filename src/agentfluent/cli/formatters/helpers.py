@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from agentfluent.config.models import Severity
+from agentfluent.diagnostics.models import Axis
 
 if TYPE_CHECKING:
     from agentfluent.config.models import ConfigScore
@@ -16,15 +17,11 @@ SEVERITY_COLORS: dict[Severity, str] = {
     Severity.INFO: "cyan",
 }
 
-AXIS_COLORS: dict[str, str] = {
-    "cost": "yellow",
-    "speed": "cyan",
-    "quality": "magenta",
+AXIS_COLORS: dict[Axis, str] = {
+    Axis.COST: "yellow",
+    Axis.SPEED: "cyan",
+    Axis.QUALITY: "magenta",
 }
-"""Color map for axis attribution labels (#273). Keys mirror the bare
-strings used by ``AggregatedRecommendation.primary_axis`` and
-``axis_scores``. Unknown axes fall back to ``white`` via
-:func:`axis_label`."""
 
 GLOBAL_AGENT_LABEL = "(global)"
 """Display string for cross-cutting findings whose ``agent_type`` is
@@ -44,22 +41,29 @@ def severity_cell(severity: Severity) -> str:
     return f"[{color}]{severity.value}[/{color}]"
 
 
-def axis_label(axis: str) -> str:
-    """Rich-markup ``[axis]`` prefix for recommendation rows (#273).
-
-    Centralizes the markup so CLI table, top-N summary, and diff output
-    stay visually consistent. Unknown axes render in white so a future
-    axis added without updating ``AXIS_COLORS`` still appears (just
-    uncolored) instead of crashing.
+def axis_label(axis: Axis) -> str:
+    """Rich-markup ``[axis]`` prefix for recommendation rows.
 
     The literal opening ``[`` is escaped via ``\\[`` so Rich emits it
-    as plain text instead of consuming ``[axis]`` as an unknown style
-    tag (which would silently drop the label entirely from the rendered
-    output). The closing ``]`` is fine as-is — Rich only treats it
-    specially when it closes an open tag.
+    as plain text instead of consuming ``[<name>`` as an unknown style
+    tag (which would silently drop the label from the rendered output).
     """
-    color = AXIS_COLORS.get(axis, "white")
-    return f"[{color}]\\[{axis}][/{color}]"
+    color = AXIS_COLORS[axis]
+    return f"[{color}]\\[{axis.value}][/{color}]"
+
+
+def axis_shift_label(baseline: Axis, current: Axis) -> str:
+    """Rich-markup ``[old → new]`` indicator for axis-shifted diff rows.
+
+    Shares the ``\\[`` escape rule with :func:`axis_label`; both axes
+    keep their respective colors so the shift is visually scannable.
+    """
+    baseline_color = AXIS_COLORS[baseline]
+    current_color = AXIS_COLORS[current]
+    return (
+        f"\\[[{baseline_color}]{baseline.value}[/{baseline_color}] → "
+        f"[{current_color}]{current.value}[/{current_color}]]"
+    )
 
 
 def format_cost(cost: float) -> str:
