@@ -31,6 +31,7 @@ from agentfluent.analytics.tools import (
     ToolMetrics,
     compute_tool_metrics,
 )
+from agentfluent.core.filtering import WindowMetadata
 from agentfluent.core.parser import parse_session
 from agentfluent.core.session import SessionMessage
 from agentfluent.diagnostics.mcp_assessment import (
@@ -89,6 +90,7 @@ class AnalysisResult(BaseModel):
     agent_metrics: AgentMetrics = Field(default_factory=AgentMetrics)
     session_count: int = 0
     diagnostics: DiagnosticsResult | None = None
+    window: WindowMetadata | None = None
 
 
 def analyze_session(

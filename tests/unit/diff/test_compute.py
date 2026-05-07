@@ -400,6 +400,30 @@ class TestForwardCompat:
         result = compute_diff(baseline, current)
         assert result.recommendations[0].priority_score_delta == 0.0
 
+    def test_window_field_on_one_side_does_not_break_diff(self) -> None:
+        """``window`` is additive on the envelope; ``compute_diff`` ignores
+        it. A pre-window baseline diffs cleanly against a current envelope
+        that includes one.
+        """
+        baseline = _envelope(aggregated_recs=[
+            _agg_rec(agent_type="pm", target="prompt", signal_types=["retry_loop"]),
+        ])
+        current = _envelope(aggregated_recs=[
+            _agg_rec(agent_type="pm", target="prompt", signal_types=["retry_loop"]),
+        ])
+        current["window"] = {
+            "since": "2026-04-01T00:00:00+00:00",
+            "until": "2026-05-01T00:00:00+00:00",
+            "session_count_before_filter": 5,
+            "session_count_after_filter": 1,
+        }
+
+        result = compute_diff(baseline, current)
+
+        assert result.persisting_count == 1
+        assert result.new_count == 0
+        assert result.resolved_count == 0
+
 
 class TestDiffResultSerialization:
     def test_model_dump_round_trips(self) -> None:

@@ -18,7 +18,7 @@ from agentfluent.cli.formatters.table import format_analysis_table
 from agentfluent.config.mcp_discovery import resolve_project_disk_path
 from agentfluent.config.models import SEVERITY_RANK, Severity
 from agentfluent.core.discovery import SessionInfo, find_project
-from agentfluent.core.filtering import filter_sessions_by_time
+from agentfluent.core.filtering import WindowMetadata, filter_sessions_by_time
 from agentfluent.core.paths import projects_dir_for
 from agentfluent.diagnostics import run_diagnostics
 from agentfluent.diagnostics.delegation import (
@@ -35,14 +35,15 @@ def _apply_time_window(
     *,
     verbose: bool,
     err_console: Console,
-) -> list[SessionInfo]:
+) -> tuple[list[SessionInfo], WindowMetadata | None]:
     """Filter to ``[parsed_since, parsed_until)``; raise ``EXIT_NO_DATA`` on empty.
 
-    No-op when both bounds are ``None``. Verbose mode prints a dim
-    stderr note with resolved bounds + in-window/total counts.
+    Returns ``(session_infos, None)`` when neither bound is supplied so
+    JSON consumers see ``window: null`` for unfiltered runs. Verbose
+    mode prints a dim stderr note derived from the same metadata.
     """
     if parsed_since is None and parsed_until is None:
-        return session_infos
+        return session_infos, None
     pre_filter_count = len(session_infos)
     filtered = filter_sessions_by_time(session_infos, parsed_since, parsed_until)
     if not filtered:
@@ -52,14 +53,21 @@ def _apply_time_window(
             "to preview which sessions fall in a window.",
         )
         raise typer.Exit(code=EXIT_NO_DATA)
+    window = WindowMetadata(
+        since=parsed_since,
+        until=parsed_until,
+        session_count_before_filter=pre_filter_count,
+        session_count_after_filter=len(filtered),
+    )
     if verbose:
-        since_label = parsed_since.isoformat() if parsed_since else "—"
-        until_label = parsed_until.isoformat() if parsed_until else "—"
+        since_label = window.since.isoformat() if window.since else "—"
+        until_label = window.until.isoformat() if window.until else "—"
         err_console.print(
             f"[dim]Filtering: sessions from {since_label} to {until_label} "
-            f"({len(filtered)} of {pre_filter_count} sessions)[/dim]",
+            f"({window.session_count_after_filter} of "
+            f"{window.session_count_before_filter} sessions)[/dim]",
         )
-    return filtered
+    return filtered, window
 
 
 def _apply_min_severity(result: AnalysisResult, min_severity: Severity) -> None:
@@ -296,7 +304,7 @@ def analyze(
             err_console.print(f"[red]Session not found:[/red] {session}")
             raise typer.Exit(code=EXIT_USER_ERROR)
 
-    session_infos = _apply_time_window(
+    session_infos, window_metadata = _apply_time_window(
         session_infos, parsed_since, parsed_until,
         verbose=verbose, err_console=err_console,
     )
@@ -343,6 +351,8 @@ def analyze(
 
     if min_severity is not None:
         _apply_min_severity(result, min_severity)
+
+    result.window = window_metadata
 
     if format == "json":
         _print_json(result, quiet=quiet, project_name=project_info.display_name)

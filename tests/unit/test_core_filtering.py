@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 from agentfluent.core.discovery import SessionInfo
-from agentfluent.core.filtering import filter_sessions_by_time
+from agentfluent.core.filtering import WindowMetadata, filter_sessions_by_time
 
 
 def _session(
@@ -199,3 +199,72 @@ class TestEmptyInput:
         assert filter_sessions_by_time(
             [], since=_BASE, until=_BASE + timedelta(days=1),
         ) == []
+
+
+class TestWindowMetadata:
+    """Pydantic round-trip for the JSON-output ``window`` envelope field
+    (#298). ``model_dump(mode="json")`` must serialize aware datetimes as
+    ISO-8601 strings and ``None`` bounds as JSON ``null``."""
+
+    def test_aware_datetimes_round_trip_as_iso_strings(self) -> None:
+        since = datetime(2026, 5, 1, 12, 0, 0, tzinfo=UTC)
+        until = datetime(2026, 5, 8, 12, 0, 0, tzinfo=UTC)
+        window = WindowMetadata(
+            since=since,
+            until=until,
+            session_count_before_filter=12,
+            session_count_after_filter=4,
+        )
+
+        dumped = window.model_dump(mode="json")
+
+        assert isinstance(dumped["since"], str)
+        assert isinstance(dumped["until"], str)
+        # Pydantic v2 emits ISO-8601 with timezone for aware datetimes.
+        assert dumped["since"].startswith("2026-05-01T12:00:00")
+        assert dumped["until"].startswith("2026-05-08T12:00:00")
+        assert dumped["session_count_before_filter"] == 12
+        assert dumped["session_count_after_filter"] == 4
+
+    def test_naive_datetimes_serialize_as_iso(self) -> None:
+        # Naive UTC datetimes are also dumpable as ISO-8601 strings;
+        # they just lack the timezone suffix.
+        since = datetime(2026, 5, 1, 12, 0, 0)
+        window = WindowMetadata(
+            since=since,
+            until=None,
+            session_count_before_filter=1,
+            session_count_after_filter=1,
+        )
+
+        dumped = window.model_dump(mode="json")
+
+        assert isinstance(dumped["since"], str)
+        assert dumped["since"].startswith("2026-05-01T12:00:00")
+        assert dumped["until"] is None
+
+    def test_none_bounds_serialize_as_null(self) -> None:
+        window = WindowMetadata(
+            since=None,
+            until=None,
+            session_count_before_filter=0,
+            session_count_after_filter=0,
+        )
+        dumped = window.model_dump(mode="json")
+        assert dumped["since"] is None
+        assert dumped["until"] is None
+
+    def test_round_trip_via_model_validate(self) -> None:
+        original = WindowMetadata(
+            since=datetime(2026, 5, 1, tzinfo=UTC),
+            until=datetime(2026, 5, 8, tzinfo=UTC),
+            session_count_before_filter=10,
+            session_count_after_filter=3,
+        )
+        roundtripped = WindowMetadata.model_validate(
+            original.model_dump(mode="json"),
+        )
+        assert roundtripped.since == original.since
+        assert roundtripped.until == original.until
+        assert roundtripped.session_count_before_filter == 10
+        assert roundtripped.session_count_after_filter == 3
