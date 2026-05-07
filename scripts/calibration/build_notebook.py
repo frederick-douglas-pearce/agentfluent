@@ -154,6 +154,7 @@ print(f"Projects: {len(projects)}")
 
 all_invocations = []
 all_messages = []
+all_sessions = []  # retained for section 12 (per-session quality calibration)
 for p in projects:
     paths = [s.path for s in p.sessions]
     result = analyze_sessions(paths)
@@ -162,6 +163,7 @@ for p in projects:
         # Retained on SessionAnalysis after #189 sub-issue E for the
         # parent-thread offload-candidate calibration in section 11.
         all_messages.extend(s.messages)
+        all_sessions.append(s)
 
 print(f"Total invocations: {len(all_invocations)}")
 print(f"Total parent-thread messages: {len(all_messages)}")"""))
@@ -1462,12 +1464,9 @@ def _has_review(invocations):
 
 cohort_with: list = []
 cohort_without: list = []
-for p in projects:
-    paths = [s.path for s in p.sessions]
-    res = analyze_sessions(paths)
-    for sess in res.sessions:
-        target = cohort_with if _has_review(sess.invocations) else cohort_without
-        target.append(sess)
+for sess in all_sessions:
+    target = cohort_with if _has_review(sess.invocations) else cohort_without
+    target.append(sess)
 
 print(f"Cohort WITH review subagent:    {len(cohort_with)} sessions")
 print(f"Cohort WITHOUT review subagent: {len(cohort_without)} sessions")

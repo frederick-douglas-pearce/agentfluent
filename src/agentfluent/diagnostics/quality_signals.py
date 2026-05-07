@@ -45,6 +45,7 @@ calibration notebook can sweep them without function-body edits.
 from __future__ import annotations
 
 import re
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -433,12 +434,10 @@ def _extract_reviewer_caught_signals(
     # total invocations per agent_type. The rate gate at the end emits
     # only those agent_types whose substantive-finding fraction meets
     # ``MIN_REVIEWER_CAUGHT_RATE``.
-    candidates_by_agent: dict[str, list[DiagnosticSignal]] = {}
-    invocations_by_agent: dict[str, int] = {}
+    candidates_by_agent: defaultdict[str, list[DiagnosticSignal]] = defaultdict(list)
+    invocations_by_agent: Counter[str] = Counter()
     for inv in review_invocations:
-        invocations_by_agent[inv.agent_type] = (
-            invocations_by_agent.get(inv.agent_type, 0) + 1
-        )
+        invocations_by_agent[inv.agent_type] += 1
         text = inv.output_text
         if not text or len(text) < _SUBSTANTIVE_RESPONSE_MIN_CHARS:
             continue
@@ -453,7 +452,7 @@ def _extract_reviewer_caught_signals(
             edited = _files_edited_after(messages, result_idx)
             files_acted_on = files_mentioned & edited
 
-        candidates_by_agent.setdefault(inv.agent_type, []).append(
+        candidates_by_agent[inv.agent_type].append(
             DiagnosticSignal(
                 signal_type=SignalType.REVIEWER_CAUGHT,
                 severity=Severity.INFO,
