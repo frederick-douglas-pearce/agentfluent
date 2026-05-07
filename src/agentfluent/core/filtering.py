@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from agentfluent.core.discovery import SessionInfo
 
@@ -24,7 +24,12 @@ class WindowMetadata(BaseModel):
     :func:`filter_sessions_by_time`); ``None`` mirrors an open-ended
     bound. Counts let downstream consumers see filter cardinality
     without re-walking session metadata.
+
+    ``extra="ignore"`` keeps an older AgentFluent reading a newer envelope
+    forward-compatible — same posture as ``ToolResultMetadata``.
     """
+
+    model_config = ConfigDict(extra="ignore")
 
     since: datetime | None = None
     until: datetime | None = None

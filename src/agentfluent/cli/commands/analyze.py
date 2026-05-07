@@ -38,11 +38,9 @@ def _apply_time_window(
 ) -> tuple[list[SessionInfo], WindowMetadata | None]:
     """Filter to ``[parsed_since, parsed_until)``; raise ``EXIT_NO_DATA`` on empty.
 
-    No-op when both bounds are ``None`` (returns ``(session_infos, None)``).
-    Verbose mode prints a dim stderr note with resolved bounds +
-    in-window/total counts. The returned :class:`WindowMetadata` echoes
-    the resolved exclusive UTC bounds matching ``[since, until)``
-    semantics so JSON consumers can self-document the window.
+    Returns ``(session_infos, None)`` when neither bound is supplied so
+    JSON consumers see ``window: null`` for unfiltered runs. Verbose
+    mode prints a dim stderr note derived from the same metadata.
     """
     if parsed_since is None and parsed_until is None:
         return session_infos, None
@@ -55,19 +53,20 @@ def _apply_time_window(
             "to preview which sessions fall in a window.",
         )
         raise typer.Exit(code=EXIT_NO_DATA)
-    if verbose:
-        since_label = parsed_since.isoformat() if parsed_since else "—"
-        until_label = parsed_until.isoformat() if parsed_until else "—"
-        err_console.print(
-            f"[dim]Filtering: sessions from {since_label} to {until_label} "
-            f"({len(filtered)} of {pre_filter_count} sessions)[/dim]",
-        )
     window = WindowMetadata(
         since=parsed_since,
         until=parsed_until,
         session_count_before_filter=pre_filter_count,
         session_count_after_filter=len(filtered),
     )
+    if verbose:
+        since_label = window.since.isoformat() if window.since else "—"
+        until_label = window.until.isoformat() if window.until else "—"
+        err_console.print(
+            f"[dim]Filtering: sessions from {since_label} to {until_label} "
+            f"({window.session_count_after_filter} of "
+            f"{window.session_count_before_filter} sessions)[/dim]",
+        )
     return filtered, window
 
 

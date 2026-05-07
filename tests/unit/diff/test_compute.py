@@ -401,9 +401,9 @@ class TestForwardCompat:
         assert result.recommendations[0].priority_score_delta == 0.0
 
     def test_window_field_on_one_side_does_not_break_diff(self) -> None:
-        """``window`` (#298) is an additive optional envelope field;
-        ``compute_diff`` ignores it. Pre-#298 baselines without ``window``
-        must still diff cleanly against current envelopes that include it.
+        """``window`` is additive on the envelope; ``compute_diff`` ignores
+        it. A pre-window baseline diffs cleanly against a current envelope
+        that includes one.
         """
         baseline = _envelope(aggregated_recs=[
             _agg_rec(agent_type="pm", target="prompt", signal_types=["retry_loop"]),
@@ -411,9 +411,6 @@ class TestForwardCompat:
         current = _envelope(aggregated_recs=[
             _agg_rec(agent_type="pm", target="prompt", signal_types=["retry_loop"]),
         ])
-        # Simulate a current envelope produced after #298 landed: the
-        # caller adds a window block; the loader and compute layer must
-        # not care.
         current["window"] = {
             "since": "2026-04-01T00:00:00+00:00",
             "until": "2026-05-01T00:00:00+00:00",
