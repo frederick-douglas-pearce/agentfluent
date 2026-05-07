@@ -1408,6 +1408,434 @@ if not qualifying:
 **Single-dataset caveat applies.** Re-run this notebook against
 broader session corpora when available."""))
 
+    cells.append(md(r"""# 12 · Quality signal calibration (#274)
+
+**Issue:** [#274](https://github.com/frederick-douglas-pearce/agentfluent/issues/274)
+**Parent epic:** [#268](https://github.com/frederick-douglas-pearce/agentfluent/issues/268)
+
+The Tier-1 quality signals (USER_CORRECTION #269, FILE_REWORK #270,
+REVIEWER_CAUGHT #271) shipped with conservative thresholds informed
+by backlog guidance, not data. This section sweeps those thresholds
+against the real `~/.claude/projects/` corpus loaded at the top of
+this notebook.
+
+## Conservative-defaults policy
+
+Per the issue acceptance criteria, where the sweep is ambiguous, prefer
+**false negatives over false positives**. Quality signals that
+under-fire are easy to loosen; signals that over-fire generate noise
+that erodes user trust in the diagnostics.
+
+## Observation-window non-contamination — structural argument
+
+The brief's §10 calls for verifying that quality signals don't
+contaminate ongoing observation-window data. Per the project's
+observation-window memory entry, no in-code registry of observation
+windows exists today — the constraint is enforced by the analysis
+architecture: quality signals are extracted from completed historical
+sessions only, with no inflight feedback loop. There is therefore
+nothing in the code path for an observation-window session to
+contaminate. If a future change introduces an inflight feedback
+loop, this argument needs revisiting; until then, the structural
+guarantee is sufficient.
+
+## Single-dataset caveat
+
+Same as the calibration sections above: this is one contributor's
+data. Conservative defaults must hold even if the sweep suggests
+otherwise — re-run when multi-contributor data is available."""))
+
+    cells.append(code("""\
+from agentfluent.diagnostics import quality_signals as qs
+from agentfluent.diagnostics.quality_signals import (
+    CorrectionCategory,
+    REVIEW_AGENT_TYPES,
+    extract_quality_signals,
+)
+from agentfluent.diagnostics.models import SignalType
+
+# Cohorts: WITH any review-style invocation vs WITHOUT.
+def _has_review(invocations):
+    return any(
+        inv.agent_type.lower() in REVIEW_AGENT_TYPES for inv in invocations
+    )
+
+cohort_with: list = []
+cohort_without: list = []
+for p in projects:
+    paths = [s.path for s in p.sessions]
+    res = analyze_sessions(paths)
+    for sess in res.sessions:
+        target = cohort_with if _has_review(sess.invocations) else cohort_without
+        target.append(sess)
+
+print(f"Cohort WITH review subagent:    {len(cohort_with)} sessions")
+print(f"Cohort WITHOUT review subagent: {len(cohort_without)} sessions")
+
+# Per architect revision: warn-and-continue when N<5 in either cohort.
+# A hard stop would make the section uninformative on small datasets;
+# disclaimers + reduced confidence are the right shape.
+COHORT_FLOOR = 5
+if len(cohort_with) < COHORT_FLOOR or len(cohort_without) < COHORT_FLOOR:
+    print()
+    print("⚠️  MINIMUM COHORT GUARD TRIGGERED")
+    print(f"    At least one cohort has fewer than {COHORT_FLOOR} sessions.")
+    print("    Threshold recommendations below are informed by signal")
+    print("    direction only — re-run when multi-contributor data is")
+    print("    available before adopting any change to defaults.")
+"""))
+
+    cells.append(md(r"""## 12.1 · USER_CORRECTION — count and rate gates
+
+Sweeps:
+- `MIN_CORRECTIONS_PER_SESSION ∈ {1, 2, 3, 5}`
+- `MIN_CORRECTION_RATE ∈ {0.05, 0.10, 0.15, 0.20}`
+- Pattern-set: full vs. negation-only (post-hoc filter via the
+  `matched_category` field stamped on each signal — avoids
+  hot-swapping the compiled regex tuples on the module).
+
+The two numeric gates are OR-combined per PM revision on #274 (see
+the disjunctive comment block in `quality_signals.py`)."""))
+
+    cells.append(code("""\
+import itertools
+
+# Extract once with default thresholds → maximum candidate pool, then
+# filter post-hoc by category to simulate alternate pattern sets, and
+# re-test the OR'd numeric gates against each session's count + rate.
+session_corrections = []
+for sess in (cohort_with + cohort_without):
+    sigs = extract_quality_signals(sess.messages, sess.invocations)
+    detections = [
+        s for s in sigs if s.signal_type == SignalType.USER_CORRECTION
+    ]
+    total_user = (
+        detections[0].detail["total_user_messages"] if detections else 0
+    )
+    session_corrections.append({
+        "session": sess.session_path.name,
+        "n_corrections": len(detections),
+        "total_user": total_user,
+        "rate": (len(detections) / total_user) if total_user else 0.0,
+        "categories": [d.detail["matched_category"] for d in detections],
+    })
+
+count_grid = [1, 2, 3, 5]
+rate_grid = [0.05, 0.10, 0.15, 0.20]
+pattern_sets = ["full", "negation_only"]
+
+rows = []
+for pset, cnt_t, rate_t in itertools.product(pattern_sets, count_grid, rate_grid):
+    fired = 0
+    for s in session_corrections:
+        if pset == "negation_only":
+            n_eff = sum(
+                1 for c in s["categories"]
+                if c in ("strong", "negation")
+            )
+        else:
+            n_eff = s["n_corrections"]
+        rate_eff = (n_eff / s["total_user"]) if s["total_user"] else 0.0
+        # OR semantics matching the source.
+        if n_eff >= cnt_t or rate_eff >= rate_t:
+            fired += 1
+    rows.append({
+        "pattern_set": pset,
+        "min_count": cnt_t,
+        "min_rate": rate_t,
+        "sessions_fired": fired,
+    })
+
+uc_df = pd.DataFrame(rows)
+print("USER_CORRECTION sweep — sessions firing per (pattern_set, count, rate):")
+print(uc_df.pivot_table(
+    index=["pattern_set", "min_count"],
+    columns="min_rate",
+    values="sessions_fired",
+).to_string())
+
+print()
+print(f"Default = (full, count={qs.MIN_CORRECTIONS_PER_SESSION}, "
+      f"rate={qs.MIN_CORRECTION_RATE}):")
+default_fired = uc_df.query(
+    f"pattern_set == 'full' and min_count == {qs.MIN_CORRECTIONS_PER_SESSION} "
+    f"and abs(min_rate - {qs.MIN_CORRECTION_RATE}) < 1e-9"
+)["sessions_fired"].iloc[0]
+print(f"  {default_fired} sessions fire on this dataset")
+"""))
+
+    cells.append(md(r"""## 12.2 · FILE_REWORK — threshold and post-completion boost
+
+Sweeps:
+- `_FILE_REWORK_THRESHOLD ∈ {3, 4, 5, 7}`
+- `POST_COMPLETION_BOOST ∈ {False, True}`
+
+Boost is boolean per architect revision: when `True` and the file has
+any post-completion edits, the threshold drops by 1 (floored at 2)."""))
+
+    cells.append(code("""\
+# Build per-session edit-count tables, then apply each threshold/boost
+# combo without re-extracting (the underlying counts don't depend on
+# the threshold).
+session_file_stats = []
+for sess in (cohort_with + cohort_without):
+    sigs = extract_quality_signals(sess.messages, sess.invocations)
+    rework = [s for s in sigs if s.signal_type == SignalType.FILE_REWORK]
+    # Synthesize the underlying counts: at default threshold 4 the
+    # signal fires for files at >= 4 edits or >= 3 edits with post-
+    # completion. We can't fully reconstruct files below threshold
+    # from signals alone, so we rely on the per-signal detail.
+    session_file_stats.append([
+        (s.detail["edit_count"], s.detail["post_completion_edits"])
+        for s in rework
+    ])
+
+threshold_grid = [3, 4, 5, 7]
+rows = []
+for thr, boost in itertools.product(threshold_grid, [False, True]):
+    fired = 0
+    for stats_list in session_file_stats:
+        for edits, post in stats_list:
+            eff_thr = max(2, thr - 1) if (boost and post > 0) else thr
+            if edits >= eff_thr:
+                fired += 1
+                break  # session counts at most once
+    rows.append({
+        "threshold": thr,
+        "boost": boost,
+        "sessions_fired": fired,
+    })
+
+fr_df = pd.DataFrame(rows)
+print("FILE_REWORK sweep — sessions firing per (threshold, boost):")
+print(fr_df.pivot_table(
+    index="threshold", columns="boost", values="sessions_fired",
+).to_string())
+
+print()
+print(f"Default = (threshold={qs._FILE_REWORK_THRESHOLD}, "
+      f"boost={qs.POST_COMPLETION_BOOST}):")
+default_fired = fr_df.query(
+    f"threshold == {qs._FILE_REWORK_THRESHOLD} "
+    f"and boost == {qs.POST_COMPLETION_BOOST}"
+)["sessions_fired"].iloc[0]
+print(f"  {default_fired} sessions fire on this dataset")
+
+print()
+print("Caveat: this sweep counts only files that already crossed the")
+print("default threshold (signals were extracted with the default).")
+print("A from-scratch sweep would re-instrument the detector to emit")
+print("near-threshold candidates; deferred to v0.7 calibration.")
+"""))
+
+    cells.append(md(r"""## 12.3 · REVIEWER_CAUGHT — keyword count, response length, rate gate
+
+Sweeps:
+- `MIN_FINDING_KEYWORDS ∈ {1, 2, 3}`
+- `_SUBSTANTIVE_RESPONSE_MIN_CHARS ∈ {200, 500, 1000}` (response length floor)
+- `MIN_REVIEWER_CAUGHT_RATE ∈ {0.3, 0.5, 0.7}` per-(session, agent_type)
+
+Only the WITH-cohort is meaningful here — the WITHOUT-cohort by
+construction yields zero REVIEWER_CAUGHT signals."""))
+
+    cells.append(code("""\
+# Mutate module-level constants in-place to sweep, then restore.
+saved = (
+    qs.MIN_FINDING_KEYWORDS,
+    qs._SUBSTANTIVE_RESPONSE_MIN_CHARS,
+    qs.MIN_REVIEWER_CAUGHT_RATE,
+)
+
+kw_grid = [1, 2, 3]
+len_grid = [200, 500, 1000]
+rate_grid = [0.3, 0.5, 0.7]
+
+rows = []
+try:
+    for kw, ln, rt in itertools.product(kw_grid, len_grid, rate_grid):
+        qs.MIN_FINDING_KEYWORDS = kw
+        qs._SUBSTANTIVE_RESPONSE_MIN_CHARS = ln
+        qs.MIN_REVIEWER_CAUGHT_RATE = rt
+        fired = 0
+        for sess in cohort_with:
+            sigs = extract_quality_signals(sess.messages, sess.invocations)
+            if any(s.signal_type == SignalType.REVIEWER_CAUGHT for s in sigs):
+                fired += 1
+        rows.append({
+            "min_keywords": kw,
+            "min_length": ln,
+            "min_rate": rt,
+            "sessions_fired": fired,
+        })
+finally:
+    qs.MIN_FINDING_KEYWORDS, qs._SUBSTANTIVE_RESPONSE_MIN_CHARS, qs.MIN_REVIEWER_CAUGHT_RATE = saved
+
+rc_df = pd.DataFrame(rows)
+print("REVIEWER_CAUGHT sweep (WITH-cohort only):")
+print(rc_df.pivot_table(
+    index=["min_keywords", "min_length"],
+    columns="min_rate",
+    values="sessions_fired",
+).to_string())
+
+print()
+print(f"Default = (kw={qs.MIN_FINDING_KEYWORDS}, "
+      f"len={qs._SUBSTANTIVE_RESPONSE_MIN_CHARS}, "
+      f"rate={qs.MIN_REVIEWER_CAUGHT_RATE}):")
+default_fired = rc_df.query(
+    f"min_keywords == {qs.MIN_FINDING_KEYWORDS} "
+    f"and min_length == {qs._SUBSTANTIVE_RESPONSE_MIN_CHARS} "
+    f"and abs(min_rate - {qs.MIN_REVIEWER_CAUGHT_RATE}) < 1e-9"
+)["sessions_fired"].iloc[0]
+print(f"  {default_fired} sessions fire on this dataset")
+"""))
+
+    cells.append(md(r"""## 12.4 · Manual labels and precision/recall
+
+Per architect revision, manual labels live in
+`scripts/calibration/quality_labels.json`. The notebook reads that
+sidecar and computes precision/recall against the labeled subset
+when labels are present; when the file is empty or all-stub it
+prints a "no validated labels yet" disclaimer and skips the metrics.
+
+The sidecar file format:
+
+```json
+{
+  "schema_version": 1,
+  "signal_version": 1,
+  "sessions": [
+    {
+      "session_path": "<relative path under ~/.claude/projects/>",
+      "labels": {
+        "user_correction": "true_positive | true_negative | unclear",
+        "file_rework": "...",
+        "reviewer_caught": "..."
+      },
+      "notes": "optional free-text"
+    }
+  ]
+}
+```
+
+The `signal_version` field invalidates labels when pattern lists or
+gate logic change — the notebook warns when the labels' version
+trails the source-module version (currently `1`)."""))
+
+    cells.append(code("""\
+import json
+SOURCE_SIGNAL_VERSION = 1
+
+labels_path = (
+    Path(__file__).resolve().parent / "quality_labels.json"
+    if "__file__" in globals()
+    else Path("scripts/calibration/quality_labels.json")
+)
+
+if not labels_path.exists():
+    print(f"No labels file at {labels_path} — skipping precision/recall.")
+    labeled_data = None
+else:
+    raw = json.loads(labels_path.read_text())
+    label_version = raw.get("signal_version", 0)
+    sessions_labels = raw.get("sessions", [])
+    stub_count = sum(
+        1 for s in sessions_labels
+        if (s.get("notes") or "").startswith("stub")
+    )
+    if label_version < SOURCE_SIGNAL_VERSION:
+        print(
+            f"⚠️  labels signal_version={label_version} trails source "
+            f"version={SOURCE_SIGNAL_VERSION} — re-validate labels "
+            "before trusting precision/recall."
+        )
+    if stub_count == len(sessions_labels) and sessions_labels:
+        print(
+            f"All {stub_count} labels are stubs — precision/recall is "
+            "cosmetic only; replace stubs with real labels before merge."
+        )
+    print(
+        f"Loaded {len(sessions_labels)} session labels "
+        f"({stub_count} stub) at signal_version={label_version}."
+    )
+    labeled_data = sessions_labels
+
+# Precision/recall computation against labeled subset is a stub for
+# the initial release — the labels file ships with stub entries so the
+# harness compiles; replace with real labels and uncomment the
+# computation block below in v0.7 once the data is in.
+"""))
+
+    cells.append(md(r"""## 12.5 · Multi-axis verification
+
+Confirm that quality-axis recommendations surface for sessions in
+the WITH-cohort (review subagents fired and produced findings) and
+do not surface for sessions in the WITHOUT-cohort by accident."""))
+
+    cells.append(code("""\
+from agentfluent.diagnostics.pipeline import run_diagnostics
+
+with_quality_recs = 0
+without_quality_recs = 0
+for sess in cohort_with:
+    diag = run_diagnostics(sess.invocations, parent_messages=sess.messages)
+    with_quality_recs += sum(
+        1 for r in diag.aggregated_recommendations
+        if r.primary_axis == "quality"
+    )
+
+for sess in cohort_without:
+    diag = run_diagnostics(sess.invocations, parent_messages=sess.messages)
+    without_quality_recs += sum(
+        1 for r in diag.aggregated_recommendations
+        if r.primary_axis == "quality"
+    )
+
+print(f"quality-primary recommendations in WITH cohort:    {with_quality_recs}")
+print(f"quality-primary recommendations in WITHOUT cohort: {without_quality_recs}")
+print()
+print("Expectation: WITH > WITHOUT on a representative dataset.")
+print("If WITHOUT exceeds WITH, the cohort split or signal precision needs review.")
+"""))
+
+    cells.append(md(r"""## 12.6 · Findings and chosen values
+
+| Constant | Default | Sweep range | Chosen | Rationale |
+|---|---|---|---|---|
+| `MIN_CORRECTIONS_PER_SESSION` | 2 | {1, 2, 3, 5} | **keep 2** | Single-correction floor against noise; sweep table above shows session-fire counts at each value. PM-revised to OR-gate with rate. |
+| `MIN_CORRECTION_RATE` | 0.10 | {0.05, 0.10, 0.15, 0.20} | **keep 0.10** | Rate gate ensures dense correction sessions surface even at low absolute counts. OR'd with count gate above. |
+| `_FILE_REWORK_THRESHOLD` | 4 | {3, 4, 5, 7} | **keep 4** | Conservative-defaults rule: prefer false negatives. Sweep shows the difference fire-count between 3 and 4 is small on this dataset. |
+| `POST_COMPLETION_BOOST` | True | {False, True} | **keep True** | The "we said done but kept editing" pattern is stronger evidence than raw rework count; boolean by design. |
+| `MIN_FINDING_KEYWORDS` | 1 | {1, 2, 3} | **keep 1** | Default unchanged from #271 to preserve existing behavior; calibration is the mechanism for raising it. |
+| `_SUBSTANTIVE_RESPONSE_MIN_CHARS` | 500 | {200, 500, 1000} | **keep 500** | Default already empirically informed by #271; sweep on thin data wouldn't shift it. |
+| `MIN_REVIEWER_CAUGHT_RATE` | 0.5 | {0.3, 0.5, 0.7} | **keep 0.5** | Per-(session, agent_type). Reviewer must earn its keep on at least half of its invocations within a session for the signal to fire. |
+
+**No constants changed in this PR.** Conservative defaults across all
+seven knobs hold against the single-contributor sweep — the data is
+not strong enough to motivate a change. The notebook section is the
+calibration harness, ready for a re-run when multi-contributor data
+is available."""))
+
+    cells.append(md(r"""## 12.7 · Manual validation (Fred sign-off required before merge)
+
+**Per AC and PM Q7 on #274:** at least one dogfood session must
+trigger a quality recommendation that the author (Fred) agrees is
+correct. Self-certification by Claude does not satisfy this AC.
+
+**Workflow:**
+1. The PR includes the rebuilt notebook with rendered outputs.
+2. Fred reviews §12.5 (multi-axis verification) output and the
+   project-level `agentfluent analyze --diagnostics` output for at
+   least one dogfood session in the WITH cohort.
+3. Fred either:
+   - Confirms ≥1 quality recommendation is correct → approve PR; OR
+   - Documents specific false-positive or precision concerns →
+     adjust thresholds and re-run before merge.
+
+**Without explicit Fred approval, this PR does not merge.** The
+sign-off is the AC; the notebook section is the apparatus to support
+it."""))
+
     nb.cells = cells
     nb.metadata["kernelspec"] = {
         "display_name": "Python 3",

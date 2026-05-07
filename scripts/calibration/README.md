@@ -73,6 +73,16 @@ Or edit the `config_dir` assignment in the setup cell directly.
 - `_COMPLEX_MIN_TOOL_CALLS`, `_COMPLEX_MIN_TOKENS`,
   `_COMPLEX_MIN_ERROR_RATE` — complex-tier triggers
 
+**Quality signals** (`diagnostics/quality_signals.py`, calibrated in #274):
+- `MIN_CORRECTIONS_PER_SESSION`, `MIN_CORRECTION_RATE` — OR-gated
+  USER_CORRECTION emission floors
+- `_FILE_REWORK_THRESHOLD`, `POST_COMPLETION_BOOST` — FILE_REWORK
+  threshold and post-completion boost (boolean: drops threshold by 1)
+- `MIN_FINDING_KEYWORDS`, `_SUBSTANTIVE_RESPONSE_MIN_CHARS`,
+  `MIN_REVIEWER_CAUGHT_RATE` — REVIEWER_CAUGHT precision gates
+- Manual labels for precision/recall live in
+  `scripts/calibration/quality_labels.json` (see notebook section 12)
+
 **Not calibrated** (algorithmically fixed, not data-driven):
 - `retry.py::SIMILARITY_THRESHOLD` (retry-detection similarity)
 - `_SMALL_N_THRESHOLD` (silhouette k-range collapse boundary)

@@ -68,7 +68,13 @@ def _assistant_with_write_tool(
 
 class TestUserCorrectionDetection:
     def test_three_corrections_in_ten_user_messages_emits_three_signals(self) -> None:
-        """AC fixture: 3 corrections in 10 user messages -> 3 signals."""
+        """AC fixture: 3 corrections in 10 user messages -> 3 USER_CORRECTION signals.
+
+        The fixture's repeated edits to a single file also trigger
+        FILE_REWORK under #274's POST_COMPLETION_BOOST; filter to the
+        correction signals so this test stays focused on the correction
+        AC instead of cross-contaminating with rework behavior.
+        """
         messages: list[SessionMessage] = []
         # 7 non-correction user messages (preceded by a non-write assistant
         # text) interleaved with 3 corrections (preceded by write tools).
@@ -79,10 +85,12 @@ class TestUserCorrectionDetection:
             messages.append(_assistant_with_write_tool(f"Edited file {i}"))
             messages.append(_user(f"no, do something different ({i})"))
 
-        signals = extract_quality_signals(messages)
+        signals = [
+            s for s in extract_quality_signals(messages)
+            if s.signal_type == SignalType.USER_CORRECTION
+        ]
 
         assert len(signals) == 3
-        assert all(s.signal_type == SignalType.USER_CORRECTION for s in signals)
         # session_correction_rate stamped on every signal: 3 / 10 = 0.3
         rate = signals[0].detail["session_correction_rate"]
         assert isinstance(rate, float)
@@ -655,3 +663,169 @@ class TestReviewerCaughtDetection:
         signals = extract_quality_signals(messages, [inv])
         rev = next(s for s in signals if s.signal_type == SignalType.REVIEWER_CAUGHT)
         assert rev.detail["parent_acted"] is False
+
+
+class TestUserCorrectionEmissionGates:
+    """OR-gated session-level gates on USER_CORRECTION (#274 calibration).
+
+    Disjunctive: fires if count >= ``MIN_CORRECTIONS_PER_SESSION``
+    OR session_correction_rate >= ``MIN_CORRECTION_RATE``. PM-revised
+    from the originally proposed AND so a long session with two strong
+    corrections still surfaces.
+    """
+
+    @staticmethod
+    def _user_corrections(signals: list) -> list:
+        return [s for s in signals if s.signal_type == SignalType.USER_CORRECTION]
+
+    def test_below_both_floors_suppresses(self) -> None:
+        # 1 correction in 30 user messages: count=1 < 2, rate=0.033 < 0.10.
+        messages: list[SessionMessage] = []
+        for i in range(29):
+            messages.append(_assistant_text(f"point {i}"))
+            messages.append(_user(f"continue {i}"))
+        messages.append(_assistant_text("here is the plan"))
+        messages.append(_user("revert that change please"))
+        assert self._user_corrections(extract_quality_signals(messages)) == []
+
+    def test_count_floor_fires_with_low_rate(self) -> None:
+        # 2 corrections in 30 user messages: count=2 (gate), rate=0.067 (no gate).
+        messages: list[SessionMessage] = []
+        for i in range(28):
+            messages.append(_assistant_text(f"point {i}"))
+            messages.append(_user(f"continue {i}"))
+        for _ in range(2):
+            messages.append(_assistant_text("here is the plan"))
+            messages.append(_user("revert that change please"))
+        signals = self._user_corrections(extract_quality_signals(messages))
+        assert len(signals) == 2
+
+    def test_rate_floor_fires_with_low_count(self) -> None:
+        # 1 correction in 5 user messages: count=1 (no gate), rate=0.20 (gate).
+        messages: list[SessionMessage] = []
+        for i in range(4):
+            messages.append(_assistant_text(f"point {i}"))
+            messages.append(_user(f"continue {i}"))
+        messages.append(_assistant_text("here is the plan"))
+        messages.append(_user("revert that change please"))
+        signals = self._user_corrections(extract_quality_signals(messages))
+        assert len(signals) == 1
+
+
+class TestFileReworkPostCompletionBoost:
+    """``POST_COMPLETION_BOOST=True`` lowers ``_FILE_REWORK_THRESHOLD``
+    by 1 (floored at 2) for files with any post-completion edits."""
+
+    def test_boost_lowers_threshold_to_three(self) -> None:
+        # 3 edits, completion language at edit 2 → boosted threshold = 3, fires.
+        messages = [
+            _assistant_with_edits("/src/foo.py"),
+            _assistant_with_edits("/src/foo.py", text="all done with this"),
+            _assistant_with_edits("/src/foo.py"),
+        ]
+        signals = extract_quality_signals(messages)
+        rework = [s for s in signals if s.signal_type == SignalType.FILE_REWORK]
+        assert len(rework) == 1
+        assert rework[0].detail["edit_count"] == 3
+        assert rework[0].detail["post_completion_edits"] >= 1
+
+    def test_no_boost_when_no_post_completion(self) -> None:
+        # 3 edits, 0 post-completion → unboosted threshold = 4, suppressed.
+        messages = [
+            _assistant_with_edits("/src/foo.py") for _ in range(3)
+        ]
+        signals = extract_quality_signals(messages)
+        assert not any(
+            s.signal_type == SignalType.FILE_REWORK for s in signals
+        )
+
+
+class TestReviewerCaughtRateGate:
+    """Per-(session, agent_type) ``MIN_REVIEWER_CAUGHT_RATE`` gate
+    suppresses signals from review agents whose substantive-finding
+    fraction is below the threshold within the session."""
+
+    def test_low_rate_suppresses_all_signals(self) -> None:
+        # 1 substantive of 10 invocations → rate 0.1 < 0.5, suppressed.
+        substantive = _review_invocation(
+            output_text=_SUBSTANTIVE_REVIEW, tool_use_id="toolu_sub",
+        )
+        noise = [
+            _review_invocation(output_text="LGTM", tool_use_id=f"toolu_n{i}")
+            for i in range(9)
+        ]
+        invocations = [substantive, *noise]
+        messages = [
+            _user_with_tool_result(inv.tool_use_id) for inv in invocations
+        ]
+        signals = extract_quality_signals(messages, invocations)
+        assert not any(
+            s.signal_type == SignalType.REVIEWER_CAUGHT for s in signals
+        )
+
+    def test_high_rate_passes_all_substantive(self) -> None:
+        # 3 substantive of 5 invocations → rate 0.6 >= 0.5, all 3 fire.
+        invocations = [
+            _review_invocation(
+                output_text=_SUBSTANTIVE_REVIEW,
+                tool_use_id=f"toolu_sub{i}",
+            )
+            for i in range(3)
+        ] + [
+            _review_invocation(output_text="LGTM", tool_use_id=f"toolu_n{i}")
+            for i in range(2)
+        ]
+        messages = [
+            _user_with_tool_result(inv.tool_use_id) for inv in invocations
+        ]
+        signals = extract_quality_signals(messages, invocations)
+        rev = [s for s in signals if s.signal_type == SignalType.REVIEWER_CAUGHT]
+        assert len(rev) == 3
+
+    def test_rate_gate_applies_per_agent_type(self) -> None:
+        # architect: 1 substantive of 1 invocation → rate 1.0, fires.
+        # tester: 0 substantive of 2 invocations → no candidates, no signals.
+        invocations = [
+            _review_invocation(
+                agent_type="architect",
+                output_text=_SUBSTANTIVE_REVIEW,
+                tool_use_id="toolu_arch",
+            ),
+            _review_invocation(
+                agent_type="tester",
+                output_text="LGTM",
+                tool_use_id="toolu_test1",
+            ),
+            _review_invocation(
+                agent_type="tester",
+                output_text="LGTM",
+                tool_use_id="toolu_test2",
+            ),
+        ]
+        messages = [
+            _user_with_tool_result(inv.tool_use_id) for inv in invocations
+        ]
+        signals = extract_quality_signals(messages, invocations)
+        rev = [s for s in signals if s.signal_type == SignalType.REVIEWER_CAUGHT]
+        assert len(rev) == 1
+        assert rev[0].agent_type == "architect"
+
+
+class TestMinFindingKeywords:
+    """``MIN_FINDING_KEYWORDS`` defaults to 1 — preserves existing
+    behavior. Exposed as a module constant so #274 calibration can
+    sweep ``{1, 2, 3}``."""
+
+    def test_default_one_keyword_passes(self) -> None:
+        text = (
+            "I reviewed the file. " * 30
+            + " There is one issue with the implementation."
+        )
+        inv = _review_invocation(output_text=text)
+        signals = extract_quality_signals(
+            messages=[_user_with_tool_result(inv.tool_use_id)],
+            agent_invocations=[inv],
+        )
+        rev = [s for s in signals if s.signal_type == SignalType.REVIEWER_CAUGHT]
+        assert len(rev) == 1
+        assert rev[0].detail["finding_keywords"] == ["issue"]
