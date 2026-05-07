@@ -159,11 +159,12 @@ _EDIT_TOOL_NAMES: frozenset[str] = frozenset({"Edit", "Write", "MultiEdit"})
 
 # A file edited at or above this threshold within a single session
 # fires ``FILE_REWORK``. Calibrated in #274 against agentfluent dogfood
-# data: edit_count distribution was p25=4, median=5, p75=8, p90=12 —
-# the prior default of 4 sat at the noise floor and over-fired on
-# normal iterative dev. Raised to 8 to land above the p75, in the
-# right tail where edits-per-file plausibly indicate a quality miss.
-_FILE_REWORK_THRESHOLD = 8
+# data: post-#319 firing distribution was p25=8, median=10, p75=13,
+# p90=18, p95=21. Threshold landed at the p90 of the firing
+# distribution to surface only the genuinely heavy-rework tail; lower
+# values (≤8) caught normal iterative dev like active test files,
+# README polish, and the calibration notebook itself.
+_FILE_REWORK_THRESHOLD = 12
 
 # When ``True``, lower the FILE_REWORK threshold by 1 for files that
 # received any post-completion edits. Disabled in #274 calibration:
