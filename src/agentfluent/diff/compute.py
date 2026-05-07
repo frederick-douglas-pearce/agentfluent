@@ -161,6 +161,14 @@ def _make_delta(
     severity = _coerce_severity(sample.get("severity"))
     representative = str(sample.get("representative_message", ""))
 
+    # Axis attribution (#273). ``.get("primary_axis")`` returns ``None``
+    # when the field is absent (pre-v0.6 envelopes) — we propagate that
+    # ``None`` instead of defaulting to ``"cost"`` so legacy envelopes
+    # don't trigger spurious axis-shift indicators against a current
+    # envelope that does carry the attribution.
+    baseline_axis = _coerce_axis((baseline or {}).get("primary_axis"))
+    current_axis = _coerce_axis((current or {}).get("primary_axis"))
+
     return RecommendationDelta(
         status=status,
         agent_type=agent_type,
@@ -175,7 +183,23 @@ def _make_delta(
         current_priority_score=current_priority,
         priority_score_delta=current_priority - baseline_priority,
         is_builtin=bool(sample.get("is_builtin", False)),
+        baseline_primary_axis=baseline_axis,
+        current_primary_axis=current_axis,
     )
+
+
+def _coerce_axis(value: Any) -> str | None:
+    """Normalize ``primary_axis`` from JSON to ``str | None``.
+
+    Returns ``None`` for missing/blank values so the ``axis_shifted``
+    computed field on ``RecommendationDelta`` stays quiet against
+    pre-v0.6 envelopes that lack the attribution entirely.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return None
+    return value or None
 
 
 def _coerce_severity(value: Any) -> Severity:

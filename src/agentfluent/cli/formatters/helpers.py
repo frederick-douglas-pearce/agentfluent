@@ -16,6 +16,16 @@ SEVERITY_COLORS: dict[Severity, str] = {
     Severity.INFO: "cyan",
 }
 
+AXIS_COLORS: dict[str, str] = {
+    "cost": "yellow",
+    "speed": "cyan",
+    "quality": "magenta",
+}
+"""Color map for axis attribution labels (#273). Keys mirror the bare
+strings used by ``AggregatedRecommendation.primary_axis`` and
+``axis_scores``. Unknown axes fall back to ``white`` via
+:func:`axis_label`."""
+
 GLOBAL_AGENT_LABEL = "(global)"
 """Display string for cross-cutting findings whose ``agent_type`` is
 ``None`` (e.g., MCP audit). JSON output keeps ``null``; tables substitute
@@ -32,6 +42,24 @@ def severity_cell(severity: Severity) -> str:
     """Rich-markup cell for a ``Severity`` value."""
     color = SEVERITY_COLORS[severity]
     return f"[{color}]{severity.value}[/{color}]"
+
+
+def axis_label(axis: str) -> str:
+    """Rich-markup ``[axis]`` prefix for recommendation rows (#273).
+
+    Centralizes the markup so CLI table, top-N summary, and diff output
+    stay visually consistent. Unknown axes render in white so a future
+    axis added without updating ``AXIS_COLORS`` still appears (just
+    uncolored) instead of crashing.
+
+    The literal opening ``[`` is escaped via ``\\[`` so Rich emits it
+    as plain text instead of consuming ``[axis]`` as an unknown style
+    tag (which would silently drop the label entirely from the rendered
+    output). The closing ``]`` is fine as-is — Rich only treats it
+    specially when it closes an open tag.
+    """
+    color = AXIS_COLORS.get(axis, "white")
+    return f"[{color}]\\[{axis}][/{color}]"
 
 
 def format_cost(cost: float) -> str:

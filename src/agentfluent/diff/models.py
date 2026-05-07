@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 from agentfluent.analytics.tokens import Origin
 from agentfluent.config.models import Severity
@@ -56,6 +56,31 @@ class RecommendationDelta(BaseModel):
     require a schema change."""
 
     is_builtin: bool = False
+
+    baseline_primary_axis: str | None = None
+    """``primary_axis`` from the baseline envelope's aggregated rec, or
+    ``None`` for ``status='new'`` rows and for legacy pre-v0.6 envelopes
+    that lack the field. Defaulting to ``None`` rather than ``"cost"``
+    avoids spurious ``axis_shifted`` reports when one side is missing
+    the attribution entirely (#273)."""
+
+    current_primary_axis: str | None = None
+    """``primary_axis`` from the current envelope's aggregated rec, or
+    ``None`` for ``status='resolved'`` rows."""
+
+    # mypy + pydantic ``@computed_field`` interaction (pydantic/pydantic#6709).
+    # Mirrors the ``# type: ignore[prop-decorator]`` pattern on
+    # ``DelegationSuggestion.yaml_draft`` and ``OffloadCandidate.yaml_draft``.
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def axis_shifted(self) -> bool:
+        """``True`` iff baseline and current both have a non-``None``
+        ``primary_axis`` and the values differ. Pre-v0.6 envelopes
+        (missing ``primary_axis``) deserialize to ``None`` and never
+        report a shift, so a one-sided legacy diff stays quiet."""
+        if self.baseline_primary_axis is None or self.current_primary_axis is None:
+            return False
+        return self.baseline_primary_axis != self.current_primary_axis
 
 
 class ModelTokenDelta(BaseModel):

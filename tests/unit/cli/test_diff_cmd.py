@@ -304,3 +304,100 @@ class TestOutputFormats:
         result = runner.invoke(cli_app, ["diff", "--help"])
         assert result.exit_code == 0
         assert "Examples" in result.output
+
+
+def _rec_with_axis(
+    *,
+    severity: str = "warning",
+    agent_type: str = "pm",
+    primary_axis: str = "cost",
+) -> dict[str, Any]:
+    """Helper to build an aggregated rec with a primary_axis (#273)."""
+    return {
+        **_rec(severity=severity, agent_type=agent_type),
+        "primary_axis": primary_axis,
+        "axis_scores": {"cost": 0.0, "speed": 0.0, "quality": 0.0},
+    }
+
+
+class TestAxisLabelsInDiffOutput:
+    """The diff table prefixes each delta's message with its axis label
+    and renders a ``[old → new]`` shift indicator on persisting rows
+    where the primary axis changed (#273)."""
+
+    def test_new_rec_renders_axis_prefix(
+        self,
+        runner: CliRunner,
+        cli_app: typer.Typer,
+        tmp_path: Path,
+    ) -> None:
+        baseline = _write_envelope(tmp_path / "baseline.json", _data())
+        current = _write_envelope(
+            tmp_path / "current.json",
+            _data(aggregated_recs=[
+                _rec_with_axis(primary_axis="quality"),
+            ]),
+        )
+        result = runner.invoke(
+            cli_app, ["diff", str(baseline), str(current), "--fail-on", "off"],
+        )
+        assert result.exit_code == 0, result.output
+        assert "[quality]" in result.output
+
+    def test_persisting_axis_shift_renders_arrow(
+        self,
+        runner: CliRunner,
+        cli_app: typer.Typer,
+        tmp_path: Path,
+    ) -> None:
+        baseline = _write_envelope(
+            tmp_path / "baseline.json",
+            _data(aggregated_recs=[_rec_with_axis(primary_axis="cost")]),
+        )
+        current = _write_envelope(
+            tmp_path / "current.json",
+            _data(aggregated_recs=[_rec_with_axis(primary_axis="quality")]),
+        )
+        result = runner.invoke(
+            cli_app, ["diff", str(baseline), str(current), "--fail-on", "off"],
+        )
+        assert result.exit_code == 0, result.output
+        # Same agent + target + signal_types → persisting; different
+        # primary_axis → shift indicator with both axis names present.
+        assert "Persisting Recommendations" in result.output
+        # The shift indicator carries both axes joined by an arrow; we
+        # check both pieces independently to stay resilient to whitespace.
+        assert "cost" in result.output
+        assert "quality" in result.output
+        assert "→" in result.output
+
+    def test_persisting_no_shift_renders_single_axis(
+        self,
+        runner: CliRunner,
+        cli_app: typer.Typer,
+        tmp_path: Path,
+    ) -> None:
+        baseline = _write_envelope(
+            tmp_path / "baseline.json",
+            _data(aggregated_recs=[_rec_with_axis(primary_axis="speed")]),
+        )
+        current = _write_envelope(
+            tmp_path / "current.json",
+            _data(aggregated_recs=[_rec_with_axis(primary_axis="speed")]),
+        )
+        result = runner.invoke(
+            cli_app, ["diff", str(baseline), str(current), "--fail-on", "off"],
+        )
+        assert result.exit_code == 0, result.output
+        assert "[speed]" in result.output
+        # No shift → no arrow indicator inside the recommendations
+        # block. (The summary line has its own ``Sessions: N → N``
+        # arrow we explicitly skip past.)
+        rec_section_start = result.output.index("Persisting Recommendations")
+        rec_section_end = (
+            result.output.index("Token Metrics")
+            if "Token Metrics" in result.output
+            else len(result.output)
+        )
+        rec_section = result.output[rec_section_start:rec_section_end]
+        assert "→" not in rec_section

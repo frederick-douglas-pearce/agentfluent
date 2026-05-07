@@ -13,7 +13,9 @@ from rich.markup import escape
 from rich.table import Table
 
 from agentfluent.cli.formatters.helpers import (
+    AXIS_COLORS,
     GLOBAL_AGENT_LABEL,
+    axis_label,
     format_cost,
     format_tokens,
     severity_cell,
@@ -144,13 +146,18 @@ def _print_rec_table(
             count_cell = str(base_count)
             priority_cell = f"{base_priority:.1f}"
 
+        prefix = _axis_prefix(row)
+        message_body = truncate(escape(row.representative_message), 80)
+        message_cell = (
+            f"{prefix} {message_body}" if prefix else message_body
+        )
         table.add_row(
             severity_cell(row.severity),
             agent,
             row.target,
             count_cell,
             priority_cell,
-            truncate(escape(row.representative_message), 80),
+            message_cell,
         )
 
     console.print(table)
@@ -269,6 +276,40 @@ def _render_regression_footer(console: Console, result: DiffResult) -> None:
 # ---------------------------------------------------------------------------
 # Cell formatters
 # ---------------------------------------------------------------------------
+
+
+def _axis_prefix(row: RecommendationDelta) -> str:
+    """Render the axis-attribution prefix for a delta's message cell.
+
+    Three shapes:
+
+    - ``status='new'``: ``[<current_axis>]`` using the current axis color.
+    - ``status='resolved'``: ``[<baseline_axis>]`` using the baseline axis
+      color (the side that has the rec).
+    - ``status='persisting'``: ``[<axis>]`` when both sides agree, or
+      ``[<baseline> → <current>]`` when ``axis_shifted``. Both axes
+      retain their respective colors so the shift is visually scannable.
+
+    Returns an empty string when neither side carries a ``primary_axis``
+    (e.g., diffing two pre-v0.6 envelopes — no info to show).
+    """
+    if row.axis_shifted:
+        # ``axis_shifted`` is only True when both sides are non-None.
+        # The leading ``[`` is escaped via ``\[`` so Rich emits it as
+        # plain text instead of consuming ``[<axis-name>`` as an unknown
+        # style tag. The trailing ``]`` is fine as-is.
+        baseline = row.baseline_primary_axis or ""
+        current = row.current_primary_axis or ""
+        baseline_color = AXIS_COLORS.get(baseline, "white")
+        current_color = AXIS_COLORS.get(current, "white")
+        return (
+            f"\\[[{baseline_color}]{baseline}[/{baseline_color}] → "
+            f"[{current_color}]{current}[/{current_color}]]"
+        )
+    axis = row.current_primary_axis or row.baseline_primary_axis
+    if axis is None:
+        return ""
+    return axis_label(axis)
 
 
 def _signed(value: float, formatted_abs: str) -> str:

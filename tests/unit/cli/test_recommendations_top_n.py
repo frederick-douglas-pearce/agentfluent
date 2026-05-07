@@ -162,15 +162,17 @@ class TestFullTableIndexColumn:
 
 
 class TestSuppressionInVerboseMode:
-    """Verbose mode shows the unaggregated raw recommendations table —
-    the top-N summary is irrelevant there because the priority concept
-    only exists at the aggregated level. We confirm the block is
-    suppressed when verbose is on."""
+    """Verbose mode (#273) renders the aggregated Recommendations table
+    plus a per-row priority breakdown line; the top-N summary is
+    suppressed because the breakdown line conveys the same priority
+    info at higher granularity."""
 
     def test_verbose_skips_top_block(self) -> None:
-        # In verbose mode, _format_diagnostics_table renders the raw
-        # `recommendations` list, NOT the aggregated one. The top-N
-        # block lives in the aggregated branch, so it shouldn't fire.
+        # In verbose mode, _format_diagnostics_table still renders the
+        # aggregated Recommendations table (architect-mandated change in
+        # #273 — the legacy raw `recommendations` table is no longer
+        # rendered). The top-N summary block above the table is
+        # suppressed in favor of the per-row breakdown line below it.
         from agentfluent.diagnostics.models import DiagnosticRecommendation
         diag = DiagnosticsResult(
             recommendations=[

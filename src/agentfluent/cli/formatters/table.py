@@ -19,6 +19,7 @@ from agentfluent.cli.formatters.helpers import (
     GLOBAL_AGENT_LABEL,
     SEVERITY_COLORS,
     average_score,
+    axis_label,
     format_cost,
     format_date,
     format_size,
@@ -329,9 +330,17 @@ def _format_diagnostics_table(
 
     ``top_n`` controls the "Top priority fixes" summary block that
     renders above the aggregated Recommendations table (#172). The
-    summary is suppressed in ``--verbose`` (the unaggregated raw table
-    is shown instead) and when ``top_n == 0`` or no aggregated rows
-    exist.
+    summary is suppressed in ``--verbose`` (where per-row priority
+    breakdown lines convey the same info at higher granularity) and
+    when ``top_n == 0`` or no aggregated rows exist.
+
+    Verbose mode (#273): replaces the legacy raw unaggregated
+    ``recommendations`` rendering with the aggregated table plus a
+    per-row dim breakdown line showing the composite ``priority_score``
+    and per-axis contributions. The raw, unaggregated list is dropped
+    intentionally — its structural duplication of aggregated rows
+    confused users more than it helped, and the breakdown line gives a
+    finer-grained view of the same data without that redundancy.
     """
     if diag.signals:
         sig_table = Table(title="Diagnostic Signals", show_header=True)
@@ -350,25 +359,9 @@ def _format_diagnostics_table(
             )
         console.print(sig_table)
 
-    if verbose and diag.recommendations:
-        rec_table = Table(title="Recommendations", show_header=True)
-        rec_table.add_column("Agent", style="cyan")
-        rec_table.add_column("Target")
-        rec_table.add_column("Severity")
-        rec_table.add_column("Observation")
-        rec_table.add_column("Action")
-
-        for rec in diag.recommendations:
-            rec_table.add_row(
-                escape(rec.agent_type or GLOBAL_AGENT_LABEL),
-                escape(rec.target),
-                severity_cell(rec.severity),
-                escape(rec.observation),
-                escape(rec.action),
-            )
-        console.print(rec_table)
-    elif diag.aggregated_recommendations:
-        _format_top_recommendations(console, diag, top_n=top_n)
+    if diag.aggregated_recommendations:
+        if not verbose:
+            _format_top_recommendations(console, diag, top_n=top_n)
 
         rec_table = Table(title="Recommendations", show_header=True)
         rec_table.add_column("#", style="dim", justify="right")
@@ -379,21 +372,51 @@ def _format_diagnostics_table(
         rec_table.add_column("Recommendation")
 
         for idx, agg in enumerate(diag.aggregated_recommendations, start=1):
+            message = f"{axis_label(agg.primary_axis)} {escape(agg.representative_message)}"
             rec_table.add_row(
                 str(idx),
                 escape(agg.agent_type or GLOBAL_AGENT_LABEL),
                 escape(agg.target),
                 severity_cell(agg.severity),
                 str(agg.count),
-                escape(agg.representative_message),
+                message,
             )
         console.print(rec_table)
+
+        if verbose:
+            _print_priority_breakdowns(console, diag)
 
     _format_deep_diagnostics(console, diag, verbose=verbose)
     _format_delegation_suggestions(console, diag, verbose=verbose)
     _format_offload_candidates(console, diag, verbose=verbose)
 
     console.print(GLOSSARY_FOOTNOTE, style="dim")
+
+
+def _print_priority_breakdowns(
+    console: Console,
+    diag: DiagnosticsResult,
+) -> None:
+    """Render per-row dim priority breakdown lines under verbose mode.
+
+    Format: ``  N. Priority: 312.4 (cost: 12.4, speed: 0.0, quality: 300.0)``
+
+    Printed below the aggregated Recommendations table so the
+    composite ``priority_score`` and per-axis contributions are
+    visible without bloating the table itself.
+    """
+    if not diag.aggregated_recommendations:
+        return
+    console.print("\n[dim]Priority breakdown[/dim]")
+    for idx, agg in enumerate(diag.aggregated_recommendations, start=1):
+        cost = agg.axis_scores.get("cost", 0.0)
+        speed = agg.axis_scores.get("speed", 0.0)
+        quality = agg.axis_scores.get("quality", 0.0)
+        console.print(
+            f"  [dim]{idx}. Priority: {agg.priority_score:.1f} "
+            f"(cost: {cost:.1f}, speed: {speed:.1f}, "
+            f"quality: {quality:.1f})[/dim]",
+        )
 
 
 def _format_top_recommendations(
@@ -409,10 +432,12 @@ def _format_top_recommendations(
     summary and find the matching detail row by number. Suppressed when
     ``top_n == 0`` or no aggregated rows exist.
 
-    Format: ``  N. [severity] agent (count×): representative_message``.
+    Format: ``  N. [axis] [severity] agent (count×): representative_message``.
     The aggregated list is already sorted by ``priority_score`` desc
     (see ``aggregation.aggregate_recommendations``), so the top N rows
-    are the top N priorities by definition.
+    are the top N priorities by definition. The ``[axis]`` prefix
+    (#273) surfaces ``primary_axis`` attribution at a glance using the
+    ``AXIS_COLORS`` palette.
     """
     if top_n <= 0:
         return
@@ -423,12 +448,13 @@ def _format_top_recommendations(
 
     console.print(f"\n[bold]Top {shown} priority fixes[/bold]")
     for idx, agg in enumerate(aggs[:shown], start=1):
+        axis = axis_label(agg.primary_axis)
         severity = severity_cell(agg.severity)
         agent = escape(agg.agent_type or GLOBAL_AGENT_LABEL)
         count_suffix = f" ({agg.count}×)" if agg.count > 1 else ""
         message = escape(agg.representative_message)
         console.print(
-            f"  {idx}. {severity} [cyan]{agent}[/cyan]{count_suffix}: {message}",
+            f"  {idx}. {axis} {severity} [cyan]{agent}[/cyan]{count_suffix}: {message}",
         )
 
 
