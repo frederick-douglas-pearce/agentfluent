@@ -1774,37 +1774,160 @@ do not surface for sessions in the WITHOUT-cohort by accident."""))
     cells.append(code("""\
 from agentfluent.diagnostics.pipeline import run_diagnostics
 
-with_recs: list = []
-without_recs: list = []
-for sess in cohort_with:
-    diag = run_diagnostics(sess.invocations, parent_messages=sess.messages)
-    with_recs.extend(
-        r for r in diag.aggregated_recommendations
-        if r.primary_axis == "quality"
-    )
+QUALITY_SIGNAL_TYPES = {
+    SignalType.USER_CORRECTION,
+    SignalType.FILE_REWORK,
+    SignalType.REVIEWER_CAUGHT,
+}
 
-for sess in cohort_without:
-    diag = run_diagnostics(sess.invocations, parent_messages=sess.messages)
-    without_recs.extend(
-        r for r in diag.aggregated_recommendations
-        if r.primary_axis == "quality"
-    )
+def _collect_quality(cohort):
+    recs = []
+    sigs_by_type: dict = {st: [] for st in QUALITY_SIGNAL_TYPES}
+    sessions_with_any_quality_rec = 0
+    for sess in cohort:
+        diag = run_diagnostics(sess.invocations, parent_messages=sess.messages)
+        session_quality_recs = [
+            r for r in diag.aggregated_recommendations
+            if r.primary_axis == "quality"
+        ]
+        recs.extend(session_quality_recs)
+        if session_quality_recs:
+            sessions_with_any_quality_rec += 1
+        for sig in diag.signals:
+            if sig.signal_type in QUALITY_SIGNAL_TYPES:
+                sigs_by_type[sig.signal_type].append(sig)
+    return recs, sigs_by_type, sessions_with_any_quality_rec
 
-print(f"quality-primary recommendations in WITH cohort:    {len(with_recs)}")
-print(f"quality-primary recommendations in WITHOUT cohort: {len(without_recs)}")
+with_recs, with_signals, with_sessions_hit = _collect_quality(cohort_with)
+without_recs, without_signals, without_sessions_hit = _collect_quality(cohort_without)
+
+print("Quality-primary recommendations:")
+print(f"  WITH cohort:    {len(with_recs)} recs across "
+      f"{with_sessions_hit}/{len(cohort_with)} sessions")
+print(f"  WITHOUT cohort: {len(without_recs)} recs across "
+      f"{without_sessions_hit}/{len(cohort_without)} sessions")
 print()
-print("Expectation: WITH > WITHOUT on a representative dataset.")
-print("If WITHOUT exceeds WITH, the cohort split or signal precision needs review.")
+print("Per signal-type counts (raw signals, not aggregated):")
+def _fmt(sigs_by_type):
+    return ", ".join(
+        f"{st.value}={len(sigs_by_type[st])}" for st in QUALITY_SIGNAL_TYPES
+    )
+print(f"  WITH:    {_fmt(with_signals)}")
+print(f"  WITHOUT: {_fmt(without_signals)}")
+print()
+print("Sanity check: WITH should produce more raw signals because")
+print("REVIEWER_CAUGHT can only fire there. If a single signal type")
+print("dominates by orders of magnitude, its threshold is likely too")
+print("loose — see drill-down cells below to judge.")
 """))
 
-    cells.append(md(r"""### Sign-off candidates
+    cells.append(md(r"""### Drill-down: which signals are firing, and why?
+
+The aggregation layer rolls many raw signals into one recommendation
+keyed by ``(agent_type, target, signal_types)`` — a session with 47
+``FILE_REWORK`` events surfaces as a single rec with ``count=47``. To
+judge precision, you need to see the underlying events. The cells
+below print:
+
+1. **FILE_REWORK** — top files by ``edit_count``, with post-completion marker
+2. **USER_CORRECTION** — sample of detected correction text + matched category
+3. **REVIEWER_CAUGHT** — every event (typically rare): finding keywords + parent-acted
+
+Use these to ask:
+- *Are the file-rework hits genuine quality misses, or normal iterative dev?*
+- *Are the correction snippets actually corrections, or false positives from "no, that's right" / soft-pattern noise?*
+- *Did the review subagents catch real issues the parent acted on?*"""))
+
+    cells.append(code("""\
+def _show_file_rework(sigs_by_type, label, k=10):
+    sigs = sigs_by_type.get(SignalType.FILE_REWORK, [])
+    header = f"FILE_REWORK in {label} (top {min(k, len(sigs))} of {len(sigs)} by edit_count)"
+    print(f"\\n=== {header} ===")
+    if not sigs:
+        print("  (none)")
+        return
+    top = sorted(sigs, key=lambda s: s.detail.get("edit_count", 0), reverse=True)[:k]
+    for s in top:
+        d = s.detail
+        post = d.get("post_completion_edits", 0)
+        marker = f" (post-completion: {post})" if post > 0 else ""
+        tools = ", ".join(d.get("edit_tools", []))
+        print(f"  {d.get('edit_count', 0):>3}× [{tools}] {d.get('file_path', '?')}{marker}")
+
+def _show_user_corrections(sigs_by_type, label, k=8):
+    sigs = sigs_by_type.get(SignalType.USER_CORRECTION, [])
+    print(f"\\n=== USER_CORRECTION in {label} ({min(k, len(sigs))} of {len(sigs)} samples) ===")
+    if not sigs:
+        print("  (none)")
+        return
+    for s in sigs[:k]:
+        d = s.detail
+        cat = d.get("matched_category", "?")
+        preceding = d.get("preceding_assistant_action", "?")
+        text = d.get("correction_text", "")[:120]
+        print(f"  [{cat}/{preceding}] {text}")
+
+def _show_reviewer_caught(sigs_by_type, label):
+    sigs = sigs_by_type.get(SignalType.REVIEWER_CAUGHT, [])
+    print(f"\\n=== REVIEWER_CAUGHT in {label} ({len(sigs)} total) ===")
+    if not sigs:
+        print("  (none)")
+        return
+    for s in sigs:
+        d = s.detail
+        keywords = ", ".join(d.get("finding_keywords", []))
+        acted = "ACTED-ON" if d.get("parent_acted") else "not-acted"
+        print(f"  {s.agent_type:<18} keywords=[{keywords}]  {acted}  "
+              f"({d.get('response_length', 0)} chars)")
+
+print("WITH cohort:")
+_show_file_rework(with_signals, "WITH")
+_show_user_corrections(with_signals, "WITH")
+_show_reviewer_caught(with_signals, "WITH")
+
+print("\\n\\nWITHOUT cohort:")
+_show_file_rework(without_signals, "WITHOUT")
+_show_user_corrections(without_signals, "WITHOUT")
+"""))
+
+    cells.append(md(r"""### Edit-count distribution
+
+If FILE_REWORK is dominating the output, the question is: *what edit
+count would actually distinguish "problematic rework" from "normal
+iteration"?* The cell below shows the empirical distribution across
+all flagged files (not files below threshold — those weren't emitted
+as signals). Use the percentiles to judge whether the current default
+(``_FILE_REWORK_THRESHOLD = 4``) sits in the noise floor of natural
+dev or above it."""))
+
+    cells.append(code("""\
+all_rework = (
+    with_signals.get(SignalType.FILE_REWORK, [])
+    + without_signals.get(SignalType.FILE_REWORK, [])
+)
+counts = [s.detail.get("edit_count", 0) for s in all_rework]
+if counts:
+    s = pd.Series(counts)
+    print(f"FILE_REWORK edit_count distribution (n={len(s)}):")
+    print(f"  min={s.min()}  p25={s.quantile(0.25):.0f}  "
+          f"median={s.median():.0f}  p75={s.quantile(0.75):.0f}  "
+          f"p90={s.quantile(0.90):.0f}  p95={s.quantile(0.95):.0f}  "
+          f"max={s.max()}")
+    print()
+    print("If most files cluster near the default threshold (4), the")
+    print("threshold is in the noise. If the distribution has a long")
+    print("right tail (p90 >> median), the current threshold catches")
+    print("the tail and tightening it would reduce false positives.")
+else:
+    print("No FILE_REWORK signals fired — distribution unavailable.")
+"""))
+
+    cells.append(md(r"""### Sign-off candidates (aggregated recommendations)
 
 Up to three representative quality-primary recommendations from each
-cohort, sorted by ``priority_score`` desc. **Read the
-``representative_message`` on each row and ask: does the underlying
-behavior plausibly justify the suggested action?** This is the
-manual-validation step the AC requires (Fred sign-off), captured
-inline so it can happen in the notebook."""))
+cohort, sorted by ``priority_score`` desc. The drill-down cells above
+show the underlying evidence; this view is the rolled-up output a
+user would see from ``agentfluent analyze --diagnostics``."""))
 
     cells.append(code("""\
 def _show_recs(label, recs, k=3):
