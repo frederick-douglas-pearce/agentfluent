@@ -1774,27 +1774,58 @@ do not surface for sessions in the WITHOUT-cohort by accident."""))
     cells.append(code("""\
 from agentfluent.diagnostics.pipeline import run_diagnostics
 
-with_quality_recs = 0
-without_quality_recs = 0
+with_recs: list = []
+without_recs: list = []
 for sess in cohort_with:
     diag = run_diagnostics(sess.invocations, parent_messages=sess.messages)
-    with_quality_recs += sum(
-        1 for r in diag.aggregated_recommendations
+    with_recs.extend(
+        r for r in diag.aggregated_recommendations
         if r.primary_axis == "quality"
     )
 
 for sess in cohort_without:
     diag = run_diagnostics(sess.invocations, parent_messages=sess.messages)
-    without_quality_recs += sum(
-        1 for r in diag.aggregated_recommendations
+    without_recs.extend(
+        r for r in diag.aggregated_recommendations
         if r.primary_axis == "quality"
     )
 
-print(f"quality-primary recommendations in WITH cohort:    {with_quality_recs}")
-print(f"quality-primary recommendations in WITHOUT cohort: {without_quality_recs}")
+print(f"quality-primary recommendations in WITH cohort:    {len(with_recs)}")
+print(f"quality-primary recommendations in WITHOUT cohort: {len(without_recs)}")
 print()
 print("Expectation: WITH > WITHOUT on a representative dataset.")
 print("If WITHOUT exceeds WITH, the cohort split or signal precision needs review.")
+"""))
+
+    cells.append(md(r"""### Sign-off candidates
+
+Up to three representative quality-primary recommendations from each
+cohort, sorted by ``priority_score`` desc. **Read the
+``representative_message`` on each row and ask: does the underlying
+behavior plausibly justify the suggested action?** This is the
+manual-validation step the AC requires (Fred sign-off), captured
+inline so it can happen in the notebook."""))
+
+    cells.append(code("""\
+def _show_recs(label, recs, k=3):
+    print(f"\\n=== {label} ({len(recs)} total, showing top {min(k, len(recs))}) ===")
+    if not recs:
+        print("  (none)")
+        return
+    top = sorted(recs, key=lambda r: r.priority_score, reverse=True)[:k]
+    for i, r in enumerate(top, 1):
+        agent = r.agent_type or "(global)"
+        sig_types = ", ".join(s.value for s in r.signal_types)
+        print(f"\\n  [{i}] {r.severity.value} {agent} — target: {r.target}")
+        print(f"      signals: {sig_types}  count: {r.count}  "
+              f"priority: {r.priority_score:.1f}")
+        print(f"      axis_scores: cost={r.axis_scores.get('cost', 0):.1f} "
+              f"speed={r.axis_scores.get('speed', 0):.1f} "
+              f"quality={r.axis_scores.get('quality', 0):.1f}")
+        print(f"      message: {r.representative_message}")
+
+_show_recs("WITH-cohort quality recommendations", with_recs, k=3)
+_show_recs("WITHOUT-cohort quality recommendations", without_recs, k=3)
 """))
 
     cells.append(md(r"""## 12.6 · Findings and chosen values
