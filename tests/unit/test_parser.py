@@ -358,6 +358,101 @@ class TestToolUseResultOnUserMessage:
         messages = parse_session(path)
         assert messages[0].metadata is None
 
+    def test_tool_result_list_content_concatenated(self, tmp_path: Path) -> None:
+        """Real Agent invocations carry ``content`` as a list of sub-blocks
+        (``[{"type": "text", "text": "..."}]``) rather than a flat string.
+        The parser must extract and concatenate ``text``-typed sub-blocks
+        so consumers like REVIEWER_CAUGHT detection see the full reply.
+        Regression for #319."""
+        path = self._write(
+            tmp_path,
+            [
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu_agent_list",
+                                "content": [
+                                    {"type": "text", "text": "First paragraph."},
+                                    {"type": "text", "text": "Second paragraph."},
+                                ],
+                            },
+                        ],
+                    },
+                    "toolUseResult": {"agentId": "u", "totalTokens": 1},
+                },
+            ],
+        )
+        messages = parse_session(path)
+        block = messages[0].content_blocks[0]
+        assert block.type == "tool_result"
+        assert block.text == "First paragraph.\nSecond paragraph."
+
+    def test_tool_result_list_content_skips_non_text_subblocks(
+        self, tmp_path: Path,
+    ) -> None:
+        """Non-text sub-blocks (e.g. image references) are skipped; the
+        text-typed sub-blocks join with newlines."""
+        path = self._write(
+            tmp_path,
+            [
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu_mixed",
+                                "content": [
+                                    {"type": "text", "text": "Visible text."},
+                                    {"type": "image", "source": {"data": "..."}},
+                                    {"type": "text", "text": "More visible text."},
+                                ],
+                            },
+                        ],
+                    },
+                    "toolUseResult": {"agentId": "u", "totalTokens": 1},
+                },
+            ],
+        )
+        messages = parse_session(path)
+        block = messages[0].content_blocks[0]
+        assert block.text == "Visible text.\nMore visible text."
+
+    def test_tool_result_list_content_all_non_text_yields_none(
+        self, tmp_path: Path,
+    ) -> None:
+        """A list with no text-typed sub-blocks yields ``text=None`` —
+        consumers that read ``block.text or ''`` get an empty string,
+        matching the prior behaviour for unknown shapes."""
+        path = self._write(
+            tmp_path,
+            [
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu_no_text",
+                                "content": [
+                                    {"type": "image", "source": {"data": "..."}},
+                                ],
+                            },
+                        ],
+                    },
+                    "toolUseResult": {"agentId": "u", "totalTokens": 1},
+                },
+            ],
+        )
+        messages = parse_session(path)
+        assert messages[0].content_blocks[0].text is None
+
     def test_is_error_flows_from_normalize_content(self, tmp_path: Path) -> None:
         """The `is_error` field on a tool_result JSONL block propagates to ContentBlock."""
         path = self._write(
