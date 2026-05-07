@@ -1961,15 +1961,15 @@ _show_recs("WITHOUT-cohort quality recommendations", without_recs, k=3)
 | `POST_COMPLETION_BOOST` | True | {False, True} | **disabled (False)** | Completion-language patterns (`done`/`complete`/`finished`) are ubiquitous in normal dev prose, so the boost effectively meant "always lower the threshold by 1." Drill-down showed nearly every flagged file had `post_completion_edits == edit_count`. Re-enable only after `_COMPLETION_PATTERNS` is tightened to require explicit ship claims. |
 | `MIN_FINDING_KEYWORDS` | 1 | {1, 2, 3} | **keep 1** | Default unchanged from #271 to preserve existing behavior; calibration is the mechanism for raising it. |
 | `_SUBSTANTIVE_RESPONSE_MIN_CHARS` | 500 | {200, 500, 1000} | **keep 500** | Default already empirically informed by #271; sweep on thin data wouldn't shift it. |
-| `MIN_REVIEWER_CAUGHT_RATE` | 0.5 | {0.3, 0.5, 0.7} | **keep 0.5** (gate untestable) | Per-(session, agent_type). On dogfood data, all 60 architect invocations had `output_text` length 0 — the data feed is not populated. Calibration of this signal is blocked on a parser/extraction fix tracked in [#319](https://github.com/frederick-douglas-pearce/agentfluent/issues/319). |
+| `MIN_REVIEWER_CAUGHT_RATE` | 0.5 | {0.3, 0.5, 0.7} | **keep 0.5** | Per-(session, agent_type). After [#319](https://github.com/frederick-douglas-pearce/agentfluent/issues/319) (parser list-shape fix) landed on main, the data feed populates and the signal fires on real architect invocations. Sweep on dogfood data: thresholds 0.3 / 0.5 / 0.7 all surface meaningful counts; default holds. |
 
-**Two constants changed; one signal blocked on data-feed bug.** The
-calibration apparatus did its job: `_FILE_REWORK_THRESHOLD` raised
-from 4 to 8, `POST_COMPLETION_BOOST` flipped to False. Both changes
-land in this PR alongside the notebook section. REVIEWER_CAUGHT
-remains structurally defined; the threshold gates stay at their
-conservative defaults until the empty-`output_text` issue is
-diagnosed and fixed."""))
+**Two constants changed; calibration ran end-to-end.**
+`_FILE_REWORK_THRESHOLD` raised from 4 to 8, `POST_COMPLETION_BOOST`
+flipped to False. The other five thresholds hold at their pre-PR
+defaults — the conservative-defaults rule, plus single-contributor
+data isn't strong enough to motivate a change in either direction.
+REVIEWER_CAUGHT became calibration-testable after #319 landed; the
+sweep ratifies the existing defaults."""))
 
     cells.append(md(r"""## 12.7 · Manual validation (Fred sign-off required before merge)
 

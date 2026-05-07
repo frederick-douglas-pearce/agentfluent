@@ -23,11 +23,11 @@ from agentfluent.diagnostics.models import (
     DiagnosticSignal,
     SignalType,
 )
-from agentfluent.diagnostics.quality_signals import _FILE_REWORK_THRESHOLD
 from agentfluent.diagnostics.pipeline import (
     _enrich_dedup_with_mismatches,
     run_diagnostics,
 )
+from agentfluent.diagnostics.quality_signals import _FILE_REWORK_THRESHOLD
 from agentfluent.traces.models import (
     RetrySequence,
     SubagentToolCall,
