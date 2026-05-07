@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "signal_version": 1,
+  "sessions": [
+    {
+      "session_path": "REPLACE-WITH-RELATIVE-PATH-UNDER-~/.claude/projects/",
+      "labels": {
+        "user_correction": "unclear",
+        "file_rework": "unclear",
+        "reviewer_caught": "unclear"
+      },
+      "notes": "stub for initial calibration; replace with real labels before merge"
+    },
+    {
+      "session_path": "REPLACE-WITH-RELATIVE-PATH-UNDER-~/.claude/projects/",
+      "labels": {
+        "user_correction": "unclear",
+        "file_rework": "unclear",
+        "reviewer_caught": "unclear"
+      },
+      "notes": "stub for initial calibration; replace with real labels before merge"
+    },
+    {
+      "session_path": "REPLACE-WITH-RELATIVE-PATH-UNDER-~/.claude/projects/",
+      "labels": {
+        "user_correction": "unclear",
+        "file_rework": "unclear",
+        "reviewer_caught": "unclear"
+      },
+      "notes": "stub for initial calibration; replace with real labels before merge"
+    }
+  ]
+}

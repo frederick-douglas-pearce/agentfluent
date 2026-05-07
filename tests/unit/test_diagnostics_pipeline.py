@@ -27,6 +27,7 @@ from agentfluent.diagnostics.pipeline import (
     _enrich_dedup_with_mismatches,
     run_diagnostics,
 )
+from agentfluent.diagnostics.quality_signals import _FILE_REWORK_THRESHOLD
 from agentfluent.traces.models import (
     RetrySequence,
     SubagentToolCall,
@@ -747,11 +748,11 @@ class TestQualitySignalsWiring:
             name="Edit",
             input={"file_path": "/src/foo.py"},
         )
-        # Four assistant messages each with an Edit on /src/foo.py
-        # (threshold = 4) — the last one is also followed by a strong
-        # correction, so USER_CORRECTION fires too.
+        # `_FILE_REWORK_THRESHOLD` assistant messages each with an Edit
+        # on /src/foo.py — followed by a strong correction so
+        # USER_CORRECTION fires too.
         messages: list[SessionMessage] = []
-        for _ in range(4):
+        for _ in range(_FILE_REWORK_THRESHOLD):
             messages.append(
                 SessionMessage(type="assistant", content_blocks=[edit_block]),
             )
@@ -801,7 +802,7 @@ class TestQualitySignalsWiring:
         )
 
         messages: list[SessionMessage] = []
-        for _ in range(4):
+        for _ in range(_FILE_REWORK_THRESHOLD):
             messages.append(
                 SessionMessage(type="assistant", content_blocks=[edit_block]),
             )

@@ -14,6 +14,7 @@ from agentfluent.core.session import ContentBlock, SessionMessage
 from agentfluent.diagnostics.models import SignalType
 from agentfluent.diagnostics.quality_signals import (
     _EDIT_TOOL_NAMES,
+    _FILE_REWORK_THRESHOLD,
     REVIEW_AGENT_TYPES,
     extract_quality_signals,
 )
@@ -315,7 +316,8 @@ class TestFileReworkDetection:
 
     def test_fires_at_threshold(self) -> None:
         messages = [
-            _assistant_with_edits("/src/foo.py") for _ in range(4)
+            _assistant_with_edits("/src/foo.py")
+            for _ in range(_FILE_REWORK_THRESHOLD)
         ]
         signals = extract_quality_signals(messages)
         rework = [s for s in signals if s.signal_type == SignalType.FILE_REWORK]
@@ -323,13 +325,14 @@ class TestFileReworkDetection:
         sig = rework[0]
         assert sig.agent_type is None
         assert sig.detail["file_path"] == "/src/foo.py"
-        assert sig.detail["edit_count"] == 4
+        assert sig.detail["edit_count"] == _FILE_REWORK_THRESHOLD
         assert sig.detail["post_completion_edits"] == 0
         assert sig.detail["completion_scope"] == "session"
 
     def test_below_threshold_does_not_fire(self) -> None:
         messages = [
-            _assistant_with_edits("/src/foo.py") for _ in range(3)
+            _assistant_with_edits("/src/foo.py")
+            for _ in range(_FILE_REWORK_THRESHOLD - 1)
         ]
         signals = extract_quality_signals(messages)
         assert not any(
@@ -337,31 +340,33 @@ class TestFileReworkDetection:
         )
 
     def test_post_completion_edits_counted(self) -> None:
-        """Edits after completion language fire ``post_completion_edits``.
-
-        The completion-language message itself carries an edit and the
-        flag flips before the per-block loop, so its own edit counts
-        plus the two messages after it = 3.
-        """
+        """Edits after completion language are still tallied on ``detail``
+        even when ``POST_COMPLETION_BOOST`` is disabled — the field
+        itself remains useful for downstream analysis."""
+        n = _FILE_REWORK_THRESHOLD
+        # Spread n edits across pre/post-completion messages: 2 before,
+        # n-2 after a completion phrase. The signal still fires (count
+        # >= threshold) and detail.post_completion_edits reflects the
+        # count after the flag flipped.
         messages = [
             *(_assistant_with_edits("/src/foo.py") for _ in range(2)),
             _assistant_with_edits("/src/foo.py", text="all done with this"),
-            *(_assistant_with_edits("/src/foo.py") for _ in range(2)),
+            *(_assistant_with_edits("/src/foo.py") for _ in range(n - 3)),
         ]
         signals = extract_quality_signals(messages)
         rework = [s for s in signals if s.signal_type == SignalType.FILE_REWORK]
         assert len(rework) == 1
-        assert rework[0].detail["post_completion_edits"] == 3
+        # 1 (the completion-language message itself) + (n - 3) after = n - 2.
+        assert rework[0].detail["post_completion_edits"] == n - 2
 
     def test_multiple_files_independent(self) -> None:
         """Each file is evaluated against the threshold independently."""
-        messages = [
-            _assistant_with_edits("/a.py", "/b.py") for _ in range(2)
-        ] + [
-            _assistant_with_edits("/a.py", "/a.py") for _ in range(2)
-        ]
-        # /a.py: 6 edits (2 messages with 1 each + 2 messages with 2 each)
-        # /b.py: 2 edits
+        # /a.py: edited above threshold; /b.py: edited just twice.
+        a_edits = _FILE_REWORK_THRESHOLD
+        messages = (
+            [_assistant_with_edits("/a.py", "/b.py") for _ in range(2)]
+            + [_assistant_with_edits("/a.py") for _ in range(a_edits - 2)]
+        )
         signals = extract_quality_signals(messages)
         rework = {
             s.detail["file_path"]: s for s in signals
@@ -374,7 +379,7 @@ class TestFileReworkDetection:
         """``MultiEdit`` is in ``_EDIT_TOOL_NAMES`` and contributes."""
         messages = [
             _assistant_with_edits("/x.py", tool_name="MultiEdit")
-            for _ in range(4)
+            for _ in range(_FILE_REWORK_THRESHOLD)
         ]
         signals = extract_quality_signals(messages)
         rework = [s for s in signals if s.signal_type == SignalType.FILE_REWORK]
@@ -655,3 +660,185 @@ class TestReviewerCaughtDetection:
         signals = extract_quality_signals(messages, [inv])
         rev = next(s for s in signals if s.signal_type == SignalType.REVIEWER_CAUGHT)
         assert rev.detail["parent_acted"] is False
+
+
+class TestUserCorrectionEmissionGates:
+    """OR-gated session-level gates on USER_CORRECTION (#274 calibration).
+
+    Disjunctive: fires if count >= ``MIN_CORRECTIONS_PER_SESSION``
+    OR session_correction_rate >= ``MIN_CORRECTION_RATE``. PM-revised
+    from the originally proposed AND so a long session with two strong
+    corrections still surfaces.
+    """
+
+    @staticmethod
+    def _user_corrections(signals: list) -> list:
+        return [s for s in signals if s.signal_type == SignalType.USER_CORRECTION]
+
+    def test_below_both_floors_suppresses(self) -> None:
+        # 1 correction in 30 user messages: count=1 < 2, rate=0.033 < 0.10.
+        messages: list[SessionMessage] = []
+        for i in range(29):
+            messages.append(_assistant_text(f"point {i}"))
+            messages.append(_user(f"continue {i}"))
+        messages.append(_assistant_text("here is the plan"))
+        messages.append(_user("revert that change please"))
+        assert self._user_corrections(extract_quality_signals(messages)) == []
+
+    def test_count_floor_fires_with_low_rate(self) -> None:
+        # 2 corrections in 30 user messages: count=2 (gate), rate=0.067 (no gate).
+        messages: list[SessionMessage] = []
+        for i in range(28):
+            messages.append(_assistant_text(f"point {i}"))
+            messages.append(_user(f"continue {i}"))
+        for _ in range(2):
+            messages.append(_assistant_text("here is the plan"))
+            messages.append(_user("revert that change please"))
+        signals = self._user_corrections(extract_quality_signals(messages))
+        assert len(signals) == 2
+
+    def test_rate_floor_fires_with_low_count(self) -> None:
+        # 1 correction in 5 user messages: count=1 (no gate), rate=0.20 (gate).
+        messages: list[SessionMessage] = []
+        for i in range(4):
+            messages.append(_assistant_text(f"point {i}"))
+            messages.append(_user(f"continue {i}"))
+        messages.append(_assistant_text("here is the plan"))
+        messages.append(_user("revert that change please"))
+        signals = self._user_corrections(extract_quality_signals(messages))
+        assert len(signals) == 1
+
+
+class TestFileReworkPostCompletionBoost:
+    """``POST_COMPLETION_BOOST`` is disabled by default after #274
+    calibration — completion-language phrases are too common in
+    normal dev prose for the boost to be meaningful. These tests
+    pin the off-by-default behavior so a future change to the flag
+    surfaces here. The boost mechanism itself (lower threshold by
+    1, floored at 2) is exercised via patching when re-enabled."""
+
+    def test_no_boost_at_default_when_below_threshold(self) -> None:
+        # threshold-1 edits with completion language → no signal.
+        n = _FILE_REWORK_THRESHOLD - 1
+        messages = [
+            _assistant_with_edits("/src/foo.py") for _ in range(n - 1)
+        ] + [
+            _assistant_with_edits("/src/foo.py", text="all done with this"),
+        ]
+        signals = extract_quality_signals(messages)
+        assert not any(
+            s.signal_type == SignalType.FILE_REWORK for s in signals
+        )
+
+    def test_boost_helper_lowers_threshold_when_enabled(self) -> None:
+        # Patch the module-level flag to True; threshold-1 edits then fire.
+        from agentfluent.diagnostics import quality_signals as qs
+        original = qs.POST_COMPLETION_BOOST
+        qs.POST_COMPLETION_BOOST = True
+        try:
+            n = _FILE_REWORK_THRESHOLD - 1
+            messages = [
+                _assistant_with_edits("/src/foo.py")
+                for _ in range(n - 1)
+            ] + [
+                _assistant_with_edits("/src/foo.py", text="all done with this"),
+            ]
+            signals = extract_quality_signals(messages)
+            rework = [
+                s for s in signals if s.signal_type == SignalType.FILE_REWORK
+            ]
+            assert len(rework) == 1
+            assert rework[0].detail["edit_count"] == n
+        finally:
+            qs.POST_COMPLETION_BOOST = original
+
+
+class TestReviewerCaughtRateGate:
+    """Per-(session, agent_type) ``MIN_REVIEWER_CAUGHT_RATE`` gate
+    suppresses signals from review agents whose substantive-finding
+    fraction is below the threshold within the session."""
+
+    def test_low_rate_suppresses_all_signals(self) -> None:
+        # 1 substantive of 10 invocations → rate 0.1 < 0.5, suppressed.
+        substantive = _review_invocation(
+            output_text=_SUBSTANTIVE_REVIEW, tool_use_id="toolu_sub",
+        )
+        noise = [
+            _review_invocation(output_text="LGTM", tool_use_id=f"toolu_n{i}")
+            for i in range(9)
+        ]
+        invocations = [substantive, *noise]
+        messages = [
+            _user_with_tool_result(inv.tool_use_id) for inv in invocations
+        ]
+        signals = extract_quality_signals(messages, invocations)
+        assert not any(
+            s.signal_type == SignalType.REVIEWER_CAUGHT for s in signals
+        )
+
+    def test_high_rate_passes_all_substantive(self) -> None:
+        # 3 substantive of 5 invocations → rate 0.6 >= 0.5, all 3 fire.
+        invocations = [
+            _review_invocation(
+                output_text=_SUBSTANTIVE_REVIEW,
+                tool_use_id=f"toolu_sub{i}",
+            )
+            for i in range(3)
+        ] + [
+            _review_invocation(output_text="LGTM", tool_use_id=f"toolu_n{i}")
+            for i in range(2)
+        ]
+        messages = [
+            _user_with_tool_result(inv.tool_use_id) for inv in invocations
+        ]
+        signals = extract_quality_signals(messages, invocations)
+        rev = [s for s in signals if s.signal_type == SignalType.REVIEWER_CAUGHT]
+        assert len(rev) == 3
+
+    def test_rate_gate_applies_per_agent_type(self) -> None:
+        # architect: 1 substantive of 1 invocation → rate 1.0, fires.
+        # tester: 0 substantive of 2 invocations → no candidates, no signals.
+        invocations = [
+            _review_invocation(
+                agent_type="architect",
+                output_text=_SUBSTANTIVE_REVIEW,
+                tool_use_id="toolu_arch",
+            ),
+            _review_invocation(
+                agent_type="tester",
+                output_text="LGTM",
+                tool_use_id="toolu_test1",
+            ),
+            _review_invocation(
+                agent_type="tester",
+                output_text="LGTM",
+                tool_use_id="toolu_test2",
+            ),
+        ]
+        messages = [
+            _user_with_tool_result(inv.tool_use_id) for inv in invocations
+        ]
+        signals = extract_quality_signals(messages, invocations)
+        rev = [s for s in signals if s.signal_type == SignalType.REVIEWER_CAUGHT]
+        assert len(rev) == 1
+        assert rev[0].agent_type == "architect"
+
+
+class TestMinFindingKeywords:
+    """``MIN_FINDING_KEYWORDS`` defaults to 1 — preserves existing
+    behavior. Exposed as a module constant so #274 calibration can
+    sweep ``{1, 2, 3}``."""
+
+    def test_default_one_keyword_passes(self) -> None:
+        text = (
+            "I reviewed the file. " * 30
+            + " There is one issue with the implementation."
+        )
+        inv = _review_invocation(output_text=text)
+        signals = extract_quality_signals(
+            messages=[_user_with_tool_result(inv.tool_use_id)],
+            agent_invocations=[inv],
+        )
+        rev = [s for s in signals if s.signal_type == SignalType.REVIEWER_CAUGHT]
+        assert len(rev) == 1
+        assert rev[0].detail["finding_keywords"] == ["issue"]

@@ -36,5 +36,8 @@ coverage/
 .pytest_cache/
 htmlcov/
 
+# Jupyter editor state
+.ipynb_checkpoints/
+
 # Playwright MCP screenshots
 .playwright-mcp/

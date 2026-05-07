@@ -45,6 +45,7 @@ calibration notebook can sweep them without function-body edits.
 from __future__ import annotations
 
 import re
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -136,6 +137,15 @@ _SOFT_PATTERN_CATEGORIES: tuple[
 
 _SNIPPET_MAX_CHARS = 140
 
+# Session-level gates on USER_CORRECTION emission. Disjunctive (OR):
+# either the absolute count crosses ``MIN_CORRECTIONS_PER_SESSION`` or
+# the rate crosses ``MIN_CORRECTION_RATE``. PM review on #274 chose OR
+# over AND so a long session with two strong corrections still surfaces
+# (the ANDed form would have suppressed it at low rates), while still
+# blocking the single-correction noise floor. Calibration may tune.
+MIN_CORRECTIONS_PER_SESSION = 2
+MIN_CORRECTION_RATE = 0.10
+
 
 # Edit-tool subset of WRITE_TOOLS used for FILE_REWORK detection. Strict
 # subset by design: ``Bash`` is excluded because its ``input`` carries
@@ -148,8 +158,22 @@ _SNIPPET_MAX_CHARS = 140
 _EDIT_TOOL_NAMES: frozenset[str] = frozenset({"Edit", "Write", "MultiEdit"})
 
 # A file edited at or above this threshold within a single session
-# fires ``FILE_REWORK``. Module-level constant for #274 calibration.
-_FILE_REWORK_THRESHOLD = 4
+# fires ``FILE_REWORK``. Calibrated in #274 against agentfluent dogfood
+# data: post-#319 firing distribution was p25=8, median=10, p75=13,
+# p90=18, p95=21. Threshold landed at the p90 of the firing
+# distribution to surface only the genuinely heavy-rework tail; lower
+# values (≤8) caught normal iterative dev like active test files,
+# README polish, and the calibration notebook itself.
+_FILE_REWORK_THRESHOLD = 12
+
+# When ``True``, lower the FILE_REWORK threshold by 1 for files that
+# received any post-completion edits. Disabled in #274 calibration:
+# completion-language patterns (``done``/``complete``/``finished``)
+# are ubiquitous in normal dev prose, so the boost effectively meant
+# "always lower the threshold by 1" — defeating the very signal it
+# was supposed to encode. Re-enable only after ``_COMPLETION_PATTERNS``
+# is tightened to require explicit ship claims.
+POST_COMPLETION_BOOST = False
 
 # "Completion language" patterns. When any assistant message in the
 # session matches one of these, subsequent edits to any file are
@@ -183,9 +207,24 @@ _FINDING_KEYWORDS_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Minimum count of finding-keyword hits required for a review's
+# response to count as substantive. The current behavior is "any
+# keyword fires"; exposing this as a constant lets #274 calibration
+# sweep ``{1, 2, 3}``. Default stays at 1 to preserve existing
+# behavior — calibration is the mechanism for raising it.
+MIN_FINDING_KEYWORDS = 1
+
 # Minimum response length (chars) for a review subagent's output to
 # count as substantive. Short responses are ``LGTM``-style passes.
 _SUBSTANTIVE_RESPONSE_MIN_CHARS = 500
+
+# Per-(session, agent_type) rate gate on REVIEWER_CAUGHT emission. If
+# a review agent produced substantive findings on fewer than this
+# fraction of its invocations within a session, all REVIEWER_CAUGHT
+# signals from that agent_type in that session are suppressed —
+# treats noisy reviewers as not-yet-earning-their-keep. Per-session
+# scope avoids cross-session persistence (analyze-time architecture).
+MIN_REVIEWER_CAUGHT_RATE = 0.5
 
 # Source-file extensions a review subagent is plausibly referencing.
 # The list is conservative — including version strings (``v1.0``) and
@@ -299,6 +338,11 @@ def _emit_user_correction_signals(
     if not detections or total_user_messages == 0:
         return []
     session_correction_rate = len(detections) / total_user_messages
+    if (
+        len(detections) < MIN_CORRECTIONS_PER_SESSION
+        and session_correction_rate < MIN_CORRECTION_RATE
+    ):
+        return []
     return [
         DiagnosticSignal(
             signal_type=SignalType.USER_CORRECTION,
@@ -393,13 +437,19 @@ def _extract_reviewer_caught_signals(
             if block.type == "tool_result" and block.tool_use_id:
                 tool_result_idx[block.tool_use_id] = idx
 
-    signals: list[DiagnosticSignal] = []
+    # First pass: build candidate signals per agent_type and count
+    # total invocations per agent_type. The rate gate at the end emits
+    # only those agent_types whose substantive-finding fraction meets
+    # ``MIN_REVIEWER_CAUGHT_RATE``.
+    candidates_by_agent: defaultdict[str, list[DiagnosticSignal]] = defaultdict(list)
+    invocations_by_agent: Counter[str] = Counter()
     for inv in review_invocations:
+        invocations_by_agent[inv.agent_type] += 1
         text = inv.output_text
         if not text or len(text) < _SUBSTANTIVE_RESPONSE_MIN_CHARS:
             continue
         keyword_hits = sorted({m.lower() for m in _FINDING_KEYWORDS_PATTERN.findall(text)})
-        if not keyword_hits:
+        if len(keyword_hits) < MIN_FINDING_KEYWORDS:
             continue
 
         files_mentioned = _extract_files_mentioned(text)
@@ -409,7 +459,7 @@ def _extract_reviewer_caught_signals(
             edited = _files_edited_after(messages, result_idx)
             files_acted_on = files_mentioned & edited
 
-        signals.append(
+        candidates_by_agent[inv.agent_type].append(
             DiagnosticSignal(
                 signal_type=SignalType.REVIEWER_CAUGHT,
                 severity=Severity.INFO,
@@ -428,7 +478,23 @@ def _extract_reviewer_caught_signals(
                 },
             ),
         )
+
+    signals: list[DiagnosticSignal] = []
+    for agent_type, candidates in candidates_by_agent.items():
+        rate = len(candidates) / invocations_by_agent[agent_type]
+        if rate >= MIN_REVIEWER_CAUGHT_RATE:
+            signals.extend(candidates)
     return signals
+
+
+def _file_rework_threshold_for(stats: _FileEditStats) -> int:
+    """Effective FILE_REWORK threshold for one file, applying the
+    POST_COMPLETION_BOOST (1-step lower with floor of 2) when the file
+    received any post-completion edits.
+    """
+    if POST_COMPLETION_BOOST and stats.post_completion > 0:
+        return max(2, _FILE_REWORK_THRESHOLD - 1)
+    return _FILE_REWORK_THRESHOLD
 
 
 def _emit_file_rework_signals(
@@ -452,7 +518,7 @@ def _emit_file_rework_signals(
             },
         )
         for file_path, stats in edit_stats.items()
-        if stats.count >= _FILE_REWORK_THRESHOLD
+        if stats.count >= _file_rework_threshold_for(stats)
     ]
 
 
