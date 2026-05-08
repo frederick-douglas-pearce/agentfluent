@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from rich.console import Console
+from functools import partial
 
 from agentfluent.cli.formatters.table import (
     _format_deep_diagnostics,
@@ -16,6 +16,17 @@ from agentfluent.diagnostics.models import (
     SignalType,
 )
 from tests._builders import delegation_suggestion as _suggestion
+from tests.unit.cli.conftest import render_section
+
+_render = partial(render_section, _format_deep_diagnostics)
+
+
+def _render_suggestions(diag: DiagnosticsResult, *, verbose: bool) -> str:
+    """Suggestions table needs the wider 140-char terminal for layout —
+    ``render_section`` is the same shape with an explicit ``width``."""
+    return render_section(
+        _format_delegation_suggestions, diag, verbose=verbose, width=140,
+    )
 
 
 def _trace_signal(
@@ -45,12 +56,6 @@ def _trace_signal(
 
 def _result(signals: list[DiagnosticSignal]) -> DiagnosticsResult:
     return DiagnosticsResult(signals=signals, recommendations=[])
-
-
-def _render(diag: DiagnosticsResult, *, verbose: bool) -> str:
-    console = Console(record=True, width=120)
-    _format_deep_diagnostics(console, diag, verbose=verbose)
-    return console.export_text()
 
 
 class TestDeepDiagnosticsSection:
@@ -174,12 +179,6 @@ def _result_with_suggestions(
     suggestions: list[DelegationSuggestion],
 ) -> DiagnosticsResult:
     return DiagnosticsResult(delegation_suggestions=suggestions)
-
-
-def _render_suggestions(diag: DiagnosticsResult, *, verbose: bool) -> str:
-    console = Console(record=True, width=140)
-    _format_delegation_suggestions(console, diag, verbose=verbose)
-    return console.export_text()
 
 
 class TestDelegationSuggestionsSection:

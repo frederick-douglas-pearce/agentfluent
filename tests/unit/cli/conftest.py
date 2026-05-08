@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 import typer
+from rich.console import Console
 from typer.testing import CliRunner
 
 from agentfluent.cli.main import app
@@ -16,6 +19,27 @@ from tests._builders import (
     user_with_tool_result,
     write_project_layout,
 )
+
+
+def render_section(
+    formatter: Callable[..., Any],
+    diag: Any,
+    *,
+    verbose: bool = False,
+    width: int = 120,
+) -> str:
+    """Run a CLI formatter against a recording ``Console`` and return text.
+
+    Shared by the formatter test files (``test_offload_candidates_formatting``,
+    ``test_deep_diagnostics_formatting``) so the boilerplate
+    ``Console(record=True, width=120, force_terminal=False)`` →
+    formatter call → ``export_text()`` lives in one place. ``force_terminal``
+    is fixed to ``False`` so the renderer doesn't pick up pytest's TTY
+    state (#265).
+    """
+    console = Console(record=True, width=width, force_terminal=False)
+    formatter(console, diag, verbose=verbose)
+    return console.export_text()
 
 
 @pytest.fixture()

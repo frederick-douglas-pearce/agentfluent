@@ -8,40 +8,20 @@ suggestions).
 
 from __future__ import annotations
 
-from rich.console import Console
+from functools import partial
 
 from agentfluent.cli.formatters.table import (
     OFFLOAD_COST_MORE_NOTE,
     _format_offload_candidates,
 )
 from agentfluent.diagnostics.models import (
-    DelegationSuggestion,
     DiagnosticsResult,
     OffloadCandidate,
 )
+from tests._builders import delegation_suggestion
+from tests.unit.cli.conftest import render_section
 
-
-def _draft(
-    *,
-    name: str = "pytest-runner",
-    tools: list[str] | None = None,
-    confidence: str = "medium",
-) -> DelegationSuggestion:
-    return DelegationSuggestion(
-        name=name,
-        description=f"Handles delegations related to: {name}.",
-        model="claude-sonnet-4-6",
-        tools=tools if tools is not None else ["Bash", "Read"],
-        tools_observed=tools if tools is not None else ["Bash", "Read"],
-        prompt_template=(
-            "You handle the recurring workflow described above. "
-            "Return concise, structured output."
-        ),
-        confidence=confidence,  # type: ignore[arg-type]
-        cluster_size=6,
-        cohesion_score=0.55,
-        top_terms=["pytest", "tests", "run"],
-    )
+_render = partial(render_section, _format_offload_candidates)
 
 
 def _candidate(
@@ -79,17 +59,16 @@ def _candidate(
         alternative_model=alternative_model,
         cost_note=cost_note,
         target_kind="subagent",
-        subagent_draft=_draft(name=name, tools=resolved_tools, confidence=confidence),
+        subagent_draft=delegation_suggestion(
+            name=name,
+            tools=resolved_tools,
+            tools_observed=resolved_tools,
+            confidence=confidence,
+        ),
         skill_draft=None,
         dedup_note=dedup_note,
         matched_agent=matched_agent,
     )
-
-
-def _render(diag: DiagnosticsResult, *, verbose: bool = False) -> str:
-    console = Console(record=True, width=120, force_terminal=False)
-    _format_offload_candidates(console, diag, verbose=verbose)
-    return console.export_text()
 
 
 class TestOffloadCandidatesSection:
