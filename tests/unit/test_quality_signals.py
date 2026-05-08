@@ -279,6 +279,181 @@ class TestUserCorrectionDetection:
         assert len(snippet) <= 141  # 140 + ellipsis
 
 
+class TestUserCorrectionSystemWrapperStripping:
+    """System-injected wrappers (#321) are stripped before pattern
+    matching. Trigger words inside ``<task-notification>``,
+    ``<system-reminder>``, or the session-resumption preamble must not
+    fire USER_CORRECTION — the dogfood corpus had ~85% FP rate before
+    these were filtered."""
+
+    def test_task_notification_wrapper_does_not_fire(self) -> None:
+        """A user message that is purely a ``<task-notification>``
+        wrapper containing trigger words must not fire — even with the
+        write-tool primary gate open. Two such messages would be
+        suppressed, so the OR-gate (count >= 2) cannot lift them."""
+        wrapped = (
+            "<task-notification><task-id>abc</task-id>"
+            "<status>stop the world, revert everything</status>"
+            "</task-notification>"
+        )
+        messages = [
+            _assistant_with_write_tool(),
+            _user(wrapped),
+            _assistant_with_write_tool(),
+            _user(wrapped),
+        ]
+        assert extract_quality_signals(messages) == []
+
+    def test_system_reminder_wrapper_does_not_fire(self) -> None:
+        """``<system-reminder>`` blocks are stripped — the multi-line
+        wrapper from real Claude Code sessions must not surface even
+        when it contains a trigger word like 'wait'."""
+        wrapped = (
+            "<system-reminder>\n"
+            "Please wait for the user to confirm before proceeding.\n"
+            "</system-reminder>"
+        )
+        messages = [
+            _assistant_with_write_tool(),
+            _user(wrapped),
+            _assistant_with_write_tool(),
+            _user(wrapped),
+        ]
+        assert extract_quality_signals(messages) == []
+
+    def test_session_resumption_preamble_does_not_fire(self) -> None:
+        """Claude Code's session-resumption preamble can contain
+        trigger words ("revert", "stop", "instead") in the recap. The
+        preamble is stripped from its known opening sentence up to the
+        next blank line."""
+        preamble = (
+            "This session is being continued from a previous conversation "
+            "that ran out of context. The user asked me to revert the "
+            "earlier change and stop using the deprecated API instead.\n\n"
+            "actual user prose continues here."
+        )
+        messages = [
+            _assistant_with_write_tool(),
+            _user(preamble),
+            _assistant_with_write_tool(),
+            _user(preamble),
+        ]
+        # "actual user prose continues here." has no trigger word, so no fire.
+        assert extract_quality_signals(messages) == []
+
+    def test_real_user_text_after_stripped_wrapper_still_fires(self) -> None:
+        """When a user message contains both a system wrapper AND
+        genuine correction prose, only the wrapper is stripped — the
+        real correction still fires."""
+        mixed = (
+            "<task-notification><status>ok</status></task-notification>"
+            "no, that's wrong"
+        )
+        messages = [
+            _assistant_with_write_tool(),
+            _user(mixed),
+        ]
+        signals = extract_quality_signals(messages)
+        assert len(signals) == 1
+        assert signals[0].detail["matched_category"] == "strong"
+
+    def test_pure_wrapper_message_not_counted_in_denominator(self) -> None:
+        """A message whose stripped text is empty must not inflate
+        ``total_user_messages`` — wrapper-only messages aren't user
+        prose and shouldn't dilute the correction-rate denominator."""
+        messages: list[SessionMessage] = [
+            _assistant_with_write_tool(),
+            _user("<system-reminder>noop</system-reminder>"),
+            _assistant_with_write_tool(),
+            _user("no, that's wrong"),
+        ]
+        # Without stripping, total_user_messages would be 2 with 1
+        # correction (rate=0.5, count=1). With stripping, only the real
+        # correction message counts: total=1, rate=1.0, count=1.
+        signals = extract_quality_signals(messages)
+        assert len(signals) == 1
+        assert signals[0].detail["total_user_messages"] == 1
+        assert signals[0].detail["session_correction_rate"] == 1.0
+
+
+class TestUserCorrectionTightenedPatterns:
+    """Tightened soft patterns (#321): interruption requires imperative
+    anchoring, ``instead`` requires an imperative continuation."""
+
+    def test_wait_inside_question_does_not_fire(self) -> None:
+        """``\\bwait\\b`` previously matched mid-sentence trigger words
+        even after a write-tool message. Imperative-anchored form
+        suppresses 'can you wait until I finish?'-style prose."""
+        messages = [
+            _assistant_with_write_tool(),
+            _user("can you wait until I finish reviewing the diff?"),
+        ]
+        assert extract_quality_signals(messages) == []
+
+    def test_wait_at_sentence_start_still_fires(self) -> None:
+        """Imperative ``wait`` at start-of-message still fires under
+        the new pattern."""
+        messages = [
+            _assistant_with_write_tool(),
+            _user("wait, let me re-check the spec first"),
+        ]
+        signals = extract_quality_signals(messages)
+        assert len(signals) == 1
+        assert signals[0].detail["matched_category"] == "interruption"
+
+    def test_stop_after_sentence_boundary_fires(self) -> None:
+        """Sentence-internal trigger words still fire after a
+        ``.``/``!``/``?`` boundary — preserves the imperative form."""
+        messages = [
+            _assistant_with_write_tool(),
+            _user("Let me think. Stop the edit, I want to review first."),
+        ]
+        signals = extract_quality_signals(messages)
+        assert len(signals) == 1
+        assert signals[0].detail["matched_category"] == "interruption"
+
+    def test_please_stop_fires(self) -> None:
+        """Polite-prefix ``please stop`` is still imperative."""
+        messages = [
+            _assistant_with_write_tool(),
+            _user("please stop editing that file"),
+        ]
+        signals = extract_quality_signals(messages)
+        assert len(signals) == 1
+
+    def test_instead_at_sentence_end_does_not_fire(self) -> None:
+        """``instead`` with no imperative continuation is suggestion or
+        comparison prose — it must not fire (#321 case #5 trade-off)."""
+        messages = [
+            _assistant_with_write_tool(),
+            _user(
+                "I think it would be better to get the list of acceptable "
+                "labels from a database query instead.",
+            ),
+        ]
+        assert extract_quality_signals(messages) == []
+
+    def test_instead_of_fires(self) -> None:
+        """``instead of <X>`` is the canonical imperative redirection."""
+        messages = [
+            _assistant_with_write_tool(),
+            _user("instead of using a list, let's use a dict here"),
+        ]
+        signals = extract_quality_signals(messages)
+        assert len(signals) == 1
+        assert signals[0].detail["matched_category"] == "redirection"
+
+    def test_instead_comma_please_fires(self) -> None:
+        """``instead, please`` is a polite imperative redirection."""
+        messages = [
+            _assistant_with_write_tool(),
+            _user("instead, please consider option B before proceeding"),
+        ]
+        signals = extract_quality_signals(messages)
+        assert len(signals) == 1
+        assert signals[0].detail["matched_category"] == "redirection"
+
+
 class TestExtractQualitySignalsSignature:
     """Signature contract is locked per architect blocker on #269.
 
