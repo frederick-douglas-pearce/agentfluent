@@ -452,6 +452,145 @@ MCP config. Add to ~/.claude.json or .mcp.json.
 
 **Related:** [`mcp_unused_server`](#mcp_unused_server), [`target_mcp`](#target_mcp)
 
+### `user_correction`
+
+**Short:** The user interrupted or redirected the parent thread mid-flight ("no, do X
+instead", "wait, that's wrong", "revert").
+
+**Detail:** Quality-axis signal (v0.6). High correction frequency in sessions
+without review subagents is evidence the parent would have benefited
+from independent review before committing to the wrong path.
+Detection uses a 3-tier heuristic to suppress false positives:
+
+1. **Strong-correction override** -- high-confidence phrases
+   (`that's wrong`, `revert`, `undo`, `that's not what I`) fire
+   regardless of preceding-message classification. These are
+   corrections of reasoning, not answers to a question.
+2. **Primary gate** -- soft-correction patterns (negation,
+   interruption, redirection, undo) only fire when the preceding
+   assistant message contains a write-style `tool_use`. The user
+   is correcting an *action*, not answering a question.
+3. **Question suppression** -- when the preceding assistant
+   message ends with `?` AND has no write tools, soft patterns
+   are suppressed (a "no" answer to "should I X?" is not a
+   correction).
+
+Claude Code's system-injected wrappers (`<task-notification>`,
+`<system-reminder>`, session-resumption preamble, `Base directory
+for this skill:` skill metadata) are stripped before pattern
+matching to avoid trigger words inside non-prose content firing
+the signal. Calibrated against the dogfood corpus (#321, #330):
+post-fix false-positive rate is 0/2 detections.
+
+The signal `detail` carries the matched category (`strong` /
+`negation` / `interruption` / `redirection` / `undo`), the
+preceding-action classification (`write_tool` / `question` /
+`text_only`), the matched pattern, and a 140-char snippet.
+
+**Example:**
+
+```
+User correction in parent thread: no, that's wrong -- we agreed
+not to delete anything in this pass.
+```
+
+**Severity:** warning
+
+**Threshold:** >= 2 corrections in the session OR correction rate >= 10% of user
+messages (OR-gated)
+
+
+**Recommendation target:** `subagent`
+
+**Related:** [`file_rework`](#file_rework), [`reviewer_caught`](#reviewer_caught), [`primary_axis`](#primary_axis)
+
+### `file_rework`
+
+**Short:** Same file edited at or above the calibrated threshold within a single
+session -- a missing-pre-implementation-review signal.
+
+**Detail:** Quality-axis signal (v0.6). Heavy rework on one file in a single
+session usually indicates a feature shipped without a design pass
+that would have caught the structural issue earlier. Edit
+detection counts `Edit` / `Write` / `MultiEdit` calls against
+`file_path`; `Bash` and `NotebookEdit` are excluded by design (no
+clean `file_path` extraction).
+
+The signal `detail` carries `edit_count`, `post_completion_edits`
+(edits that landed after a completion-language phrase like
+"done" appeared in the session), `edit_tools` (which tools
+fired), and `completion_scope` (currently always `"session"` --
+per-file completion tracking is a future refinement).
+
+**Example:**
+
+```
+File 'src/agentfluent/diagnostics/quality_signals.py' edited 14
+times in this session.
+```
+
+**Severity:** warning
+
+**Threshold:** `_FILE_REWORK_THRESHOLD` (currently 12) within a single session,
+calibrated to the p90 of the firing distribution
+
+
+**Recommendation target:** `subagent`
+
+**Related:** [`user_correction`](#user_correction), [`reviewer_caught`](#reviewer_caught), [`primary_axis`](#primary_axis)
+
+### `reviewer_caught`
+
+**Short:** A review-style subagent (architect, security-review, tester,
+code-reviewer) ran AND produced a substantive finding.
+
+**Detail:** Quality-axis signal (v0.6). Per-agent attribution -- the signal
+carries the named review agent in `agent_type` so aggregation
+can group findings under each reviewer rather than lumping them
+globally. A review's response is "substantive" when the output
+is at least `_SUBSTANTIVE_RESPONSE_MIN_CHARS` (500) long AND
+mentions at least one finding-keyword (`blocker`, `issue`,
+`concern`, `must`, `should`, `warning`, `risk`, `vulnerability`,
+`fix`, `change needed`).
+
+The signal `detail` includes `finding_keywords` (the matched
+keywords, sorted), `parent_acted` (boolean), `response_length`
+(chars), `files_mentioned` (paths the review prose pointed at,
+extracted via a strict regex that excludes version strings and
+domain names), and `files_acted_on` (the subset of mentioned
+files the parent edited within the next
+`_PARENT_ACTED_WINDOW=15` assistant messages).
+
+`parent_acted` semantics (#322): review prose carries relative
+or bare paths (`src/foo.py` / `quality_signals.py`); `Edit` tool
+calls carry absolute paths (`/home/u/repo/src/foo.py`). The
+attribution uses suffix-match -- a mentioned token `m` matches
+an edited path `e` when `e == m` or `e.endswith("/" + m)` -- to
+bridge the relative-vs-absolute mismatch. Pre-fix this
+attribution was 0/51 on dogfood; post-fix 16/53 (30.2%).
+
+A per-(session, agent_type) rate gate
+(`MIN_REVIEWER_CAUGHT_RATE = 0.5`) suppresses noisy reviewers --
+review agents whose substantive-finding fraction within a
+session falls below the gate don't surface their findings as
+signals.
+
+**Example:**
+
+```
+`architect` review surfaced 3 finding-keyword(s).
+```
+
+**Severity:** info
+
+**Threshold:** Response >= 500 chars AND >= 1 finding keyword AND
+per-(session, agent_type) substantive rate >= MIN_REVIEWER_CAUGHT_RATE
+
+
+**Recommendation target:** `subagent`
+
+**Related:** [`user_correction`](#user_correction), [`file_rework`](#file_rework), [`primary_axis`](#primary_axis)
+
 
 ---
 
@@ -846,6 +985,108 @@ normalize as `origin="parent"` so saved baselines remain diffable.
   {"model": "claude-opus-4-7", "origin": "subagent", "cost":  1.50},
   {"model": "claude-opus-4-6", "origin": "subagent", "cost":  8.93}
 ]
+```
+
+### `axis_scores`
+
+**Short:** Per-recommendation `{cost, speed, quality}` map of how strongly each
+diagnostics axis contributed to the row's `priority_score`. Annotation,
+not gating logic.
+
+**Detail:** Added in v0.6 (D017 + D021). Every recommendation accumulates a
+score per axis based on which `SignalType`s drove it -- the
+mapping is pinned in `aggregation.SIGNAL_AXIS_MAP` and is
+single-axis per D022 (no cross-cutting). The map is exposed on
+`aggregated_recommendations[].axis_scores` so CI rules and
+downstream consumers can target a specific dimension (e.g. fail
+only on new `quality`-primary findings, or chart cost-axis trend
+across runs).
+
+`primary_axis` is derived from this map by picking the largest
+bucket; ties are broken by the `Axis(StrEnum)` declaration order
+(per D027).
+
+**Example:**
+
+```
+{"cost": 0.0, "speed": 0.0, "quality": 14.0}
+```
+
+**Related:** [`primary_axis`](#primary_axis), [`priority_score`](#priority_score), [`user_correction`](#user_correction), [`file_rework`](#file_rework), [`reviewer_caught`](#reviewer_caught)
+
+### `primary_axis`
+
+**Short:** The dominant diagnostics axis for a recommendation -- `"cost"`,
+`"speed"`, or `"quality"`. Drives the `[axis]` label that surfaces in
+CLI output and `agentfluent diff`.
+
+**Detail:** Added in v0.6 (D022). Derived from `axis_scores` by picking the
+largest bucket. Tiebreaker is the `Axis(StrEnum)` declaration
+order: cost > speed > quality (D027), so a recommendation with
+purely-zero `axis_scores` lands as `cost` rather than producing
+ambiguous output.
+
+`agentfluent diff` reads pre-v0.6 envelopes that lack this field
+cleanly -- the absence is normalized to `"cost"`, preserving the
+existing comparison semantics for legacy baselines.
+
+**Example:**
+
+```
+[quality] 7 user corrections in 3 sessions -- consider an architect
+agent for design review before implementation.
+```
+
+**Related:** [`axis_scores`](#axis_scores), [`priority_score`](#priority_score)
+
+### `quality_evidence_factor`
+
+**Short:** Multiplier on the `priority_score` term that boosts recommendations
+grounded in quality-axis signal evidence.
+
+**Detail:** Added in v0.6 (D021). Mirrors the existing `trace_boost` mechanic
+on the cost/speed side: a recommendation gets `quality_evidence_factor *
+W_QUALITY` added to its `priority_score` when its `SignalType`s
+map to the `quality` axis. The factor is a unitless ratio in
+`[0, 1]` reflecting how much of the recommendation's underlying
+signal load is quality-axis evidence; `W_QUALITY` is the
+calibrated weight constant.
+
+The annotations approach (single additive term, axis scores
+computed post-hoc) was deliberately chosen over decomposing the
+formula into per-axis sub-formulas -- it preserves
+`priority_score` as a single comparable scalar across runs so
+`agentfluent diff` keeps working without a v3 envelope bump.
+
+**Related:** [`axis_scores`](#axis_scores), [`primary_axis`](#primary_axis), [`priority_score`](#priority_score)
+
+### `window`
+
+**Short:** Top-level block on `analyze --json` output describing the date-range
+filter applied to the run.
+
+**Detail:** Added in v0.6 (#298). Populated when `--since` / `--until` is
+supplied to `agentfluent analyze`; absent when neither is set.
+The `since` / `until` values are the *resolved absolute UTC
+bounds* the filter actually applied (relative inputs like
+`--since 7d` are resolved to a concrete timestamp before being
+written to the envelope), so a saved baseline records the
+absolute window even when generated with relative-form input.
+
+Counts let downstream consumers see filter cardinality without
+re-walking session metadata. `session_count_before_filter` is
+the project's total session count; `session_count_after_filter`
+is what fell inside `[since, until)` and was actually analyzed.
+
+**Example:**
+
+```
+{
+  "since": "2026-05-01T00:00:00+00:00",
+  "until": null,
+  "session_count_before_filter": 42,
+  "session_count_after_filter": 12
+}
 ```
 
 
