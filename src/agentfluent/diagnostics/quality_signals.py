@@ -106,14 +106,41 @@ _NEGATION_PATTERNS = _ci(
     r"\bno\s+don'?t\b",
     r"\bthat'?s\s+not\s+what\s+I\b",
 )
-_INTERRUPTION_PATTERNS = _ci(r"\bstop\b", r"\bwait\b", r"\bhold\s+on\b")
+# Imperative-anchored: trigger word must start the message or follow a
+# sentence boundary. Bare ``\bstop\b`` / ``\bwait\b`` matched questions
+# like "can you wait until I finish?" — see #321 dogfood findings.
+_INTERRUPTION_PATTERNS = _ci(
+    r"(?:^|[.!?]\s+)(?:please\s+)?stop\b",
+    r"(?:^|[.!?]\s+)(?:please\s+)?wait\b",
+    r"(?:^|[.!?]\s+)(?:please\s+)?hold\s+on\b",
+)
+# ``instead`` requires an imperative continuation (``of``, ``please``,
+# ``let's``, ``do``, ``use``, ``try``). Bare ``\binstead,?\s`` fired on
+# suggestion/comparison prose (#321: "...from a database query instead").
+# Sentence-final "instead" is intentionally dropped — calibration
+# philosophy is precision-over-recall.
 _REDIRECTION_PATTERNS = _ci(
     r"\bactually,?\s",
-    r"\binstead,?\s",
+    r"\binstead\b,?\s+(?:of\b|please\b|let'?s\b|do\b|use\b|try\b)",
     r"\bI\s+meant\b",
     r"\bwhat\s+I\s+wanted\s+was\b",
 )
 _UNDO_PATTERNS = _ci(r"\bgo\s+back\s+to\b", r"\brestore\b")
+
+# Claude Code injects wrappers into user messages (``<task-notification>``,
+# ``<system-reminder>``, session-resumption preamble) that can contain
+# correction-trigger words. The dogfood corpus showed ~85% FP rate on
+# USER_CORRECTION before stripping (#321). Wrappers span multiple lines,
+# so the tag-based alternatives use ``[\s\S]*?`` (DOTALL) to cross
+# newlines. The session-resumption preamble is stripped from its known
+# opening sentence up to the next blank line or end of text.
+_SYSTEM_WRAPPER_RE = re.compile(
+    r"<task-notification>[\s\S]*?</task-notification>"
+    r"|<system-reminder>[\s\S]*?</system-reminder>"
+    r"|This\s+session\s+is\s+being\s+continued\s+from\s+a\s+previous\s+"
+    r"conversation[\s\S]*?(?=\n\n|\Z)",
+    re.IGNORECASE,
+)
 
 # Strong-correction overlay: a strict subset of high-confidence phrases
 # that fire regardless of the preceding-message gate. ``revert`` and
@@ -291,6 +318,17 @@ def _classify_assistant(message: SessionMessage) -> tuple[bool, bool]:
         not had_write_tool and message.text.rstrip().endswith("?")
     )
     return had_write_tool, is_question_only
+
+
+def _strip_system_wrappers(text: str) -> str:
+    """Remove Claude Code system-injected wrappers from user-message text.
+
+    Scoped to USER_CORRECTION extraction — file-rework detection doesn't
+    read user text, so this can't bleed into the assistant-side path.
+    Applied before pattern matching so trigger words inside wrappers
+    don't generate false-positive signals.
+    """
+    return _SYSTEM_WRAPPER_RE.sub("", text)
 
 
 def _match_correction(
@@ -597,6 +635,13 @@ def extract_quality_signals(
             continue
         text = msg.text
         if not text:
+            continue
+        # Strip Claude Code wrappers before pattern matching. Messages
+        # whose content is purely a system wrapper become empty here
+        # and are skipped — they're not user prose, so they shouldn't
+        # inflate the ``total_user_messages`` denominator either.
+        text = _strip_system_wrappers(text)
+        if not text.strip():
             continue
         total_user_messages += 1
 
