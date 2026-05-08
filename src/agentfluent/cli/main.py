@@ -32,6 +32,10 @@ Common workflows:
   agentfluent analyze --project <slug> --diagnostics
       Full analytics with behavior diagnostics.
 
+  agentfluent analyze --project <slug> --since 2d --json > current.json
+      Scope analysis to the last 2 days (e.g. for diff comparison
+      against an earlier baseline).
+
   agentfluent config-check
       Score agent definitions against best practices.
 
