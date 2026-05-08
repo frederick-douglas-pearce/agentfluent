@@ -520,3 +520,20 @@ primary_axis = max(AXIS_TIEBREAKER, key=lambda a: axis_scores[a])
 **Reference:** Issue #272 architect review (issuecomment-4385199185); PM decision (issuecomment-4385286798). Implements the tiebreaker contract referenced in D022 (single-axis classification).
 
 ---
+
+## D028: FEAT_FIX_PROXIMITY deferred from v0.6 to v0.7
+
+**Date:** 2026-05-08
+**Context:** Issue #275 (Tier-2 stretch story under epic #268) proposes a `FEAT_FIX_PROXIMITY` signal using local `git log` to detect feat-then-fix commit pairs and correlate back to review subagent usage. All six Tier-1 must-have stories (#269-#274) shipped and merged, plus two calibration bugfixes (#321, #322). v0.6 is in endgame -- #287 (docs catch-up) is the last issue before tagging the release.
+
+**Decision:** Defer #275 to v0.7. Do not assign a milestone or change priority.
+
+**Rationale:**
+- The epic's stated under-recommendation gap is closed by the shipped Tier-1 signals (REVIEWER_CAUGHT, USER_CORRECTION, FILE_REWORK). FEAT_FIX_PROXIMITY would add confirming evidence but is not needed for the goal.
+- The signal introduces a new data source (git subprocess), a new CLI flag (`--git`), and heuristic timestamp linkage between git commits and JSONL sessions -- a risk surface unlike anything else in v0.6.
+- 2-4 days of implementation on the critical path before #287 docs is the wrong trade in endgame.
+- v0.7 already holds Tier 3 (GitHub enrichment). FEAT_FIX_PROXIMITY is the natural bridge to external-data-source work and benefits from co-design with Tier 3's subprocess and enrichment infrastructure.
+
+**Reference:** PM scope decision comment on #275 (issuecomment-4403479791).
+
+---
