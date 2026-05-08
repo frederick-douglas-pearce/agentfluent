@@ -74,6 +74,61 @@ class TestErrorPatternDetection:
         signals = extract_signals(invocations)
         assert signals[0].detail["snippet"]
 
+    def test_mid_text_keyword_beyond_window_does_not_fire(self) -> None:
+        """#281: ``_extract_error_signals`` only scans the leading
+        ``ERROR_DETECTION_WINDOW_CHARS`` of ``output_text``. Successful
+        agent outputs that mention error-handling topics mid-text
+        (issue titles, code identifiers like ``tool_error_sequence``)
+        no longer surface as ``ERROR_PATTERN`` signals."""
+        # Long benign prefix (well past the 200-char window), then a
+        # keyword. Pre-fix this fired a signal; post-fix it does not.
+        text = (
+            "The implementation completed cleanly with all tests "
+            "passing. " * 30  # ~900 chars of benign prose, no keywords
+        ) + "but a permission denied marker appears here mid-text."
+        assert len(text) > 500
+        invocations = [_inv(output_text=text)]
+        signals = extract_signals(invocations)
+        error_signals = [
+            s for s in signals if s.signal_type == SignalType.ERROR_PATTERN
+        ]
+        assert error_signals == []
+
+    def test_leading_keyword_within_window_still_fires(self) -> None:
+        """Real error reports tend to lead the response — the bounded
+        scan must still catch them."""
+        text = (
+            "Permission denied: cannot read /etc/shadow.\n\n"
+            + ("Retried with elevated permissions and now everything works. "
+               * 20)  # long trailing prose, irrelevant
+        )
+        invocations = [_inv(output_text=text)]
+        signals = extract_signals(invocations)
+        error_signals = [
+            s for s in signals if s.signal_type == SignalType.ERROR_PATTERN
+        ]
+        assert any(s.detail["keyword"] == "permission denied" for s in error_signals)
+
+    def test_window_boundary_keyword_just_inside_fires(self) -> None:
+        """Keyword ending right at the window boundary fires; just past
+        it does not. Pins the boundary semantics."""
+        from agentfluent.diagnostics.signals import ERROR_DETECTION_WINDOW_CHARS
+        # "failed" ends exactly at position 200 (within window).
+        kw = "failed"
+        text = "x " * ((ERROR_DETECTION_WINDOW_CHARS - len(kw)) // 2) + kw
+        assert len(text) <= ERROR_DETECTION_WINDOW_CHARS
+        signals = extract_signals([_inv(output_text=text)])
+        assert any(
+            s.detail["keyword"] == "failed"
+            for s in signals if s.signal_type == SignalType.ERROR_PATTERN
+        )
+        # Same keyword pushed just past the window: no signal.
+        text_just_past = "x" * ERROR_DETECTION_WINDOW_CHARS + " failed"
+        signals = extract_signals([_inv(output_text=text_just_past)])
+        assert not any(
+            s.signal_type == SignalType.ERROR_PATTERN for s in signals
+        )
+
 
 class TestTokenOutlierDetection:
     """IQR-based detection (#186 P2): val > Q3 + 1.5*IQR. Requires

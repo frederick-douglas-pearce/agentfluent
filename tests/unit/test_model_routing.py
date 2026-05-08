@@ -373,6 +373,43 @@ class TestHelpers:
         inv = _inv(tool_uses=0, output_text="")
         assert compute_error_rate(inv) == 0.0
 
+    def test_error_rate_ignores_mid_text_keywords(self) -> None:
+        """#281: ``compute_error_rate`` only counts ``ERROR_REGEX``
+        matches in the leading window. Long agent outputs that mention
+        error-handling topics in the body (code identifiers like
+        ``tool_error_sequence``, schema fields like ``is_error?``)
+        previously inflated the rate via unbounded ``findall`` —
+        biasing complexity classification toward 'complex' on prose
+        that wasn't reporting actual errors."""
+        # 800-char benign prefix (no keywords), then four mid-text
+        # mentions of error-related topics. Pre-fix this would compute
+        # error_rate = 4 / tool_uses. Post-fix the count is 0.
+        prefix = "The implementation completed cleanly. " * 25  # ~975 chars
+        body = (
+            " The is_error field on tool_result is set when a permission "
+            "denied or other failure occurs. The retry logic handles "
+            "transient errors gracefully."
+        )
+        inv = _inv(tool_uses=4, output_text=prefix + body)
+        assert compute_error_rate(inv) == 0.0
+
+    def test_error_rate_counts_leading_keywords(self) -> None:
+        """Real errors leading the response still count toward the rate."""
+        # Two distinct keywords in the leading 200 chars; tool_uses=4 →
+        # rate=0.5.
+        inv = _inv(
+            tool_uses=4,
+            output_text=(
+                "Permission denied: cannot access /etc/shadow. "
+                "Retry attempted but failed. Long trailing prose…"
+                + (" filler" * 100)
+            ),
+        )
+        rate = compute_error_rate(inv)
+        # Exact match count depends on regex tokenization; assert
+        # non-zero and bounded by 1.0 (sanity).
+        assert 0.0 < rate <= 1.0
+
     def test_classify_model_tier_short_aliases(self) -> None:
         assert classify_model_tier(MODEL_HAIKU) == "simple"
         assert classify_model_tier(MODEL_SONNET) == "moderate"
