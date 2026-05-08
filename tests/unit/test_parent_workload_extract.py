@@ -214,6 +214,145 @@ class TestExtractBurstsBoundaries:
 
 
 # ---------------------------------------------------------------------------
+# extract_bursts — tool_result pairing for error-rate (#264)
+# ---------------------------------------------------------------------------
+
+
+def _assistant_tools_with_ids(
+    tool_ids: list[tuple[str, str]],
+    *,
+    text: str = "",
+    model: str = "claude-opus-4-7",
+) -> SessionMessage:
+    """Build an assistant message with caller-specified ``(tool_name, id)``
+    pairs so tests can pair specific tool_use ids to tool_result blocks
+    by id."""
+    blocks: list[ContentBlock] = []
+    if text:
+        blocks.append(ContentBlock(type="text", text=text))
+    for name, tool_id in tool_ids:
+        blocks.append(
+            ContentBlock(type="tool_use", id=tool_id, name=name, input={}),
+        )
+    return SessionMessage(
+        type="assistant",
+        content_blocks=blocks,
+        model=model,
+        usage=Usage(),
+    )
+
+
+def _user_tool_result(
+    tool_use_id: str, *, is_error: bool | None = False, text: str = "ok",
+) -> SessionMessage:
+    return SessionMessage(
+        type="user",
+        content_blocks=[
+            ContentBlock(
+                type="tool_result",
+                tool_use_id=tool_use_id,
+                text=text,
+                is_error=is_error,
+            ),
+        ],
+    )
+
+
+class TestExtractBurstsToolResultPairing:
+    """``extract_bursts`` pairs each tool_use to its tool_result via
+    ``index_tool_results_by_id`` and stamps the per-burst error count
+    on ``ToolBurst.tool_result_errors`` — driving the cluster
+    ``error_rate`` in ``_aggregate_burst_stats`` (#264)."""
+
+    def test_no_paired_results_yields_zero_errors(self) -> None:
+        """Backward-compat: a session with no tool_result blocks (or
+        an interrupted session where pairs are missing) still produces
+        bursts with ``tool_result_errors=0`` — the default fall-through."""
+        msgs = [
+            _user("read it"),
+            _assistant_tools_with_ids([("Read", "toolu_a")]),
+        ]
+        bursts = extract_bursts(msgs)
+        assert len(bursts) == 1
+        assert bursts[0].tool_result_errors == 0
+
+    def test_all_success_results_yields_zero_errors(self) -> None:
+        msgs = [
+            _user("read both"),
+            _assistant_tools_with_ids(
+                [("Read", "toolu_a"), ("Read", "toolu_b")],
+            ),
+            _user_tool_result("toolu_a", is_error=False),
+            _user_tool_result("toolu_b", is_error=False),
+        ]
+        bursts = extract_bursts(msgs)
+        assert bursts[0].tool_result_errors == 0
+
+    def test_partial_errors_counted(self) -> None:
+        """1-of-3 paired tool_results is_error=True → tool_result_errors=1."""
+        msgs = [
+            _user("run three"),
+            _assistant_tools_with_ids(
+                [
+                    ("Bash", "toolu_a"),
+                    ("Bash", "toolu_b"),
+                    ("Bash", "toolu_c"),
+                ],
+            ),
+            _user_tool_result("toolu_a", is_error=False),
+            _user_tool_result("toolu_b", is_error=True),
+            _user_tool_result("toolu_c", is_error=False),
+        ]
+        bursts = extract_bursts(msgs)
+        assert bursts[0].tool_result_errors == 1
+        assert len(bursts[0].tool_use_blocks) == 3
+
+    def test_is_error_none_not_counted(self) -> None:
+        """``is_error`` is ``bool | None``; missing field (``None``)
+        must not count as an error — checked via ``is True`` rather
+        than truthy."""
+        msgs = [
+            _user("read it"),
+            _assistant_tools_with_ids([("Read", "toolu_a")]),
+            _user_tool_result("toolu_a", is_error=None),
+        ]
+        bursts = extract_bursts(msgs)
+        assert bursts[0].tool_result_errors == 0
+
+    def test_missing_pair_not_counted_as_error(self) -> None:
+        """Tool_use without a paired tool_result (interrupted session)
+        is treated as 'not an error' rather than an error — defensive
+        default that preserves the prior 0.0 baseline."""
+        msgs = [
+            _user("two tools"),
+            _assistant_tools_with_ids(
+                [("Bash", "toolu_a"), ("Bash", "toolu_b")],
+            ),
+            _user_tool_result("toolu_a", is_error=True),
+            # toolu_b never paired (interrupted)
+        ]
+        bursts = extract_bursts(msgs)
+        # Only the paired error counts; the missing pair contributes 0.
+        assert bursts[0].tool_result_errors == 1
+
+    def test_errors_segregated_by_burst(self) -> None:
+        """Two bursts separated by a real user message: errors only
+        attribute to the burst they belong to."""
+        msgs = [
+            _user("first job"),
+            _assistant_tools_with_ids([("Bash", "toolu_a")]),
+            _user_tool_result("toolu_a", is_error=True),
+            _user("second job"),
+            _assistant_tools_with_ids([("Read", "toolu_b")]),
+            _user_tool_result("toolu_b", is_error=False),
+        ]
+        bursts = extract_bursts(msgs)
+        assert len(bursts) == 2
+        assert bursts[0].tool_result_errors == 1
+        assert bursts[1].tool_result_errors == 0
+
+
+# ---------------------------------------------------------------------------
 # burst_text
 # ---------------------------------------------------------------------------
 

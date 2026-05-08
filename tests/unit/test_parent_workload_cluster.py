@@ -60,12 +60,14 @@ def _burst(
     cache_creation_input_tokens: int = 0,
     cache_read_input_tokens: int = 0,
     model: str = "claude-opus-4-7",
+    tool_result_errors: int = 0,
 ) -> ToolBurst:
     blocks = [_tool(t, i) for i, t in enumerate(tools or [])]
     return ToolBurst(
         preceding_user_text=user_text,
         assistant_text=assistant_text,
         tool_use_blocks=blocks,
+        tool_result_errors=tool_result_errors,
         usage=Usage(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
@@ -176,6 +178,78 @@ class TestAggregateBurstStats:
         stats = _aggregate_burst_stats([])
         assert stats.invocation_count == 0
         assert stats.mean_tokens == 0.0
+
+    def test_error_rate_zero_for_all_success_cluster(self) -> None:
+        """All bursts have ``tool_result_errors=0`` → ``error_rate=0.0``
+        (preserves prior behavior on clusters without errors)."""
+        bursts = [
+            _burst(tools=["Read", "Read"], tool_result_errors=0),
+            _burst(tools=["Read", "Bash"], tool_result_errors=0),
+        ]
+        assert _aggregate_burst_stats(bursts).error_rate == 0.0
+
+    def test_error_rate_mean_of_per_burst_rates(self) -> None:
+        """``error_rate`` is the mean of per-burst rates, not pooled
+        (matches ``model_routing.py:166-167`` and
+        ``_complexity.py:177-178`` conventions so the same
+        ``_COMPLEX_MIN_ERROR_RATE = 0.20`` threshold means the same
+        thing on both surfaces)."""
+        # Burst A: 1 error / 4 tools → rate 0.25
+        # Burst B: 1 error / 2 tools → rate 0.5
+        # Mean of rates = 0.375. Pooled would be 2/6 = 0.333. They differ.
+        bursts = [
+            _burst(tools=["Read"] * 4, tool_result_errors=1),
+            _burst(tools=["Read"] * 2, tool_result_errors=1),
+        ]
+        assert _aggregate_burst_stats(bursts).error_rate == 0.375
+
+    def test_error_rate_one_for_all_error_cluster(self) -> None:
+        bursts = [
+            _burst(tools=["Bash"] * 3, tool_result_errors=3),
+            _burst(tools=["Bash"] * 2, tool_result_errors=2),
+        ]
+        assert _aggregate_burst_stats(bursts).error_rate == 1.0
+
+    def test_error_rate_zero_for_burst_with_no_tools(self) -> None:
+        """Defensive: a burst with empty ``tool_use_blocks`` contributes
+        rate 0.0 to the mean (avoids division by zero). In practice
+        ``_OpenBurst.finalize`` won't emit such a burst, but guard the
+        aggregation function regardless."""
+        empty = ToolBurst(
+            preceding_user_text="x",
+            assistant_text="y",
+            tool_use_blocks=[],
+            usage=Usage(),
+        )
+        bursts = [
+            _burst(tools=["Read"] * 2, tool_result_errors=2),
+            empty,
+        ]
+        # Mean of [1.0, 0.0] = 0.5
+        assert _aggregate_burst_stats(bursts).error_rate == 0.5
+
+    def test_error_rate_triggers_complex_classification(self) -> None:
+        """Issue #264 motivation: a cluster with mean tool calls and
+        mean tokens below the complex thresholds but ``error_rate`` above
+        ``_COMPLEX_MIN_ERROR_RATE`` should classify as ``complex``.
+        Pre-fix this never fired because ``error_rate`` was always 0.0."""
+        from agentfluent.diagnostics._complexity import (
+            _COMPLEX_MIN_ERROR_RATE,
+            classify_complexity,
+        )
+        # Two bursts, each with 3 tools, 2 of which errored → per-burst
+        # rate 2/3 ≈ 0.667 each → mean 0.667 (well above 0.20 threshold).
+        # mean_tool_calls=3 is below the complex tool-count gate; the
+        # error_rate is what should drive the "complex" classification.
+        bursts = [
+            _burst(tools=["Bash"] * 3, tool_result_errors=2,
+                   input_tokens=50, output_tokens=50),
+            _burst(tools=["Bash"] * 3, tool_result_errors=2,
+                   input_tokens=50, output_tokens=50),
+        ]
+        stats = _aggregate_burst_stats(bursts)
+        assert stats.error_rate > _COMPLEX_MIN_ERROR_RATE
+        assert classify_complexity(stats) == "complex"
 
 
 class TestToolSequenceSummary:
