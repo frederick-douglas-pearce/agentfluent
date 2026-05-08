@@ -191,18 +191,30 @@ def delegation_suggestion(
     dedup_note: str = "",
     top_terms: list[str] | None = None,
     cohesion_score: float = 0.85,
+    tools_observed: list[str] | None = None,
 ) -> DelegationSuggestion:
-    """Build a ``DelegationSuggestion`` with project-consistent defaults."""
-    return DelegationSuggestion(
-        name=name,
-        description=description,
-        model="claude-sonnet-4-6",
-        tools=tools if tools is not None else ["Read", "Grep"],
-        tools_note=tools_note,
-        prompt_template="You run pytest tests and report results.",
-        confidence=confidence,
-        cluster_size=10,
-        cohesion_score=cohesion_score,
-        top_terms=top_terms if top_terms is not None else ["pytest", "tests", "run"],
-        dedup_note=dedup_note,
-    )
+    """Build a ``DelegationSuggestion`` with project-consistent defaults.
+
+    ``tools_observed`` defaults to ``None`` and is omitted from the model
+    constructor when unset — preserves the Pydantic ``default_factory=list``
+    behavior. Tests that exercise the unfiltered observed-tools surface
+    pass it explicitly.
+    """
+    kwargs: dict[str, object] = {
+        "name": name,
+        "description": description,
+        "model": "claude-sonnet-4-6",
+        "tools": tools if tools is not None else ["Read", "Grep"],
+        "tools_note": tools_note,
+        "prompt_template": "You run pytest tests and report results.",
+        "confidence": confidence,
+        "cluster_size": 10,
+        "cohesion_score": cohesion_score,
+        "top_terms": (
+            top_terms if top_terms is not None else ["pytest", "tests", "run"]
+        ),
+        "dedup_note": dedup_note,
+    }
+    if tools_observed is not None:
+        kwargs["tools_observed"] = tools_observed
+    return DelegationSuggestion(**kwargs)
