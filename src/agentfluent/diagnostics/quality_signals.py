@@ -405,6 +405,30 @@ def _files_edited_after(
     return edited
 
 
+def _match_mentioned_to_edited(
+    mentioned: set[str], edited: set[str],
+) -> set[str]:
+    """Return the subset of ``mentioned`` tokens that any ``edited`` path matches.
+
+    Bridges the relative-vs-absolute mismatch between review prose
+    (``"see src/foo.py"``) and ``Edit.input.file_path`` (absolute, e.g.
+    ``/home/u/repo/src/foo.py``). A mentioned token ``m`` matches an
+    edited path ``e`` when ``e == m`` or ``e.endswith("/" + m)``.
+
+    ``m`` is assumed to be a relative path or bare filename without a
+    leading ``/`` — guaranteed by ``_DIR_PATH_PATTERN`` and
+    ``_BARE_FILE_PATTERN``. The result preserves the mentioned form
+    (more readable than absolute paths in signal detail and stable
+    across users with different repo locations).
+    """
+    if not mentioned or not edited:
+        return set()
+    return {
+        m for m in mentioned
+        if any(e == m or e.endswith("/" + m) for e in edited)
+    }
+
+
 def _extract_reviewer_caught_signals(
     messages: list[SessionMessage],
     agent_invocations: list[AgentInvocation],
@@ -457,7 +481,7 @@ def _extract_reviewer_caught_signals(
         result_idx = tool_result_idx.get(inv.tool_use_id)
         if result_idx is not None and files_mentioned:
             edited = _files_edited_after(messages, result_idx)
-            files_acted_on = files_mentioned & edited
+            files_acted_on = _match_mentioned_to_edited(files_mentioned, edited)
 
         candidates_by_agent[inv.agent_type].append(
             DiagnosticSignal(
