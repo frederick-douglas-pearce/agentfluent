@@ -30,6 +30,7 @@ from __future__ import annotations
 import logging
 import warnings
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -46,7 +47,12 @@ except ImportError:  # pragma: no cover — exercised via install-path test
 from agentfluent.agents.models import WRITE_TOOLS
 from agentfluent.analytics.pricing import ModelPricing, compute_cost, get_pricing
 from agentfluent.config.models import AgentConfig
-from agentfluent.core.session import SessionMessage, ToolUseBlock, Usage
+from agentfluent.core.session import (
+    SessionMessage,
+    ToolUseBlock,
+    Usage,
+    index_tool_results_by_id,
+)
 from agentfluent.diagnostics._clustering import (
     SKLEARN_AVAILABLE,
     SklearnMissingError,
@@ -105,6 +111,14 @@ class ToolBurst:
     """Tool calls in original order. NOT de-duplicated — repeated tool use
     IS a discriminative signal that sub-issue D's TF-IDF clustering will
     weight."""
+    tool_result_errors: int = 0
+    """Count of paired ``tool_result`` blocks with ``is_error=True`` for
+    the tools in :attr:`tool_use_blocks`. Computed at extract time via
+    ``index_tool_results_by_id``; consumed by ``_aggregate_burst_stats``
+    to drive the burst-cluster ``error_rate`` that feeds
+    ``classify_complexity``. Defaults to 0 when the paired ``tool_result``
+    is missing (interrupted session) or its ``is_error`` is None/False
+    (#264)."""
     usage: Usage = field(default_factory=Usage)
     model: str = ""
     """Model id from the first contributing assistant message. All messages
@@ -134,13 +148,19 @@ class _OpenBurst:
         if text:
             self.assistant_texts.append(text)
 
-    def finalize(self) -> ToolBurst | None:
+    def finalize(
+        self,
+        count_errors: Callable[[list[ToolUseBlock]], int] | None = None,
+    ) -> ToolBurst | None:
         if not self.tool_blocks:
             return None
         return ToolBurst(
             preceding_user_text=self.preceding_user_text,
             assistant_text="\n".join(t for t in self.assistant_texts if t),
             tool_use_blocks=list(self.tool_blocks),
+            tool_result_errors=(
+                count_errors(self.tool_blocks) if count_errors is not None else 0
+            ),
             usage=sum(self.usages, Usage()),
             model=self.model,
         )
@@ -166,14 +186,32 @@ def extract_bursts(messages: list[SessionMessage]) -> list[ToolBurst]:
     See module docstring for the boundary rule. No filtering applied here —
     use :func:`filter_bursts` to drop too-small / too-large / too-short
     bursts before clustering.
+
+    Pairs each tool_use to its tool_result via
+    :func:`agentfluent.core.session.index_tool_results_by_id` and stamps
+    the per-burst error count on ``ToolBurst.tool_result_errors``. The
+    index is built once over all messages so an interrupted-session
+    pair (tool_use without a paired tool_result) silently falls back to
+    "not an error" for that tool — see #264.
     """
+    tool_results = index_tool_results_by_id(messages)
+
+    def _count_errors(blocks: list[ToolUseBlock]) -> int:
+        # ``is True`` rather than truthy: ``is_error`` is ``bool | None``
+        # on ``ContentBlock``; missing field stays out of the error count.
+        return sum(
+            1 for b in blocks
+            if (entry := tool_results.get(b.id)) is not None
+            and entry[2] is True
+        )
+
     bursts: list[ToolBurst] = []
     last_real_user_text = ""
     cur: _OpenBurst | None = None
 
     for msg in messages:
         if _is_real_user_text(msg):
-            if cur is not None and (b := cur.finalize()) is not None:
+            if cur is not None and (b := cur.finalize(_count_errors)) is not None:
                 bursts.append(b)
             cur = None
             last_real_user_text = msg.text
@@ -205,7 +243,7 @@ def extract_bursts(messages: list[SessionMessage]) -> list[ToolBurst]:
 
         cur.add_assistant_message(msg)
 
-    if cur is not None and (b := cur.finalize()) is not None:
+    if cur is not None and (b := cur.finalize(_count_errors)) is not None:
         bursts.append(b)
     return bursts
 
@@ -470,11 +508,13 @@ def _filter_tools_from_bursts(
 def _aggregate_burst_stats(bursts: list[ToolBurst]) -> AgentStats:
     """Build ``AgentStats`` for ``classify_complexity`` from a burst cluster.
 
-    ``error_rate`` defaults to 0.0 — bursts don't carry paired
-    ``tool_result.is_error`` data today (the extractor only captures
-    ``tool_use_blocks`` from assistant messages). If dogfood shows
-    error-prone clusters being misclassified as moderate, the extractor
-    can be extended in a follow-up to capture per-tool error counts.
+    ``error_rate`` is the **mean of per-burst rates** rather than the
+    cluster-pooled rate, matching the convention used for invocation-
+    based stats in ``model_routing.py`` and ``_complexity.py`` so the
+    same ``_COMPLEX_MIN_ERROR_RATE = 0.20`` threshold means the same
+    thing on both surfaces. Per-burst error data comes from
+    :attr:`ToolBurst.tool_result_errors` populated at extract time
+    (#264).
     """
     if not bursts:
         return AgentStats(
@@ -489,12 +529,16 @@ def _aggregate_burst_stats(bursts: list[ToolBurst]) -> AgentStats:
     tool_counts = [len(b.tool_use_blocks) for b in bursts]
     token_totals = [b.usage.total_tokens for b in bursts]
     all_tools = {b.name for burst in bursts for b in burst.tool_use_blocks}
+    per_burst_rates = [
+        b.tool_result_errors / n if (n := len(b.tool_use_blocks)) else 0.0
+        for b in bursts
+    ]
     return AgentStats(
         agent_type=_BURST_AGENT_TYPE,
         invocation_count=len(bursts),
         mean_tool_calls=sum(tool_counts) / len(tool_counts),
         mean_tokens=sum(token_totals) / len(token_totals),
-        error_rate=0.0,
+        error_rate=sum(per_burst_rates) / len(per_burst_rates),
         has_write_tools=bool(all_tools & WRITE_TOOLS),
         current_model=None,
     )
