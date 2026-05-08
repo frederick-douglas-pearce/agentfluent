@@ -661,6 +661,68 @@ class TestReviewerCaughtDetection:
         rev = next(s for s in signals if s.signal_type == SignalType.REVIEWER_CAUGHT)
         assert rev.detail["parent_acted"] is False
 
+    def test_parent_acted_relative_mention_matches_absolute_edit(self) -> None:
+        """Review prose carries relative paths (``src/foo.py``); Edit
+        tool calls carry absolute paths (``/home/u/repo/src/foo.py``).
+        Suffix-match bridges the two — without it ``parent_acted`` is
+        always False on real Claude Code data (#322)."""
+        inv = _review_invocation(output_text=_SUBSTANTIVE_REVIEW)
+        messages = [
+            _user_with_tool_result(inv.tool_use_id),
+            _assistant_with_edits("/home/u/repo/src/foo.py"),
+        ]
+        signals = extract_quality_signals(messages, [inv])
+        rev = next(s for s in signals if s.signal_type == SignalType.REVIEWER_CAUGHT)
+        assert rev.detail["parent_acted"] is True
+        assert "src/foo.py" in rev.detail["files_acted_on"]
+
+    def test_parent_acted_bare_filename_matches_absolute_edit(self) -> None:
+        """Bare-filename mentions (``quality_signals.py``) match any
+        absolute edit whose basename matches — verifies the suffix
+        match handles the no-directory case via ``e.endswith("/" + m)``."""
+        review = (
+            "I reviewed the change and found a blocker issue that must "
+            "be addressed before merge. The function in quality_signals.py "
+            "does not handle the empty-input case and will raise an "
+            "unexpected exception at runtime. This is a real risk to "
+            "production behavior under any code path that funnels "
+            "user-supplied data into this function without a prior "
+            "non-empty check. Recommended fix: add input validation "
+            "and a defensive guard before the loop. Additional concern: "
+            "the test fixture is missing for this path — please add "
+            "coverage for the empty-input case so this regression cannot "
+            "recur silently. A second issue worth flagging is that the "
+            "error message itself does not include the offending field "
+            "name, which makes downstream debugging harder than it "
+            "needs to be; that should be tightened up too."
+        )
+        inv = _review_invocation(output_text=review)
+        messages = [
+            _user_with_tool_result(inv.tool_use_id),
+            _assistant_with_edits(
+                "/home/u/repo/src/agentfluent/diagnostics/quality_signals.py",
+            ),
+        ]
+        signals = extract_quality_signals(messages, [inv])
+        rev = next(s for s in signals if s.signal_type == SignalType.REVIEWER_CAUGHT)
+        assert rev.detail["parent_acted"] is True
+        assert "quality_signals.py" in rev.detail["files_acted_on"]
+
+    def test_parent_acted_false_when_no_filename_overlap(self) -> None:
+        """Suffix match still gates on filename — an edit to an
+        entirely unrelated file (``unrelated_module.py``) does NOT
+        satisfy ``parent_acted`` even when other mentioned files exist
+        in the review prose. Guards against the regression where the
+        suffix change accidentally makes everything fire."""
+        inv = _review_invocation(output_text=_SUBSTANTIVE_REVIEW)
+        messages = [
+            _user_with_tool_result(inv.tool_use_id),
+            _assistant_with_edits("/home/u/repo/src/unrelated_module.py"),
+        ]
+        signals = extract_quality_signals(messages, [inv])
+        rev = next(s for s in signals if s.signal_type == SignalType.REVIEWER_CAUGHT)
+        assert rev.detail["parent_acted"] is False
+
 
 class TestUserCorrectionEmissionGates:
     """OR-gated session-level gates on USER_CORRECTION (#274 calibration).
