@@ -128,17 +128,29 @@ _REDIRECTION_PATTERNS = _ci(
 _UNDO_PATTERNS = _ci(r"\bgo\s+back\s+to\b", r"\brestore\b")
 
 # Claude Code injects wrappers into user messages (``<task-notification>``,
-# ``<system-reminder>``, session-resumption preamble) that can contain
-# correction-trigger words. The dogfood corpus showed ~85% FP rate on
-# USER_CORRECTION before stripping (#321). Wrappers span multiple lines,
-# so the tag-based alternatives use ``[\s\S]*?`` (DOTALL) to cross
-# newlines. The session-resumption preamble is stripped from its known
-# opening sentence up to the next blank line or end of text.
+# ``<system-reminder>``, session-resumption preamble, skill-metadata
+# preamble) that can contain correction-trigger words. The dogfood
+# corpus showed ~85% FP rate on USER_CORRECTION before stripping
+# (#321). Wrappers span multiple lines, so the tag-based alternatives
+# use ``[\s\S]*?`` to cross newlines.
+#
+# Terminator semantics differ across wrappers:
+# - Tag-based: closing tag (``</task-notification>``).
+# - Session-resumption preamble: next blank line or end of text — the
+#   preamble is followed by the recap of prior conversation, which
+#   contains real user prose and must NOT be stripped.
+# - Skill-metadata preamble: end of text. Claude Code loads a skill's
+#   ``SKILL.md`` content as a standalone user message — the entire
+#   message is the skill block, with no user prose following. Matched
+#   FP from #330: ``Base directory for this skill: <path>`` followed by
+#   ~11k chars of markdown skill description that incidentally contains
+#   ``no `` and other trigger words.
 _SYSTEM_WRAPPER_RE = re.compile(
     r"<task-notification>[\s\S]*?</task-notification>"
     r"|<system-reminder>[\s\S]*?</system-reminder>"
     r"|This\s+session\s+is\s+being\s+continued\s+from\s+a\s+previous\s+"
-    r"conversation[\s\S]*?(?=\n\n|\Z)",
+    r"conversation[\s\S]*?(?=\n\n|\Z)"
+    r"|Base\s+directory\s+for\s+this\s+skill:[\s\S]*\Z",
     re.IGNORECASE,
 )
 
