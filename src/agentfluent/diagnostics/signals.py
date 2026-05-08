@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 import statistics
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 
 from agentfluent.agents.models import AgentInvocation
 from agentfluent.config.models import Severity
@@ -60,6 +60,32 @@ def detect_is_error_from_text(text: str | None) -> bool:
     return bool(ERROR_REGEX.search(text[:ERROR_DETECTION_WINDOW_CHARS]))
 
 
+def iter_error_matches(
+    text: str | None,
+    *,
+    window: int = ERROR_DETECTION_WINDOW_CHARS,
+) -> Iterator[re.Match[str]]:
+    """Yield ``ERROR_REGEX`` matches from the bounded leading window of ``text``.
+
+    Shared shape consumed by ``compute_error_rate`` (count) and
+    ``_extract_error_signals`` (iterate for snippet extraction). The
+    bound is the FP defense — agent ``output_text`` runs thousands of
+    chars and frequently discusses error-handling code as a topic,
+    inflating an unbounded ``findall`` count. #281 dogfood research:
+    98% of full-text matches across 447 invocations were mid-text
+    code identifiers (``tool_error_sequence``, ``RetrySequence``) and
+    schema field mentions (``is_error?``), not error events.
+
+    Match positions are within the sliced prefix and therefore valid
+    indices into the original text — callers extracting snippets via
+    ``match.start()`` / ``match.end()`` get correct offsets without
+    further translation.
+    """
+    if not text:
+        return
+    yield from ERROR_REGEX.finditer(text[:window])
+
+
 # Map matched text back to severity
 _KEYWORD_SEVERITY: dict[str, Severity] = {kw.lower(): sev for kw, sev in ERROR_PATTERNS}
 
@@ -82,11 +108,14 @@ def _extract_error_signals(invocations: list[AgentInvocation]) -> list[Diagnosti
         if not inv.output_text:
             continue
 
-        for match in ERROR_REGEX.finditer(inv.output_text):
+        for match in iter_error_matches(inv.output_text):
             keyword = match.group(0).lower()
             severity = _KEYWORD_SEVERITY.get(keyword, Severity.WARNING)
 
-            # Extract context around the match
+            # Extract context around the match. ``iter_error_matches``
+            # bounds the search to the leading window, but the snippet
+            # context is allowed to extend past the window into the full
+            # text so the user sees natural surrounding prose.
             start = max(0, match.start() - 50)
             end = min(len(inv.output_text), match.end() + 50)
             snippet = inv.output_text[start:end].strip()

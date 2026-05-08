@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import BaseModel
 
 from agentfluent.agents.models import WRITE_TOOLS
-from agentfluent.diagnostics.signals import ERROR_REGEX
+from agentfluent.diagnostics.signals import iter_error_matches
 
 if TYPE_CHECKING:
     from agentfluent.agents.models import AgentInvocation
@@ -77,9 +77,11 @@ def compute_error_rate(inv: AgentInvocation) -> float:
     """Observed error rate for a single invocation.
 
     Trace is preferred when linked — counts concrete tool errors.
-    Metadata fallback scans ``output_text`` for ``ERROR_REGEX`` keywords
-    and divides by ``tool_uses``. Returns 0.0 when no signal is
-    available either way.
+    Metadata fallback counts ``ERROR_REGEX`` matches in the leading
+    window of ``output_text`` (via ``iter_error_matches``) and divides
+    by ``tool_uses``. Returns 0.0 when no signal is available either
+    way. The window bound is the FP defense for long agent outputs
+    that discuss error-handling code as a topic (#281).
     """
     trace = inv.trace
     if trace is not None and trace.tool_calls:
@@ -87,7 +89,7 @@ def compute_error_rate(inv: AgentInvocation) -> float:
     tool_uses = inv.tool_uses or 0
     if tool_uses == 0 or not inv.output_text:
         return 0.0
-    matches = len(ERROR_REGEX.findall(inv.output_text))
+    matches = sum(1 for _ in iter_error_matches(inv.output_text))
     return matches / tool_uses
 
 
