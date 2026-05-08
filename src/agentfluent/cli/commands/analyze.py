@@ -106,6 +106,12 @@ Examples:
   agentfluent analyze --project codefluent --since 2026-05-01 --until 2026-05-08
       Analyze sessions in the half-open interval [2026-05-01, 2026-05-08).
 
+  agentfluent analyze --project codefluent --since 7d --until 1d --diagnostics
+      Analyze sessions from 7 days ago up to (but not including) yesterday.
+
+  agentfluent analyze --project codefluent --since 2026-05-01 --json > baseline.json
+      Generate a time-scoped baseline for `agentfluent diff` comparison.
+
   agentfluent analyze --project codefluent --format json | jq '.data.token_metrics.total_cost'
       Extract total cost programmatically.
 """
