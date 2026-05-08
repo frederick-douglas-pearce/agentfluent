@@ -133,6 +133,8 @@ agentfluent analyze --project codefluent                       # Full analysis w
 agentfluent analyze --project codefluent --no-diagnostics      # Token + cost only (skip diagnostics pipeline)
 agentfluent analyze --project codefluent --agent pm            # Filter to one subagent
 agentfluent analyze --project codefluent --latest 5            # Last 5 sessions only
+agentfluent analyze --project codefluent --since 7d            # Sessions from the last 7 days only (v0.6)
+agentfluent analyze --project codefluent --since 2026-05-01 --json > baseline.json  # Time-scoped baseline for diff
 agentfluent analyze --project codefluent -v                    # + YAML subagent drafts
 agentfluent analyze --project codefluent --min-severity warning  # Hide info-level recs
 agentfluent analyze --project codefluent --top-n 10            # Top-10 priority fixes summary block
@@ -149,8 +151,11 @@ Produces a token-usage table, per-model cost breakdown (labeled as API rate — 
 - **Metadata-level** (from invocation summaries): tool-error keywords, token-per-tool-use outliers, duration outliers.
 - **Trace-level** (from `~/.claude/projects/<session>/subagents/`): retry loops, stuck patterns, permission failures, consecutive tool-error sequences — each with per-tool-call evidence.
 - **Aggregate**: model mismatch (complexity class wrong for declared/observed model), delegation clustering (recurring `general-purpose` patterns → proposed specialized subagents), MCP server audit (configured-but-unused, observed-but-missing).
+- **Quality (v0.6)**: parent's mid-flight corrections (`USER_CORRECTION`), file rework density (`FILE_REWORK`), and reviewer-caught rate with `parent_acted` attribution (`REVIEWER_CAUGHT`). Recommendations carry a `[quality]` axis label and per-recommendation `axis_scores` annotations.
 
-Above the Recommendations table, a **Top-N priority fixes summary** ranks findings by a composite `priority_score` that combines severity, occurrence count, cost impact (for `target='model'` mismatches), and trace-evidence boost — so the highest-leverage changes surface first instead of asking the reader to scan a flat severity-sorted list. The sort key is part of the JSON envelope (`aggregated_recommendations[].priority_score`), so a CI gate can fail the run on priority regression. An **Offload Candidates** section calls out clusters of repeating tool-use patterns in the parent thread and proposes subagent / skill drafts that move that work onto cheaper-tier models — the dominant cost lever for users running agents at scale.
+Above the Recommendations table, a **Top-N priority fixes summary** ranks findings by a composite `priority_score` that combines severity, occurrence count, cost impact (for `target='model'` mismatches), trace-evidence boost, and (v0.6) quality-evidence boost — so the highest-leverage changes surface first instead of asking the reader to scan a flat severity-sorted list. The sort key is part of the JSON envelope (`aggregated_recommendations[].priority_score`), so a CI gate can fail the run on priority regression. An **Offload Candidates** section calls out clusters of repeating tool-use patterns in the parent thread and proposes subagent / skill drafts that move that work onto cheaper-tier models — the dominant cost lever for users running agents at scale.
+
+Each recommendation surfaces an axis label — `[cost]`, `[speed]`, or `[quality]` — naming which diagnostics axis triggered it. The JSON envelope exposes the same information per recommendation as `axis_scores: {cost, speed, quality}` and `primary_axis`, so a CI rule can target a specific dimension (e.g. fail only on new `quality`-primary findings).
 
 Near-duplicate recommendations are aggregated per `(agent, target, signal)` shape into one row with an occurrence `Count` and metric range (e.g. *"4 invocations (4.9x–8.0x above 5,064 mean). Consider adding more specific instructions..."*). Each recommendation carries a specific config surface to change (prompt, tools, model, mcp) and a pointer to the file to edit. Recommendations for built-in agents (Explore, general-purpose, Plan, etc.) use concern-specific action text — wrapper subagent for scope issues, retry bounds on the delegating agent for recovery issues, reroute for tools/model — since built-in agents have no user-editable prompt or tool config.
 
@@ -195,6 +200,8 @@ AgentFluent's "configuration" is CLI flags — no config file, no environment va
 | `--scope` | `all` | `config-check` scope: `user`, `project`, or `all` |
 | `--agent` | (none) | Filter `analyze` or `config-check` to one subagent type |
 | `--latest N` | (all sessions) | `analyze` only the N most recent sessions |
+| `--since DATETIME` | (none) | `analyze`/`list`: include sessions whose first message landed at or after this time. ISO 8601, date-only (`YYYY-MM-DD`), or relative (`7d`, `12h`, `30m`). Half-open interval with `--until`. Mutually exclusive with `--session`. |
+| `--until DATETIME` | (none) | `analyze`/`list`: include sessions whose first message landed strictly before this time. Same formats as `--since`. |
 | `--session` | (all) | `analyze` a specific session filename within the project |
 | `--diagnostics / --no-diagnostics` | on | `analyze`: behavior-correlation signals (default on; `--no-diagnostics` skips the pipeline) |
 | `--min-cluster-size` | 5 | Delegation clustering: minimum invocations per cluster (requires `agentfluent[clustering]`) |
@@ -218,6 +225,10 @@ AgentFluent's "configuration" is CLI flags — no config file, no environment va
   "version": "2",
   "command": "analyze",
   "data": {
+    "window": {
+      "since": "2026-05-01T00:00:00Z", "until": null,
+      "session_count_before_filter": 42, "session_count_after_filter": 12
+    },
     "token_metrics": {
       "total_cost": 41.11,
       "total_tokens": 54019983,
@@ -230,7 +241,20 @@ AgentFluent's "configuration" is CLI flags — no config file, no environment va
     "tool_usage": [...],
     "agent_invocations": [...],
     "diagnostics": {
-      "aggregated_recommendations": [...],
+      "aggregated_recommendations": [
+        {
+          "agent_type": "general-purpose",
+          "target": "subagent",
+          "signal_types": ["user_correction"],
+          "primary_axis": "quality",
+          "axis_scores": {"cost": 0.0, "speed": 0.0, "quality": 14.0},
+          "priority_score": 226.0,
+          "severity": "warning",
+          "count": 7,
+          "message": "user_correction: Consider delegating to a review-style subagent ..."
+        },
+        ...
+      ],
       "offload_candidates": [...],
       "delegation_suggestions": [...],
       "delegation_suggestions_skipped_reason": null
@@ -240,6 +264,8 @@ AgentFluent's "configuration" is CLI flags — no config file, no environment va
 ```
 
 **Schema v2 (v0.5):** `token_metrics.by_model` changed from a dict keyed by model name to a list of rows where each row carries an `origin` field (`"parent"` or `"subagent"`). Two rows can share a model with different origins (Opus used in both parent and subagent runs). Top-level `total_cost` and `total_tokens` are now comprehensive — they include subagent contributions. `agentfluent diff` reads both v1 and v2 envelopes (legacy v1 rows normalize as `origin="parent"`), so saved baselines remain diffable across the upgrade.
+
+**Schema v2 additions (v0.6, additive — no version bump):** Each `aggregated_recommendations` row carries `axis_scores: {cost, speed, quality}` and `primary_axis: "cost" | "speed" | "quality"`. The composite `priority_score` formula gains a `quality_evidence_factor * W_QUALITY` term that fires when a recommendation's signals map to the `quality` axis (per D021). `analyze --json` output also carries a top-level `window: {since, until}` block when `--since`/`--until` is set on the invocation (`null` for either bound when not specified). `agentfluent diff` reads pre-v0.6 envelopes without these annotations cleanly — the absence is treated as zeros / `cost`-primary, which preserves the existing comparison semantics.
 
 No ANSI escapes in JSON output, guaranteed. The key `total_cost` is the pay-per-token equivalent; subscribers on Pro/Max/Team/Enterprise plans see a flat monthly charge regardless.
 
@@ -302,7 +328,9 @@ Everything runs locally. No outbound network calls, ever. No API key needed.
 - **Agent Config Assessment** — 4-dimension rubric (description, tools, model, prompt) applied to every `.md` file in `~/.claude/agents/` and `./.claude/agents/`. Produces a 0–100 score plus ranked, specific recommendations ("Prompt body doesn't mention error handling"). Catches agents that are technically valid but miss well-known best practices.
 - **Subagent Trace Parsing** — Parses the internal tool-call sequences Claude Code emits under `~/.claude/projects/<session>/subagents/agent-<agentId>.jsonl`, links them back to the delegating invocation, and detects retry sequences. Gives diagnostics per-call evidence (which tool, which attempt, which error) instead of just an invocation-level summary.
 - **Behavior Diagnostics** — `--diagnostics` emits signals across three layers. *Metadata*: tool-error keywords, token-per-tool-use outliers, duration outliers. *Trace-level*: retry loops, stuck patterns (same call repeated with no progress), permission failures, consecutive tool-error sequences. *Aggregate*: model mismatch (declared/observed model wrong for the workload's complexity), MCP server audit (configured-but-unused, observed-but-missing). Near-duplicate recommendations collapse into one row per `(agent, target, signal)` shape with an occurrence `Count` and metric range. Recommendations for built-in agents (Explore, general-purpose, Plan, code-reviewer, etc.) use concern-specific action text since built-ins have no user-editable config. Each signal routes to a `target` config surface — prompt, tools, model, or mcp — and the recommendation names the file to edit and the specific change to make.
-- **Priority Ranking** — A composite `priority_score` ranks recommendations by severity, occurrence count, cost impact (model-mismatch findings carry the dollar savings), and trace-evidence boost. The default Recommendations table is sorted by priority desc, and a Top-N priority-fixes summary surfaces above the table so the highest-leverage changes are the first thing the reader sees. `--top-n N` controls the summary depth; `--min-severity {info|warning|critical}` filters the recommendation surface without touching the underlying signals.
+- **Quality Axis (v0.6)** — A third diagnostics axis alongside cost and speed, surfacing gaps that look "free" by token math but produce quality debt. Tier-1 signals (no new data sources): `USER_CORRECTION` (parent's mid-flight corrections like "no, do X instead"), `FILE_REWORK` (same file edited at or above the calibrated threshold within a session), and `REVIEWER_CAUGHT` (substantive findings from architect/security-review/tester subagents, with `parent_acted` attribution). Recommendations carry a `[quality]` axis label, and per-recommendation `axis_scores: {cost, speed, quality}` plus `primary_axis` annotations let CI rules and `agentfluent diff` reason about which dimension changed. Single-axis classification keeps the same threshold meaning the same thing across surfaces. Calibrated against the dogfood corpus (see [`scripts/calibration/`](scripts/calibration/)).
+- **Date-Range Filtering (v0.6)** — `--since`/`--until` on `agentfluent analyze` and `agentfluent list` scope analysis to a session window using ISO 8601, date-only (`YYYY-MM-DD`), or relative (`7d`, `12h`, `30m`) input. Half-open interval semantics (consistent with `git log` and time-series conventions). Closes the dogfood loop for "did my fix work?" workflows and enables retroactive baselines for `diff`. Analyze JSON output carries a `window: {since, until}` block when either flag is set.
+- **Priority Ranking** — A composite `priority_score` ranks recommendations by severity, occurrence count, cost impact (model-mismatch findings carry the dollar savings), trace-evidence boost, and (v0.6) quality-evidence boost when quality-axis signals fire. The default Recommendations table is sorted by priority desc, and a Top-N priority-fixes summary surfaces above the table so the highest-leverage changes are the first thing the reader sees. `--top-n N` controls the summary depth; `--min-severity {info|warning|critical}` filters the recommendation surface without touching the underlying signals.
 - **Offload Candidates** — Detects clusters of repeating tool-use patterns in the parent Claude Code thread, estimates the cost saved by routing them through a cheaper subagent or skill, and proposes a draft definition for each cluster. The dominant cost lever for users running agents at scale: a Sonnet thread that does 80 GitHub PR reviews per week is cheaper as a Haiku-routed `pr-review` subagent. Calibrated against real-world burst distributions (`scripts/calibration/`).
 - **Comparison Workflow** — `agentfluent diff baseline.json current.json` compares two `analyze --json` envelopes, classifying each recommendation as `new` / `resolved` / `persisting`, computing token / cost / cache deltas, and emitting per-agent invocation deltas. `--fail-on {info|warning|critical}` gates exit code 3 on new findings at or above the chosen severity, so `agentfluent diff` slots into a PR check the same way a test runner does. Baselines are user-managed files — no internal cache — so re-running against an older snapshot at any time is just one command. Reads both v1 (legacy) and v2 (current) JSON envelopes via a compatibility shim.
 - **Delegation Clustering** — TF-IDF + KMeans on recurring `general-purpose` invocations surfaces patterns that would benefit from their own specialized subagent. Proposes a complete draft: name, description, recommended model (with cost reasoning), tool list derived from the cluster's trace data, and a prompt-body scaffold. Under `--verbose`, each cluster emits a copy-paste-ready **YAML subagent definition block** (frontmatter + prompt body) that can be saved directly as `~/.claude/agents/<name>.md`. Low-confidence clusters are kept but prefixed with a `REVIEW BEFORE USE` comment so loose groupings don't land in production blindly. Confidence tiers (high/medium/low) are calibrated against real-world cohesion distributions from multi-contributor datasets. Suppresses drafts that overlap existing agents and annotates the overlap. Requires the optional `agentfluent[clustering]` extra.
@@ -448,22 +476,29 @@ The release theme: make diagnostic signals reliable enough that a user who doesn
 - Delegation-draft tools list frequency filter ([#184](https://github.com/frederick-douglas-pearce/agentfluent/issues/184)) — least-privilege tool inclusion so generated drafts don't request the union of every member's tools.
 - Unified complexity classifier across model_routing and delegation ([#185](https://github.com/frederick-douglas-pearce/agentfluent/issues/185)).
 
-**v0.6 (planned — "Quality Axis: Tier 1"):**
+**v0.6 (shipped — "Quality Axis: Tier 1"):**
 
-The next theme adds a third diagnostics axis alongside cost and speed: **quality**. Review-style subagents (architect, tester, security-review, code-reviewer) are systematically under-recommended today because their primary value is *independent context and quality improvement*, not token offload or wallclock savings — the existing recommendation engine can't see that benefit. v0.6 closes the gap. See PRD: [`.claude/specs/prd-quality-axis.md`](.claude/specs/prd-quality-axis.md). Tier-1 epic + stories at [#268](https://github.com/frederick-douglas-pearce/agentfluent/issues/268), with decisions D015–D022 in [`.claude/specs/decisions.md`](.claude/specs/decisions.md).
+The release theme adds a third diagnostics axis alongside cost and speed: **quality**. Review-style subagents (architect, tester, security-review, code-reviewer) were systematically under-recommended because their primary value is *independent context and quality improvement*, not token offload or wallclock savings — the existing recommendation engine couldn't see that benefit. v0.6 closes the gap. See PRD: [`.claude/specs/prd-quality-axis.md`](.claude/specs/prd-quality-axis.md). Tier-1 epic at [#268](https://github.com/frederick-douglas-pearce/agentfluent/issues/268), with decisions D015–D022 in [`.claude/specs/decisions.md`](.claude/specs/decisions.md).
 
 - Tier-1 quality signals (no new data sources):
-  - User mid-flight corrections ([#269](https://github.com/frederick-douglas-pearce/agentfluent/issues/269)) — frequency of "no, do X instead" / "wait" / "actually" patterns as a parent-quality miss-rate proxy.
-  - File rework density ([#270](https://github.com/frederick-douglas-pearce/agentfluent/issues/270)) — same file edited N+ times within a session as a missing-pre-implementation-review signal.
-  - "Reviewer caught" rate ([#271](https://github.com/frederick-douglas-pearce/agentfluent/issues/271)) — when architect / security-review / tester subagents *do* run, measure substantive findings and whether the parent acted on them.
-- Multi-axis priority scoring ([#272](https://github.com/frederick-douglas-pearce/agentfluent/issues/272)) — annotations approach per D017 + D021: extend the existing `priority_score` formula with a `quality_evidence_factor * W_QUALITY` term, expose per-axis `axis_scores: {cost, speed, quality}` and `primary_axis` as post-hoc annotations. Schema-additive, preserves `diff` comparison semantics.
-- Single-axis signal classification ([D022](.claude/specs/decisions.md)) — every `SignalType` maps to exactly one axis (no cross-cutting), with the mapping pinned as a module-level `SIGNAL_AXIS_MAP` constant.
-- CLI/JSON axis attribution ([#273](https://github.com/frederick-douglas-pearce/agentfluent/issues/273)) — recommendations name *which axis* triggered them (`[quality] 7 user corrections in 3 sessions — consider an architect agent for design review`).
-- Calibration sweep ([#274](https://github.com/frederick-douglas-pearce/agentfluent/issues/274)) — modeled on #260's pattern; tunes thresholds against real data before shipping. The calibration story gates between "implemented" and "shipped" for the v0.6 release.
-- Tier-2 stretch ([#275](https://github.com/frederick-douglas-pearce/agentfluent/issues/275)) — local-git correlation (feat→fix proximity, revert rate, file re-touch decay). Pulled in if Tier 1 lands cleanly; otherwise deferred to v0.7.
+  - User mid-flight corrections ([#269](https://github.com/frederick-douglas-pearce/agentfluent/issues/269)) — frequency of "no, do X instead" / "wait" / "actually" patterns as a parent-quality miss-rate proxy. 3-tier heuristic (strong override / write-tool primary gate / question suppression) keeps the false-positive rate low.
+  - File rework density ([#270](https://github.com/frederick-douglas-pearce/agentfluent/issues/270)) — same file edited at or above the calibrated threshold within a session as a missing-pre-implementation-review signal.
+  - Reviewer-caught rate ([#271](https://github.com/frederick-douglas-pearce/agentfluent/issues/271)) — when architect / security-review / tester subagents do run, measure substantive findings and whether the parent acted on them. Suffix-match between mentioned and edited paths bridges the relative-vs-absolute path mismatch (#322).
+- Multi-axis priority scoring ([#272](https://github.com/frederick-douglas-pearce/agentfluent/issues/272)) — annotations approach per D017 + D021: the existing `priority_score` formula gains a `quality_evidence_factor * W_QUALITY` term, and per-axis `axis_scores: {cost, speed, quality}` plus `primary_axis` are exposed as post-hoc annotations. Schema-additive, preserves `diff` comparison semantics.
+- Single-axis signal classification (D022) — every `SignalType` maps to exactly one axis (no cross-cutting), with the mapping pinned as a module-level `SIGNAL_AXIS_MAP` constant.
+- CLI/JSON axis attribution ([#273](https://github.com/frederick-douglas-pearce/agentfluent/issues/273)) — recommendations name *which axis* triggered them (`[quality] 7 user corrections in 3 sessions — consider an architect agent for design review`). Surfaces in the Recommendations table, JSON envelope, and `agentfluent diff` output.
+- Calibration sweep ([#274](https://github.com/frederick-douglas-pearce/agentfluent/issues/274)) — Tier-1 thresholds tuned against the dogfood corpus and validated post-fix in [#327](https://github.com/frederick-douglas-pearce/agentfluent/issues/327). USER_CORRECTION false-positive rate dropped from ~85% to 0/2 detections after pattern + wrapper-stripping fixes ([#321](https://github.com/frederick-douglas-pearce/agentfluent/issues/321), [#330](https://github.com/frederick-douglas-pearce/agentfluent/issues/330)); REVIEWER_CAUGHT `parent_acted` attribution went from 0/51 (0%) to 16/53 (30.2%) ([#322](https://github.com/frederick-douglas-pearce/agentfluent/issues/322)).
+- Date-range filtering ([#293](https://github.com/frederick-douglas-pearce/agentfluent/issues/293) epic) — `--since`/`--until` on `agentfluent analyze` and `agentfluent list` (half-open interval, ISO 8601 / date-only / relative `7d`/`12h`/`30m` formats); `window: {since, until}` block on `analyze --json` output. Closes the dogfood loop on "did my config fix work?" and enables retroactive baselines for `diff`.
+- Top-N priority fixes redesign ([#285](https://github.com/frederick-douglas-pearce/agentfluent/issues/285)) — the priority-fixes summary block above the Recommendations table now reads as a tight pointer list rather than re-stating the top rows.
+- ERROR_REGEX windowing in two more sites ([#281](https://github.com/frederick-douglas-pearce/agentfluent/issues/281)) — `compute_error_rate` and `_extract_error_signals` now scan only the leading 200 chars of `output_text`, mirroring the #241 bound on MCP tool results. Drops `ERROR_PATTERN` signal volume by 98% on the dogfood corpus by suppressing mid-text matches against code identifiers and architectural prose.
+- Burst-cluster error attribution ([#264](https://github.com/frederick-douglas-pearce/agentfluent/issues/264)) — `ToolBurst` now pairs `tool_use` to `tool_result` via the existing `index_tool_results_by_id` helper. Burst-classified clusters' `error_rate` reflects real paired-error data instead of always being 0.0; on the dogfood corpus 20.2% of bursts now carry at least one paired tool error, which unblocks the `_COMPLEX_MIN_ERROR_RATE` gate in `classify_complexity` for error-prone clusters.
+- Tier-2 stretch ([#275](https://github.com/frederick-douglas-pearce/agentfluent/issues/275)) — deferred to v0.7 per [D028](.claude/specs/decisions.md). The Tier-1 signals close the under-recommendation gap on review subagents; FEAT_FIX_PROXIMITY would add confirming evidence and is the natural co-design with v0.7's Tier-3 GitHub enrichment.
+
+**v0.7 (planned):**
+- Tier-2 quality signal: local git feat→fix proximity ([#275](https://github.com/frederick-douglas-pearce/agentfluent/issues/275)) — detect feat-then-fix commit pairs on shared files and correlate back to whether the originating session used review subagents.
+- Quality-axis Tier 3 — opt-in GitHub enrichment: PR review comment density and topic clustering on Claude-authored PRs, CI-failure-on-first-push rate, post-merge issue references.
 
 **Future:**
-- Quality-axis Tier 3 — opt-in GitHub enrichment: PR review comment density and topic clustering on Claude-authored PRs, CI-failure-on-first-push rate, post-merge issue references.
 - Time-series pricing data structure ([#80](https://github.com/frederick-douglas-pearce/agentfluent/issues/80)) + session-timestamp-aware cost calculation ([#81](https://github.com/frederick-douglas-pearce/agentfluent/issues/81)) + automated pricing updates ([#82](https://github.com/frederick-douglas-pearce/agentfluent/issues/82)).
 - Agent SDK main-session MCP + tool extraction ([#112](https://github.com/frederick-douglas-pearce/agentfluent/issues/112)).
 - Per-invocation token input/output split for more accurate cost estimates ([#143](https://github.com/frederick-douglas-pearce/agentfluent/issues/143)).
