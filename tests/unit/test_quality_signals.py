@@ -375,6 +375,53 @@ class TestUserCorrectionSystemWrapperStripping:
         assert signals[0].detail["total_user_messages"] == 1
         assert signals[0].detail["session_correction_rate"] == 1.0
 
+    def test_skill_metadata_block_does_not_fire(self) -> None:
+        """Claude Code injects a skill's ``SKILL.md`` content as a
+        standalone user message starting with ``Base directory for
+        this skill: <path>``. The markdown body can incidentally
+        contain trigger words (``no``, ``stop``, ``instead``) — none
+        of which are user corrections (#330 dogfood FP).
+
+        Pattern matches the opening sentence and consumes to end of
+        text; skill blocks are architecturally standalone messages."""
+        skill_block = (
+            "Base directory for this skill: /home/u/repo/.claude/skills/review\n\n"
+            "# Review Labels Skill\n\n"
+            "This skill reviews articles labeled since the last run. "
+            "If no previous run exists, use the last 3 days as the "
+            "default window. Stop processing when the input is empty. "
+            "Instead of fixing labels in place, write a correction list.\n"
+        )
+        messages = [
+            _assistant_with_write_tool(),
+            _user(skill_block),
+            _assistant_with_write_tool(),
+            _user(skill_block),
+        ]
+        # Both write-tool gates are open and both messages contain
+        # multiple trigger words, but the entire block is stripped so
+        # no signal fires.
+        assert extract_quality_signals(messages) == []
+
+    def test_skill_metadata_then_separate_prose_message_fires(self) -> None:
+        """Skill metadata is a whole-message wrapper. A subsequent
+        message containing genuine correction prose must still fire
+        — the skill block is stripped only from its own message."""
+        skill_block = (
+            "Base directory for this skill: /home/u/repo/.claude/skills/x\n\n"
+            "# Skill\n\n"
+            "Don't stop until the task is complete; instead of failing, "
+            "retry with a smaller batch.\n"
+        )
+        messages = [
+            _user(skill_block),
+            _assistant_with_write_tool(),
+            _user("no, that's wrong"),
+        ]
+        signals = extract_quality_signals(messages)
+        assert len(signals) == 1
+        assert signals[0].detail["matched_category"] == "strong"
+
 
 class TestUserCorrectionTightenedPatterns:
     """Tightened soft patterns (#321): interruption requires imperative
