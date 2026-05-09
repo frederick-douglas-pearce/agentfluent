@@ -129,6 +129,7 @@ def format_analysis_table(
     verbose: bool = False,
     show_diagnostics: bool = False,
     top_n: int = 5,
+    show_negative_savings: bool = False,
 ) -> None:
     """Render analyze output: token, cost, tool, agent, and diagnostics tables.
 
@@ -278,6 +279,7 @@ def format_analysis_table(
         if show_diagnostics:
             _format_diagnostics_table(
                 console, diag, verbose=verbose, top_n=top_n,
+                show_negative_savings=show_negative_savings,
             )
         else:
             _format_diagnostics_summary(console, diag)
@@ -325,6 +327,7 @@ def _format_diagnostics_table(
     *,
     verbose: bool = False,
     top_n: int = 5,
+    show_negative_savings: bool = False,
 ) -> None:
     """Render diagnostic signals and recommendations tables.
 
@@ -380,7 +383,11 @@ def _format_diagnostics_table(
 
     _format_deep_diagnostics(console, diag, verbose=verbose)
     _format_delegation_suggestions(console, diag, verbose=verbose)
-    _format_offload_candidates(console, diag, verbose=verbose)
+    _format_offload_candidates(
+        console, diag,
+        verbose=verbose,
+        show_negative_savings=show_negative_savings,
+    )
 
     console.print(GLOSSARY_FOOTNOTE, style="dim")
 
@@ -586,26 +593,16 @@ def _format_offload_candidates(
     diag: DiagnosticsResult,
     *,
     verbose: bool,
+    show_negative_savings: bool = False,
 ) -> None:
     """Render the "Offload Candidates" section (#189).
 
-    Compact table by default sorted by ``estimated_savings_usd``
-    descending — biggest dollar wins first; negative-savings rows
-    (offloading would cost MORE than staying on the parent because
-    the parent-thread cache is load-bearing) sink to the bottom.
-    Verbose adds the offload-flavored ``yaml_draft`` (parent → alt
-    model preamble + cost note + frontmatter + prompt) below each row.
-
-    Negative-savings rendering:
-      - savings cell: ``[red]+$X.XX[/red]`` (positive magnitude with a
-        ``+`` mnemonic for "this many additional dollars")
-      - Note column: includes ``"offload would cost MORE"`` so the
-        sign-flip in the savings cell isn't easy to misread
-      The same phrasing appears in the model's ``yaml_draft`` preamble,
-      so terminology stays consistent across compact + verbose views.
-
-    All JSONL/trace-derived strings (name, tools, cost_note, dedup_note)
-    pass through ``escape`` before hitting Rich.
+    Negative-savings rows ("offloading would cost MORE — parent-thread
+    cache is load-bearing") are hidden by default since #344: a section
+    named "Offload Candidates" full of "do not offload" rows misleads at
+    a glance. ``show_negative_savings=True`` opts back in; JSON output
+    is unaffected either way. When every row is filtered, the section
+    renders a one-line footnote so the diagnostic stays discoverable.
     """
     candidates = sorted(
         diag.offload_candidates,
@@ -615,7 +612,20 @@ def _format_offload_candidates(
     if not candidates:
         return
 
+    visible = (
+        candidates if show_negative_savings
+        else [c for c in candidates if c.estimated_savings_usd > 0]
+    )
+
     console.print("\n[bold]Offload Candidates[/bold]")
+    if not visible:
+        console.print(
+            f"[dim]No offload candidates surfaced ({len(candidates)} "
+            "negative-savings rows hidden — pass --show-negative-savings "
+            "to inspect).[/dim]",
+        )
+        return
+
     cand_table = Table(show_header=True, title_style="")
     cand_table.add_column("Name", style="cyan")
     cand_table.add_column("Confidence")
@@ -624,7 +634,7 @@ def _format_offload_candidates(
     cand_table.add_column("Est. savings", justify="right")
     cand_table.add_column("Note")
 
-    for cand in candidates:
+    for cand in visible:
         color = CONFIDENCE_COLORS.get(cand.confidence, "white")
         # Read tools/tools_note FLAT off the candidate, mirroring how
         # every other column reads from `OffloadCandidate` directly.
@@ -669,7 +679,7 @@ def _format_offload_candidates(
     console.print(cand_table)
 
     if verbose:
-        for cand in candidates:
+        for cand in visible:
             console.print()
             console.print(escape(cand.yaml_draft))
 

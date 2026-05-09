@@ -257,6 +257,16 @@ def analyze(
             "Diagnostic Signals are not affected."
         ),
     ),
+    show_negative_savings: bool = typer.Option(
+        False,
+        "--show-negative-savings",
+        help=(
+            "Include offload candidates whose savings is zero or negative "
+            "(offloading would cost MORE than staying on the parent thread). "
+            "Hidden by default — these patterns are informational, not "
+            "actionable. JSON output always carries the full list."
+        ),
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output."),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Show summary only."),
 ) -> None:
@@ -369,5 +379,5 @@ def analyze(
     else:
         format_analysis_table(
             console, result, verbose=verbose, show_diagnostics=diagnostics,
-            top_n=top_n,
+            top_n=top_n, show_negative_savings=show_negative_savings,
         )

@@ -104,11 +104,8 @@ class TestOffloadCandidatesSection:
         assert "8" in text  # cluster size
 
     def test_negative_savings_flips_sign_and_carries_warning(self) -> None:
-        # Architect Q1 verdict: render `+$X.XX` in red savings cell with
-        # the short `offload would cost MORE` note, matching the model's
-        # yaml_draft preamble phrasing. The verbose cost_note ("cache
-        # load-bearing...") lives in the --verbose YAML preamble, not
-        # the compact table — duplicating would just bloat the row.
+        # Negative-savings rows are hidden by default since #344;
+        # opt in to exercise the rendering path.
         diag = DiagnosticsResult(
             offload_candidates=[
                 _candidate(
@@ -121,19 +118,17 @@ class TestOffloadCandidatesSection:
                 ),
             ],
         )
-        text = _render(diag)
+        text = _render(diag, show_negative_savings=True)
         # Sign flip in the savings cell — magnitude with a `+` prefix.
         assert "+$2.50" in text
         # Short warning in the Note column.
         assert OFFLOAD_COST_MORE_NOTE in text
         # The verbose cost_note appears ONLY in --verbose mode.
         assert "load-bearing" not in text
-        verbose_text = _render(diag, verbose=True)
+        verbose_text = _render(diag, verbose=True, show_negative_savings=True)
         assert "load-bearing" in verbose_text
 
     def test_sorts_by_savings_descending_negatives_at_bottom(self) -> None:
-        # Architect Q2 verdict: biggest dollar wins first; negative-savings
-        # rows naturally sink to the bottom.
         diag = DiagnosticsResult(
             offload_candidates=[
                 _candidate(name="middle-row", estimated_savings_usd=0.50),
@@ -141,7 +136,7 @@ class TestOffloadCandidatesSection:
                 _candidate(name="bottom-row", estimated_savings_usd=-1.00),
             ],
         )
-        text = _render(diag)
+        text = _render(diag, show_negative_savings=True)
         top_idx = text.index("top-row")
         mid_idx = text.index("middle-row")
         bot_idx = text.index("bottom-row")
@@ -158,6 +153,49 @@ class TestOffloadCandidatesSection:
         assert "parent-thread offload candidate" in text
         assert "claude-opus-4-7" in text  # parent model
         assert "claude-sonnet-4-6" in text  # alt model
+
+    def test_negative_savings_hidden_by_default(self) -> None:
+        diag = DiagnosticsResult(
+            offload_candidates=[
+                _candidate(name="positive-row", estimated_savings_usd=2.00),
+                _candidate(name="negative-row", estimated_savings_usd=-1.50),
+            ],
+        )
+        text = _render(diag)
+        assert "positive-row" in text
+        assert "negative-row" not in text
+        assert "+$1.50" not in text  # the cost-MORE flip never renders
+        # Footnote suppressed when at least one positive row remains.
+        assert "negative-savings rows hidden" not in text
+
+    def test_all_negative_renders_footnote(self) -> None:
+        # When every candidate is anti-actionable, footnote points at
+        # the opt-in flag rather than rendering an empty section.
+        diag = DiagnosticsResult(
+            offload_candidates=[
+                _candidate(name="anti-1", estimated_savings_usd=-3.40),
+                _candidate(name="anti-2", estimated_savings_usd=-1.10),
+                _candidate(name="anti-3", estimated_savings_usd=-0.50),
+            ],
+        )
+        text = _render(diag)
+        assert "Offload Candidates" in text
+        assert "3 negative-savings rows hidden" in text
+        assert "--show-negative-savings" in text
+        for name in ("anti-1", "anti-2", "anti-3"):
+            assert name not in text
+
+    def test_show_negative_savings_passthrough_renders_all(self) -> None:
+        diag = DiagnosticsResult(
+            offload_candidates=[
+                _candidate(name="positive-row", estimated_savings_usd=2.00),
+                _candidate(name="negative-row", estimated_savings_usd=-1.50),
+            ],
+        )
+        text = _render(diag, show_negative_savings=True)
+        pos_idx = text.index("positive-row")
+        neg_idx = text.index("negative-row")
+        assert pos_idx < neg_idx  # positives still sort above negatives
 
     def test_dedup_note_surfaces_in_compact_view(self) -> None:
         diag = DiagnosticsResult(

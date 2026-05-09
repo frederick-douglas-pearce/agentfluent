@@ -61,6 +61,19 @@ class TestHelp:
         assert result.exit_code == 0
         assert "Examples" in result.stdout
 
+    def test_analyze_accepts_show_negative_savings_flag(
+        self, runner: CliRunner, cli_app: typer.Typer,
+    ) -> None:
+        # CliRunner truncates --help past a certain option count, so
+        # check the parser accepts the flag instead of asserting on the
+        # rendered help block.
+        result = runner.invoke(
+            cli_app,
+            ["analyze", "--project", "__nonexistent__", "--show-negative-savings"],
+        )
+        assert "No such option" not in result.output
+        assert "Unknown option" not in result.output
+
     def test_analyze_help_documents_since_until(
         self, runner: CliRunner, cli_app: typer.Typer,
     ) -> None:

@@ -269,16 +269,32 @@ def cluster_delegations(
 
 _SLUG_STRIP_RE = re.compile(r"[^a-z0-9-]")
 
+_NAME_STOPWORD_RE = re.compile(
+    r"^(?:\d+|v\d+|[0-9a-f]{7,})$",
+)
+"""Accidental identifiers (issue/PR numbers, version refs, SHA
+prefixes) — strip from auto-names but leave raw in JSON ``top_terms``
+and the description / prompt scaffold (#345). Run against the
+slug-sanitized form, so ``v0.6`` arrives as ``v06`` and matches
+``^v\\d+$``."""
+
 
 def synthesize_name(top_terms: list[str]) -> str:
     """Build a kebab-case agent name from the top TF-IDF terms.
 
     Prefers the first two terms when available; otherwise falls back to
     a generic placeholder. Not unique across clusters — the caller is
-    expected to show these as *drafts*, not final names.
+    expected to show these as *drafts*, not final names. Stopword
+    filter runs after slug sanitization but before first-two selection.
     """
-    cleaned = [_SLUG_STRIP_RE.sub("", t.lower().replace("_", "-")) for t in top_terms]
-    cleaned = [c for c in cleaned if c]
+    cleaned: list[str] = []
+    for term in top_terms:
+        slug = _SLUG_STRIP_RE.sub("", term.lower().replace("_", "-"))
+        if not slug:
+            continue
+        if _NAME_STOPWORD_RE.match(slug):
+            continue
+        cleaned.append(slug)
     if not cleaned:
         return "custom-agent"
     if len(cleaned) == 1:

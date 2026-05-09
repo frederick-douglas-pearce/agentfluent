@@ -252,6 +252,48 @@ class TestGenerateDraft:
         draft = generate_draft(self._cluster(top_terms=[]))
         assert draft.name == "custom-agent"
 
+    def test_pure_numeric_terms_skipped_in_name(self) -> None:
+        draft = generate_draft(
+            self._cluster(top_terms=["272", "axis", "bash", "review"]),
+        )
+        assert draft.name == "axis-bash"
+        # JSON ``top_terms`` stays raw so consumers can re-derive
+        # naming policy if they want a different one.
+        assert draft.top_terms == ["272", "axis", "bash", "review"]
+
+    def test_version_ref_terms_skipped_in_name(self) -> None:
+        draft = generate_draft(
+            self._cluster(top_terms=["v0", "v0.6", "diagnostics", "review"]),
+        )
+        assert draft.name == "diagnostics-review"
+
+    def test_sha_prefix_terms_skipped_in_name(self) -> None:
+        draft = generate_draft(
+            self._cluster(top_terms=["abcdef0", "deadbeef", "bash", "review"]),
+        )
+        assert draft.name == "bash-review"
+
+    def test_short_hex_words_not_stripped(self) -> None:
+        # Guard against the SHA-prefix regex over-stripping everyday
+        # English: ``add`` / ``cab`` are <7 chars so don't match.
+        draft = generate_draft(
+            self._cluster(top_terms=["add", "cab", "review"]),
+        )
+        assert draft.name == "add-cab"
+
+    def test_all_terms_stripped_falls_back_to_custom(self) -> None:
+        draft = generate_draft(
+            self._cluster(top_terms=["272", "v0", "deadbeef"]),
+        )
+        assert draft.name == "custom-agent"
+
+    def test_description_keeps_raw_top_terms(self) -> None:
+        draft = generate_draft(
+            self._cluster(top_terms=["272", "axis", "bash"]),
+        )
+        assert "272" in draft.description
+        assert "axis" in draft.description
+
     def test_read_only_low_volume_recommends_haiku(self) -> None:
         # Read-only tools with observable low-volume token data → "simple"
         # tier → Haiku. Tokens stay under the 2k simple ceiling.
