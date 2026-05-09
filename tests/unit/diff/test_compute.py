@@ -565,3 +565,109 @@ class TestDiffResultSerialization:
         round_tripped = DiffResult.model_validate(dumped)
         assert round_tripped.resolved_count == 1
         assert round_tripped.fail_on == Severity.WARNING
+
+
+class TestWindowPropagation:
+    """#342: ``diff`` carries the time-filter window from each input
+    envelope into the result so JSON consumers and the table renderer
+    can show what was compared without re-running analyze."""
+
+    _WINDOW = {
+        "since": "2026-04-25T00:00:00+00:00",
+        "until": "2026-05-03T00:00:00+00:00",
+        "session_count_before_filter": 12,
+        "session_count_after_filter": 6,
+    }
+
+    def test_window_present_on_both_sides(self) -> None:
+        baseline = _envelope(aggregated_recs=[]) | {"window": self._WINDOW}
+        current_window = self._WINDOW | {
+            "since": "2026-05-03T00:00:00+00:00",
+            "until": "2026-05-09T00:00:00+00:00",
+            "session_count_after_filter": 11,
+        }
+        current = _envelope(aggregated_recs=[]) | {"window": current_window}
+
+        result = compute_diff(baseline, current)
+
+        assert result.baseline_window is not None
+        assert result.baseline_window.session_count_after_filter == 6
+        assert result.current_window is not None
+        assert result.current_window.session_count_after_filter == 11
+
+    def test_window_missing_on_one_side_yields_none(self) -> None:
+        """A v0.6 baseline diffed against a v0.7 current: missing-side
+        stays ``None`` so the renderer can show ``(window not recorded)``
+        without fabricating dates."""
+        baseline = _envelope(aggregated_recs=[])
+        current = _envelope(aggregated_recs=[]) | {"window": self._WINDOW}
+
+        result = compute_diff(baseline, current)
+
+        assert result.baseline_window is None
+        assert result.current_window is not None
+
+    def test_window_explicit_null_yields_none(self) -> None:
+        baseline = _envelope(aggregated_recs=[]) | {"window": None}
+        current = _envelope(aggregated_recs=[]) | {"window": None}
+
+        result = compute_diff(baseline, current)
+
+        assert result.baseline_window is None
+        assert result.current_window is None
+
+    def test_window_serializes_through_json_roundtrip(self) -> None:
+        baseline = _envelope(aggregated_recs=[]) | {"window": self._WINDOW}
+        current = _envelope(aggregated_recs=[]) | {"window": self._WINDOW}
+
+        result = compute_diff(baseline, current)
+        round_tripped = DiffResult.model_validate(result.model_dump(mode="json"))
+
+        assert round_tripped.baseline_window is not None
+        assert round_tripped.baseline_window.session_count_after_filter == 6
+
+
+class TestDiagnosticsVersionPropagation:
+    """#347: ``diff`` reads ``diagnostics_version`` from each envelope
+    and exposes it on the result. Drift detection is silent when both
+    sides are unknown (avoids false alarms when comparing two pre-v0.7
+    envelopes)."""
+
+    def test_versions_present_and_equal(self) -> None:
+        baseline = _envelope(aggregated_recs=[]) | {"diagnostics_version": "0.7.0"}
+        current = _envelope(aggregated_recs=[]) | {"diagnostics_version": "0.7.0"}
+
+        result = compute_diff(baseline, current)
+
+        assert result.baseline_diagnostics_version == "0.7.0"
+        assert result.current_diagnostics_version == "0.7.0"
+        assert result.diagnostics_version_drift is False
+
+    def test_versions_present_and_differ(self) -> None:
+        baseline = _envelope(aggregated_recs=[]) | {"diagnostics_version": "0.6.1"}
+        current = _envelope(aggregated_recs=[]) | {"diagnostics_version": "0.7.0"}
+
+        result = compute_diff(baseline, current)
+
+        assert result.diagnostics_version_drift is True
+
+    def test_version_missing_on_one_side_does_not_count_as_drift(self) -> None:
+        """Drift is meaningful only when both sides attest a version. A
+        mixed pair could be different *or* the same — without the
+        baseline saying so, we can't claim drift."""
+        baseline = _envelope(aggregated_recs=[])
+        current = _envelope(aggregated_recs=[]) | {"diagnostics_version": "0.7.0"}
+
+        result = compute_diff(baseline, current)
+
+        assert result.baseline_diagnostics_version is None
+        assert result.current_diagnostics_version == "0.7.0"
+        assert result.diagnostics_version_drift is False
+
+    def test_version_empty_string_treated_as_missing(self) -> None:
+        baseline = _envelope(aggregated_recs=[]) | {"diagnostics_version": ""}
+        current = _envelope(aggregated_recs=[]) | {"diagnostics_version": "0.7.0"}
+
+        result = compute_diff(baseline, current)
+
+        assert result.baseline_diagnostics_version is None

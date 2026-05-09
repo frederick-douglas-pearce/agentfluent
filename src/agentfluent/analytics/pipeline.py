@@ -91,6 +91,12 @@ class AnalysisResult(BaseModel):
     session_count: int = 0
     diagnostics: DiagnosticsResult | None = None
     window: WindowMetadata | None = None
+    diagnostics_version: str | None = None
+    """Package version that produced this envelope. Stamped by the CLI
+    at emit time so ``diff`` can warn when baseline and current were
+    analyzed with different rule sets / calibration constants (#347).
+    ``None`` on legacy envelopes; populated as ``agentfluent.__version__``
+    by :mod:`agentfluent.cli.commands.analyze`."""
 
 
 def analyze_session(
