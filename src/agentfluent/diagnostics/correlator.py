@@ -8,6 +8,7 @@ for extensibility.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import ClassVar, Protocol
 
 from agentfluent.agents.models import is_builtin_agent
@@ -22,6 +23,21 @@ from agentfluent.diagnostics.models import (
     DiagnosticSignal,
     SignalType,
 )
+
+
+def _relpath(path: Path) -> str:
+    """Render ``path`` with ``$HOME`` replaced by ``~`` for message text.
+
+    Why: recommendation message strings are rendered into committed
+    README screenshots, so any absolute path leaks the contributor's
+    home directory into a public image (#340). The ``config_file`` field
+    on ``DiagnosticRecommendation`` keeps the absolute path for
+    programmatic consumers.
+    """
+    try:
+        return "~/" + str(path.relative_to(Path.home()))
+    except ValueError:
+        return str(path)
 
 
 class CorrelationRule(Protocol):
@@ -85,12 +101,12 @@ class AccessErrorRule:
 
         if config and not config.tools and not config.disallowed_tools:
             action = (
-                f"Add a 'tools' list to {config.file_path} "
+                f"Add a 'tools' list to {_relpath(config.file_path)} "
                 "to explicitly grant required tool access."
             )
         elif config and config.tools:
             action = (
-                f"Review the 'tools' list in {config.file_path} "
+                f"Review the 'tools' list in {_relpath(config.file_path)} "
                 "and ensure all required tools are included."
             )
         else:
@@ -142,14 +158,14 @@ class ErrorHandlingRule:
             )
             if has_error_guidance:
                 action = (
-                    f"The prompt in {config.file_path} mentions error handling, "
+                    f"The prompt in {_relpath(config.file_path)} mentions error handling, "
                     "but the agent still encounters errors. Consider more specific "
                     "recovery instructions."
                 )
             else:
                 action = (
                     f"Add error handling guidance to the prompt body "
-                    f"in {config.file_path}."
+                    f"in {_relpath(config.file_path)}."
                 )
         else:
             action = (
@@ -190,14 +206,14 @@ class TokenOutlierRule:
 
         if config and len(config.tools) > 8:
             action = (
-                f"Consider restricting the tools list in {config.file_path} "
+                f"Consider restricting the tools list in {_relpath(config.file_path)} "
                 "to only those needed for this agent's task."
             )
             target = "tools"
         elif config:
             action = (
                 f"Add more specific instructions to the prompt in "
-                f"{config.file_path} to reduce exploration."
+                f"{_relpath(config.file_path)} to reduce exploration."
             )
             target = "prompt"
         else:
@@ -242,13 +258,13 @@ class DurationOutlierRule:
         if config and config.model and "opus" in config.model.lower():
             action = (
                 f"If this agent's task is routine, consider switching "
-                f"from {config.model} to a faster model in {config.file_path}."
+                f"from {config.model} to a faster model in {_relpath(config.file_path)}."
             )
             target = "model"
         elif config:
             action = (
                 f"Add clearer task boundaries to the prompt in "
-                f"{config.file_path} to help the agent work more efficiently."
+                f"{_relpath(config.file_path)} to help the agent work more efficiently."
             )
             target = "prompt"
         else:
@@ -293,12 +309,12 @@ class PermissionFailureRule:
 
         if config and tool_name and tool_name not in config.tools:
             action = (
-                f"Add '{tool_name}' to the tools list in {config.file_path} "
+                f"Add '{tool_name}' to the tools list in {_relpath(config.file_path)} "
                 "(or remove it from disallowed_tools)."
             )
         elif config and tool_name in config.tools:
             action = (
-                f"'{tool_name}' is listed in {config.file_path} but was "
+                f"'{tool_name}' is listed in {_relpath(config.file_path)} but was "
                 "still denied -- check disallowed_tools and any hooks that "
                 "might block this tool."
             )
@@ -352,14 +368,14 @@ class RetryLoopRule:
             )
             if has_error_guidance:
                 action = (
-                    f"The prompt in {config.file_path} mentions error handling, "
+                    f"The prompt in {_relpath(config.file_path)} mentions error handling, "
                     "but the agent still retried without progress. Consider "
                     "more specific stop conditions or alternative-tool fallbacks."
                 )
             else:
                 action = (
                     f"Add explicit retry / fallback guidance to the prompt "
-                    f"in {config.file_path}."
+                    f"in {_relpath(config.file_path)}."
                 )
         else:
             action = (
@@ -406,7 +422,7 @@ class StuckPatternRule:
         if config:
             action = (
                 f"Add an explicit exit condition or progress check to the "
-                f"prompt in {config.file_path} (e.g., 'after 2 failed attempts, "
+                f"prompt in {_relpath(config.file_path)} (e.g., 'after 2 failed attempts, "
                 "return the error instead of retrying')."
             )
         else:
@@ -452,7 +468,7 @@ class ErrorSequenceRule:
 
         if config and len(config.tools) > 8:
             action = (
-                f"Review the tools list in {config.file_path} -- the agent "
+                f"Review the tools list in {_relpath(config.file_path)} -- the agent "
                 "may be reaching for tools it does not need, or a specific "
                 "tool may be misconfigured."
             )
@@ -460,7 +476,7 @@ class ErrorSequenceRule:
         elif config:
             action = (
                 f"Add fallback instructions to the prompt in "
-                f"{config.file_path} so the agent knows what to do when a "
+                f"{_relpath(config.file_path)} so the agent knows what to do when a "
                 "tool call fails repeatedly."
             )
             target = "prompt"
@@ -526,7 +542,7 @@ class ModelRoutingRule:
                 f"{invocation_count} invocations)",
             )
         if config:
-            action_parts.append(f"— edit the `model:` field in {config.file_path}.")
+            action_parts.append(f"— edit the `model:` field in {_relpath(config.file_path)}.")
             action = " ".join(action_parts)
         else:
             action = " ".join(action_parts) + "."

@@ -192,7 +192,12 @@ def _render_token_metrics(console: Console, result: DiffResult) -> None:
         "Cache efficiency",
         f"{tm.baseline_cache_efficiency:.1f}%",
         f"{tm.current_cache_efficiency:.1f}%",
-        _signed_float(tm.cache_efficiency_delta, precision=1, suffix="%"),
+        _signed_float(
+            tm.cache_efficiency_delta,
+            precision=1,
+            suffix="%",
+            higher_is_better=True,
+        ),
     )
     console.print(table)
     console.print()
@@ -294,16 +299,28 @@ def _axis_prefix(row: RecommendationDelta) -> str:
     return axis_label(axis)
 
 
-def _signed(value: float, formatted_abs: str) -> str:
+def _signed(
+    value: float, formatted_abs: str, *, higher_is_better: bool = False,
+) -> str:
     """Wrap a pre-formatted magnitude in red (+) / green (-) markup.
 
-    Positive deltas are red because in the diff context they represent
-    growth in undesirable metrics (cost, regressions); zero is uncolored.
+    For lower-is-better metrics (cost, tokens, regression counts) a positive
+    delta is bad and renders red. For higher-is-better metrics
+    (cache_efficiency), pass ``higher_is_better=True`` to invert: a positive
+    delta is good (green), a negative delta is bad (red). Zero is uncolored.
     """
     if value > 0:
-        return f"[red]+{formatted_abs}[/red]"
+        return (
+            f"[green]+{formatted_abs}[/green]"
+            if higher_is_better
+            else f"[red]+{formatted_abs}[/red]"
+        )
     if value < 0:
-        return f"[green]-{formatted_abs}[/green]"
+        return (
+            f"[red]-{formatted_abs}[/red]"
+            if higher_is_better
+            else f"[green]-{formatted_abs}[/green]"
+        )
     return formatted_abs
 
 
@@ -315,5 +332,11 @@ def _signed_cost(value: float) -> str:
     return _signed(value, format_cost(abs(value)))
 
 
-def _signed_float(value: float, *, precision: int, suffix: str = "") -> str:
-    return _signed(value, f"{abs(value):.{precision}f}{suffix}")
+def _signed_float(
+    value: float, *, precision: int, suffix: str = "", higher_is_better: bool = False,
+) -> str:
+    return _signed(
+        value,
+        f"{abs(value):.{precision}f}{suffix}",
+        higher_is_better=higher_is_better,
+    )
