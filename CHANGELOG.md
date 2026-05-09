@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.6.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.5.1...v0.6.0) (2026-05-09)
+
+
+### Features
+
+* **cli:** analyze --since/--until time filtering ([#297](https://github.com/frederick-douglas-pearce/agentfluent/issues/297)) ([#314](https://github.com/frederick-douglas-pearce/agentfluent/issues/314)) ([75c919a](https://github.com/frederick-douglas-pearce/agentfluent/commit/75c919aab090acae67c1c72326de5e61deaeab83))
+* **cli:** axis labels on recommendations in CLI/JSON/diff ([#273](https://github.com/frederick-douglas-pearce/agentfluent/issues/273)) ([#315](https://github.com/frederick-douglas-pearce/agentfluent/issues/315)) ([53a9202](https://github.com/frederick-douglas-pearce/agentfluent/commit/53a9202187a55058c16cc779eabf4c89daf4da30))
+* **cli:** list --since/--until time filtering ([#296](https://github.com/frederick-douglas-pearce/agentfluent/issues/296)) ([#312](https://github.com/frederick-douglas-pearce/agentfluent/issues/312)) ([a875e16](https://github.com/frederick-douglas-pearce/agentfluent/commit/a875e169fa6ba74e23018195c6bdc09041e771d4))
+* **cli:** redesign Top-N priority fixes block as a pointer list ([#285](https://github.com/frederick-douglas-pearce/agentfluent/issues/285)) ([#317](https://github.com/frederick-douglas-pearce/agentfluent/issues/317)) ([d5e438f](https://github.com/frederick-douglas-pearce/agentfluent/commit/d5e438f417d45349f33d92d23bf45b025c5894e8))
+* **cli:** window metadata in analyze --json output ([#298](https://github.com/frederick-douglas-pearce/agentfluent/issues/298)) ([#316](https://github.com/frederick-douglas-pearce/agentfluent/issues/316)) ([a35b1cc](https://github.com/frederick-douglas-pearce/agentfluent/commit/a35b1ccfccd0bf7ed14bee11c4222e316bdc6b9d))
+* **core:** datetime parsing utility for --since/--until input ([#295](https://github.com/frederick-douglas-pearce/agentfluent/issues/295)) ([#307](https://github.com/frederick-douglas-pearce/agentfluent/issues/307)) ([ac6856d](https://github.com/frederick-douglas-pearce/agentfluent/commit/ac6856d03a36c475ecbb4fb0ed1e3b042bee361c))
+* **core:** extract first_message_timestamp during session discovery ([#294](https://github.com/frederick-douglas-pearce/agentfluent/issues/294)) ([#305](https://github.com/frederick-douglas-pearce/agentfluent/issues/305)) ([9b6f7c9](https://github.com/frederick-douglas-pearce/agentfluent/commit/9b6f7c9fc2f479b0f330d028e090f4f7a1906482))
+* **core:** shared filter_sessions_by_time utility ([#301](https://github.com/frederick-douglas-pearce/agentfluent/issues/301)) ([#311](https://github.com/frederick-douglas-pearce/agentfluent/issues/311)) ([57005e1](https://github.com/frederick-douglas-pearce/agentfluent/commit/57005e175bb1d186e524bd28f4983c898da33efd))
+* **diagnostics:** capture tool_result.is_error per burst ([#264](https://github.com/frederick-douglas-pearce/agentfluent/issues/264)) ([#335](https://github.com/frederick-douglas-pearce/agentfluent/issues/335)) ([3a53a45](https://github.com/frederick-douglas-pearce/agentfluent/commit/3a53a4561ee8d9704ab44528bd1921ac38d48103))
+* **diagnostics:** file-rework density quality signal ([#270](https://github.com/frederick-douglas-pearce/agentfluent/issues/270)) ([#306](https://github.com/frederick-douglas-pearce/agentfluent/issues/306)) ([ee0d98c](https://github.com/frederick-douglas-pearce/agentfluent/commit/ee0d98c46c0270843da4238f2f04a88ac5d9c3e4))
+* **diagnostics:** multi-axis scoring + axis attribution ([#272](https://github.com/frederick-douglas-pearce/agentfluent/issues/272)) ([#310](https://github.com/frederick-douglas-pearce/agentfluent/issues/310)) ([9ce2854](https://github.com/frederick-douglas-pearce/agentfluent/commit/9ce2854b589e02a3e2ece8e399936681f2900165))
+* **diagnostics:** quality signal calibration constants + notebook section ([#274](https://github.com/frederick-douglas-pearce/agentfluent/issues/274)) ([#318](https://github.com/frederick-douglas-pearce/agentfluent/issues/318)) ([ef80c4f](https://github.com/frederick-douglas-pearce/agentfluent/commit/ef80c4fcfe7b7f2e18431c6a742547aa08eb4939))
+* **diagnostics:** reviewer-caught quality signal + _QualityRule base ([#271](https://github.com/frederick-douglas-pearce/agentfluent/issues/271)) ([#308](https://github.com/frederick-douglas-pearce/agentfluent/issues/308)) ([c73f94b](https://github.com/frederick-douglas-pearce/agentfluent/commit/c73f94b1eddb4631c7d0bf9b5eb34d5e4d2453b0))
+* **diagnostics:** user-correction quality signal + quality_signals module ([#269](https://github.com/frederick-douglas-pearce/agentfluent/issues/269)) ([#302](https://github.com/frederick-douglas-pearce/agentfluent/issues/302)) ([b0cf957](https://github.com/frederick-douglas-pearce/agentfluent/commit/b0cf957a568fe23ab0ec7167bcc44fd79c5520d7))
+
+
+### Bug Fixes
+
+* **cli,diagnostics:** cache_efficiency color direction + relativize config paths in messages ([#348](https://github.com/frederick-douglas-pearce/agentfluent/issues/348)) ([fb4cd54](https://github.com/frederick-douglas-pearce/agentfluent/commit/fb4cd54d55a9fe4d64e553db470905fc9c688aa1))
+* **core:** extract text from list-shape tool_result content ([#319](https://github.com/frederick-douglas-pearce/agentfluent/issues/319)) ([#320](https://github.com/frederick-douglas-pearce/agentfluent/issues/320)) ([92b4b19](https://github.com/frederick-douglas-pearce/agentfluent/commit/92b4b19938b1426e362d83dea37d922cc7fb90f7))
+* **diagnostics:** strip Claude Code skill-metadata from USER_CORRECTION scan ([#330](https://github.com/frederick-douglas-pearce/agentfluent/issues/330)) ([#332](https://github.com/frederick-douglas-pearce/agentfluent/issues/332)) ([2409621](https://github.com/frederick-douglas-pearce/agentfluent/commit/2409621f92213ce5072f9c3721ea60d9dcf2b561))
+* **diagnostics:** suffix-match REVIEWER_CAUGHT mentioned vs edited paths ([#322](https://github.com/frederick-douglas-pearce/agentfluent/issues/322)) ([#324](https://github.com/frederick-douglas-pearce/agentfluent/issues/324)) ([4127323](https://github.com/frederick-douglas-pearce/agentfluent/commit/41273230d5a4157195e17e24887bf8a7105513ed))
+* **diagnostics:** tighten USER_CORRECTION precision ([#321](https://github.com/frederick-douglas-pearce/agentfluent/issues/321)) ([#325](https://github.com/frederick-douglas-pearce/agentfluent/issues/325)) ([0eed264](https://github.com/frederick-douglas-pearce/agentfluent/commit/0eed264421c5df6d602499f5a97ff391dc39bb1f))
+
 ## [0.5.1](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.5.0...v0.5.1) (2026-05-05)
 
 Documentation catch-up release. v0.5.0 shipped to GitHub but the PyPI publish was deferred so the docs could land alongside it; v0.5.1 closes that gap.
