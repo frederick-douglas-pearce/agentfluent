@@ -537,3 +537,45 @@ primary_axis = max(AXIS_TIEBREAKER, key=lambda a: axis_scores[a])
 **Reference:** PM scope decision comment on #275 (issuecomment-4403479791).
 
 ---
+
+## D029: `--session` semantics breaking change — communicate via CHANGELOG, keep minor bump
+
+**Date:** 2026-05-09
+**Context:** D032 (in epic #351 body) changed `--session <uuid>` to auto-scope diagnostics, not just token/cost metrics. The same command (`analyze --session <uuid> --diagnostics`) now produces different output in v0.7 than v0.6: diagnostics aggregate over the named session only, instead of rolling up the entire window. This is a semantics-level breaking change that needs an explicit communication strategy. Surfaced as OQ1 in `prd-v0.7.md`.
+
+**Options considered:**
+- A) Conventional Commit `feat!:` to trigger a major version bump via release-please. Rejected on the grounds that 0.x explicitly reserves majors for 1.0.
+- B) Document under `BREAKING CHANGE:` in CHANGELOG, keep as a 0.7.0 minor bump.
+- C) Deprecation period: v0.7 keeps v0.6 behavior + emits a deprecation warning when `--session` is used without an explicit scope flag; v0.8 flips the default.
+
+**Decision:** Option B. Document the behavior change in CHANGELOG with `BREAKING CHANGE:` notation and a clear before/after example. Keep release-please's minor bump (0.7.0). Tracked by issue #360.
+
+**Rationale:**
+- The 0.x series leading zero already signals "expect breaking changes." A pre-1.0 deprecation period adds friction without buying meaningful safety, since AgentFluent has no external API consumers locked to v0.6 semantics.
+- The change makes `--session` consistent with how token/cost metrics already scope. The current rollup-with-session-flag behavior is a latent bug, not a feature anyone depends on.
+- Option C carries real cost: a temporary scope-disambiguation flag in v0.7 that gets removed in v0.8, plus the warning machinery and tests. Not worth it for a 0.x change.
+
+**Reference:** `prd-v0.7.md` §5 OQ1; epic #351 body (D032).
+
+---
+
+## D030: `agentfluent report` section ordering — metrics first, then diagnostics
+
+**Date:** 2026-05-09
+**Context:** Issue #354 specifies the section renderers for the new `agentfluent report` Markdown output (epic #351). The proposed order is summary → token metrics → agent metrics → diagnostics → offload → footer. An alternative is to lead with diagnostics (the actionable content) and place metrics after as supporting evidence. Surfaced as OQ2 in `prd-v0.7.md`.
+
+**Options considered:**
+- A) Metrics first, then diagnostics. Mirrors the `analyze` table order.
+- B) Diagnostics first, then metrics. Leads with actionable findings.
+
+**Decision:** Option A. Section order: Summary → Token Metrics → Agent Metrics → Diagnostics → Offload → Footer.
+
+**Rationale:**
+- Matches the `analyze` table order users already know, so a Markdown report reads as a faithful rendering of the same content rather than a re-ordered view.
+- Grounds the reader in the data before they encounter recommendations. The diagnostics section's findings reference metric values; reading metrics first means those references resolve immediately.
+- Diagnostics are not buried — the summary at the top can surface headline findings if needed without requiring the full diagnostics section to lead.
+- Reviewers who skim from the top of a PR comment get the headline summary first either way; the metrics-vs-diagnostics ordering matters more for full-document reads where the analyze-parity argument wins.
+
+**Reference:** `prd-v0.7.md` §5 OQ2; epic #351 body; issue #354.
+
+---
