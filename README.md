@@ -13,6 +13,18 @@ AgentFluent reads your local [Claude Code](https://code.claude.com) and [Claude 
 
 Born from [CodeFluent](https://github.com/frederick-douglas-pearce/codefluent) research that identified the agent-quality gap in 2026. See [`docs/AGENT_ANALYTICS_RESEARCH.md`](docs/AGENT_ANALYTICS_RESEARCH.md) for additional market analysis.
 
+## What AgentFluent Scores
+
+Every recommendation lands on one of three axes. CLI output prefixes each finding with `[cost]`, `[speed]`, or `[quality]` so you can prioritize by what matters right now:
+
+| Axis | What it tracks | Example finding |
+|------|----------------|-----------------|
+| **`[cost]`** | tokens, cache efficiency, model fit, offload candidates | This agent uses Opus where Sonnet would do |
+| **`[speed]`** | duration, retry density, tool-call churn, stuck patterns | This agent retries Bash 5× before giving up |
+| **`[quality]`** | user mid-flight corrections, file rework, reviewer-caught rate | This agent ships work that gets immediately rewritten |
+
+The three often trade off — saving cost can hurt quality, chasing speed can hurt cost. AgentFluent surfaces the trade-off rather than collapsing it to a single score.
+
 ## How It Compares
 
 The agent observability space is crowded — several tools capture what agents do. None diagnose *why* they misbehave or *what to change* from locally-persisted session data. In the table below, **"What's missing"** is what the tool *does not do* (not what it provides):
