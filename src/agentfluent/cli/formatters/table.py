@@ -129,6 +129,7 @@ def format_analysis_table(
     verbose: bool = False,
     show_diagnostics: bool = False,
     top_n: int = 5,
+    show_negative_savings: bool = False,
 ) -> None:
     """Render analyze output: token, cost, tool, agent, and diagnostics tables.
 
@@ -278,6 +279,7 @@ def format_analysis_table(
         if show_diagnostics:
             _format_diagnostics_table(
                 console, diag, verbose=verbose, top_n=top_n,
+                show_negative_savings=show_negative_savings,
             )
         else:
             _format_diagnostics_summary(console, diag)
@@ -325,6 +327,7 @@ def _format_diagnostics_table(
     *,
     verbose: bool = False,
     top_n: int = 5,
+    show_negative_savings: bool = False,
 ) -> None:
     """Render diagnostic signals and recommendations tables.
 
@@ -380,7 +383,11 @@ def _format_diagnostics_table(
 
     _format_deep_diagnostics(console, diag, verbose=verbose)
     _format_delegation_suggestions(console, diag, verbose=verbose)
-    _format_offload_candidates(console, diag, verbose=verbose)
+    _format_offload_candidates(
+        console, diag,
+        verbose=verbose,
+        show_negative_savings=show_negative_savings,
+    )
 
     console.print(GLOSSARY_FOOTNOTE, style="dim")
 
@@ -586,33 +593,59 @@ def _format_offload_candidates(
     diag: DiagnosticsResult,
     *,
     verbose: bool,
+    show_negative_savings: bool = False,
 ) -> None:
     """Render the "Offload Candidates" section (#189).
 
-    Compact table by default sorted by ``estimated_savings_usd``
-    descending — biggest dollar wins first; negative-savings rows
-    (offloading would cost MORE than staying on the parent because
-    the parent-thread cache is load-bearing) sink to the bottom.
+    By default (``show_negative_savings=False``) suppresses rows where
+    ``estimated_savings_usd <= 0``: those represent patterns where
+    offloading would cost MORE than staying on the parent thread because
+    parent-thread cache is load-bearing — they're informational, not
+    actionable, and a section named "Offload Candidates" full of
+    "do not offload" rows misleads at a glance (#344). The full set
+    remains in JSON for consumers who want to see everything.
+
+    When all candidates were filtered, render a one-line footnote
+    pointing at ``--show-negative-savings`` so the user knows the
+    section wasn't silently empty.
+
+    Compact table sorted by ``estimated_savings_usd`` descending —
+    biggest dollar wins first. With ``--show-negative-savings``,
+    negative rows sort to the bottom under existing semantics.
     Verbose adds the offload-flavored ``yaml_draft`` (parent → alt
     model preamble + cost note + frontmatter + prompt) below each row.
 
-    Negative-savings rendering:
+    Negative-savings rendering (only with the flag):
       - savings cell: ``[red]+$X.XX[/red]`` (positive magnitude with a
         ``+`` mnemonic for "this many additional dollars")
       - Note column: includes ``"offload would cost MORE"`` so the
         sign-flip in the savings cell isn't easy to misread
-      The same phrasing appears in the model's ``yaml_draft`` preamble,
-      so terminology stays consistent across compact + verbose views.
 
     All JSONL/trace-derived strings (name, tools, cost_note, dedup_note)
     pass through ``escape`` before hitting Rich.
     """
-    candidates = sorted(
+    all_candidates = sorted(
         diag.offload_candidates,
         key=lambda c: c.estimated_savings_usd,
         reverse=True,
     )
+    if not all_candidates:
+        return
+
+    if show_negative_savings:
+        candidates = all_candidates
+        hidden_count = 0
+    else:
+        candidates = [c for c in all_candidates if c.estimated_savings_usd > 0]
+        hidden_count = len(all_candidates) - len(candidates)
+
     if not candidates:
+        console.print("\n[bold]Offload Candidates[/bold]")
+        console.print(
+            f"[dim]No offload candidates surfaced ({hidden_count} "
+            "negative-savings rows hidden — pass --show-negative-savings "
+            "to inspect).[/dim]",
+        )
         return
 
     console.print("\n[bold]Offload Candidates[/bold]")

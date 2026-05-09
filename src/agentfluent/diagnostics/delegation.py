@@ -269,6 +269,24 @@ def cluster_delegations(
 
 _SLUG_STRIP_RE = re.compile(r"[^a-z0-9-]")
 
+_NAME_STOPWORD_RE = re.compile(
+    r"^(?:\d+|v\d+|[0-9a-f]{7,})$",
+)
+"""Tokens that look like accidental identifiers rather than reusable
+workflow terms (#345). Run against the slug-sanitized form (lowercase,
+non-``[a-z0-9-]`` stripped — so ``v0.6`` arrives as ``v06`` and matches
+``^v\\d+$``). Three alternatives:
+
+* pure-numeric — issue/PR numbers, occasionally HTTP status codes (TF-IDF
+  co-occurrence keeps companion terms descriptive in the latter case);
+* ``v``-prefix numeric — version refs like ``v0``, ``v06`` (post-slug
+  ``v0.6``), ``v1``;
+* seven-plus hex chars — SHA-prefix tokens.
+
+Filter applies only to cluster auto-naming. ``synthesize_description``,
+``_synthesize_prompt``, and the JSON ``top_terms`` array stay raw so a
+human / CI consumer can still see the unfiltered signal."""
+
 
 def synthesize_name(top_terms: list[str]) -> str:
     """Build a kebab-case agent name from the top TF-IDF terms.
@@ -276,9 +294,20 @@ def synthesize_name(top_terms: list[str]) -> str:
     Prefers the first two terms when available; otherwise falls back to
     a generic placeholder. Not unique across clusters — the caller is
     expected to show these as *drafts*, not final names.
+
+    Stopword filter runs after slug sanitization (so ``v0.6`` lowercase
+    is matched directly, and ``272`` survives ``_SLUG_STRIP_RE``
+    unchanged) but before first-two selection — getting the order wrong
+    produces empty names or wrong terms.
     """
-    cleaned = [_SLUG_STRIP_RE.sub("", t.lower().replace("_", "-")) for t in top_terms]
-    cleaned = [c for c in cleaned if c]
+    cleaned: list[str] = []
+    for term in top_terms:
+        slug = _SLUG_STRIP_RE.sub("", term.lower().replace("_", "-"))
+        if not slug:
+            continue
+        if _NAME_STOPWORD_RE.match(slug):
+            continue
+        cleaned.append(slug)
     if not cleaned:
         return "custom-agent"
     if len(cleaned) == 1:

@@ -27,6 +27,7 @@ def render_section(
     *,
     verbose: bool = False,
     width: int = 120,
+    **formatter_kwargs: Any,
 ) -> str:
     """Run a CLI formatter against a recording ``Console`` and return text.
 
@@ -36,9 +37,12 @@ def render_section(
     formatter call → ``export_text()`` lives in one place. ``force_terminal``
     is fixed to ``False`` so the renderer doesn't pick up pytest's TTY
     state (#265).
+
+    Extra keyword arguments are forwarded to ``formatter`` — used for
+    flag-gated rendering paths like ``show_negative_savings`` (#344).
     """
     console = Console(record=True, width=width, force_terminal=False)
-    formatter(console, diag, verbose=verbose)
+    formatter(console, diag, verbose=verbose, **formatter_kwargs)
     return console.export_text()
 
 

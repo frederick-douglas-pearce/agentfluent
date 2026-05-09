@@ -252,6 +252,65 @@ class TestGenerateDraft:
         draft = generate_draft(self._cluster(top_terms=[]))
         assert draft.name == "custom-agent"
 
+    def test_pure_numeric_terms_skipped_in_name(self) -> None:
+        """#345: pure-numeric tokens (issue/PR numbers) are accidental
+        identifiers, not reusable workflow terms — strip from the name
+        but keep raw in JSON ``top_terms`` so a consumer can still see
+        the unfiltered signal."""
+        draft = generate_draft(
+            self._cluster(top_terms=["272", "axis", "bash", "review"]),
+        )
+        assert draft.name == "axis-bash"
+        # JSON ``top_terms`` array stays raw — consumers can re-derive
+        # naming policy if they want a different one.
+        assert draft.top_terms == ["272", "axis", "bash", "review"]
+
+    def test_version_ref_terms_skipped_in_name(self) -> None:
+        """#345: version refs like ``v0`` and ``v0.6`` (post-slug ``v06``)
+        get stripped — they describe a one-off task that won't repeat,
+        not a reusable workflow pattern."""
+        draft = generate_draft(
+            self._cluster(top_terms=["v0", "v0.6", "diagnostics", "review"]),
+        )
+        assert draft.name == "diagnostics-review"
+
+    def test_sha_prefix_terms_skipped_in_name(self) -> None:
+        """#345: 7+ hex char tokens are likely SHA prefixes — accidental
+        commit references, not workflow descriptors."""
+        draft = generate_draft(
+            self._cluster(top_terms=["abcdef0", "deadbeef", "bash", "review"]),
+        )
+        assert draft.name == "bash-review"
+
+    def test_short_hex_words_not_stripped(self) -> None:
+        """#345: 6-char-or-shorter hex-shaped tokens (``cab``, ``add``,
+        ``bed``) are real words; only the SHA-shaped 7+ alternative
+        applies. Ensures the regex doesn't over-strip everyday English."""
+        draft = generate_draft(
+            self._cluster(top_terms=["add", "cab", "review"]),
+        )
+        assert draft.name == "add-cab"
+
+    def test_all_terms_stripped_falls_back_to_custom(self) -> None:
+        """#345: when every top-term is a stopword, the synthesizer
+        falls back to ``custom-agent`` rather than producing an empty
+        slug or a silently-misleading partial name."""
+        draft = generate_draft(
+            self._cluster(top_terms=["272", "v0", "deadbeef"]),
+        )
+        assert draft.name == "custom-agent"
+
+    def test_description_keeps_raw_top_terms(self) -> None:
+        """#345: the stopword filter applies *only* to the slug name.
+        Description is a verbose blob that absorbs the noise — stripping
+        there would drop information without helping readability."""
+        draft = generate_draft(
+            self._cluster(top_terms=["272", "axis", "bash"]),
+        )
+        # Description contains the raw first three terms.
+        assert "272" in draft.description
+        assert "axis" in draft.description
+
     def test_read_only_low_volume_recommends_haiku(self) -> None:
         # Read-only tools with observable low-volume token data → "simple"
         # tier → Haiku. Tokens stay under the 2k simple ceiling.
