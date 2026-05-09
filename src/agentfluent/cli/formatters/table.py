@@ -597,58 +597,35 @@ def _format_offload_candidates(
 ) -> None:
     """Render the "Offload Candidates" section (#189).
 
-    By default (``show_negative_savings=False``) suppresses rows where
-    ``estimated_savings_usd <= 0``: those represent patterns where
-    offloading would cost MORE than staying on the parent thread because
-    parent-thread cache is load-bearing — they're informational, not
-    actionable, and a section named "Offload Candidates" full of
-    "do not offload" rows misleads at a glance (#344). The full set
-    remains in JSON for consumers who want to see everything.
-
-    When all candidates were filtered, render a one-line footnote
-    pointing at ``--show-negative-savings`` so the user knows the
-    section wasn't silently empty.
-
-    Compact table sorted by ``estimated_savings_usd`` descending —
-    biggest dollar wins first. With ``--show-negative-savings``,
-    negative rows sort to the bottom under existing semantics.
-    Verbose adds the offload-flavored ``yaml_draft`` (parent → alt
-    model preamble + cost note + frontmatter + prompt) below each row.
-
-    Negative-savings rendering (only with the flag):
-      - savings cell: ``[red]+$X.XX[/red]`` (positive magnitude with a
-        ``+`` mnemonic for "this many additional dollars")
-      - Note column: includes ``"offload would cost MORE"`` so the
-        sign-flip in the savings cell isn't easy to misread
-
-    All JSONL/trace-derived strings (name, tools, cost_note, dedup_note)
-    pass through ``escape`` before hitting Rich.
+    Negative-savings rows ("offloading would cost MORE — parent-thread
+    cache is load-bearing") are hidden by default since #344: a section
+    named "Offload Candidates" full of "do not offload" rows misleads at
+    a glance. ``show_negative_savings=True`` opts back in; JSON output
+    is unaffected either way. When every row is filtered, the section
+    renders a one-line footnote so the diagnostic stays discoverable.
     """
-    all_candidates = sorted(
+    candidates = sorted(
         diag.offload_candidates,
         key=lambda c: c.estimated_savings_usd,
         reverse=True,
     )
-    if not all_candidates:
+    if not candidates:
         return
 
-    if show_negative_savings:
-        candidates = all_candidates
-        hidden_count = 0
-    else:
-        candidates = [c for c in all_candidates if c.estimated_savings_usd > 0]
-        hidden_count = len(all_candidates) - len(candidates)
+    visible = (
+        candidates if show_negative_savings
+        else [c for c in candidates if c.estimated_savings_usd > 0]
+    )
 
-    if not candidates:
-        console.print("\n[bold]Offload Candidates[/bold]")
+    console.print("\n[bold]Offload Candidates[/bold]")
+    if not visible:
         console.print(
-            f"[dim]No offload candidates surfaced ({hidden_count} "
+            f"[dim]No offload candidates surfaced ({len(candidates)} "
             "negative-savings rows hidden — pass --show-negative-savings "
             "to inspect).[/dim]",
         )
         return
 
-    console.print("\n[bold]Offload Candidates[/bold]")
     cand_table = Table(show_header=True, title_style="")
     cand_table.add_column("Name", style="cyan")
     cand_table.add_column("Confidence")
@@ -657,7 +634,7 @@ def _format_offload_candidates(
     cand_table.add_column("Est. savings", justify="right")
     cand_table.add_column("Note")
 
-    for cand in candidates:
+    for cand in visible:
         color = CONFIDENCE_COLORS.get(cand.confidence, "white")
         # Read tools/tools_note FLAT off the candidate, mirroring how
         # every other column reads from `OffloadCandidate` directly.
@@ -702,7 +679,7 @@ def _format_offload_candidates(
     console.print(cand_table)
 
     if verbose:
-        for cand in candidates:
+        for cand in visible:
             console.print()
             console.print(escape(cand.yaml_draft))
 

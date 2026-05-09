@@ -64,17 +64,13 @@ class TestHelp:
     def test_analyze_accepts_show_negative_savings_flag(
         self, runner: CliRunner, cli_app: typer.Typer,
     ) -> None:
-        """``--show-negative-savings`` is wired (#344). Click's CliRunner
-        truncates the rendered ``--help`` block past a certain option
-        count, so asserting on help-text presence is unreliable; instead,
-        invoke with a known-bad project and check the flag itself doesn't
-        produce a 'No such option' parse error before the project lookup
-        fails."""
+        # CliRunner truncates --help past a certain option count, so
+        # check the parser accepts the flag instead of asserting on the
+        # rendered help block.
         result = runner.invoke(
             cli_app,
             ["analyze", "--project", "__nonexistent__", "--show-negative-savings"],
         )
-        # Project not found, but the flag was accepted by the parser.
         assert "No such option" not in result.output
         assert "Unknown option" not in result.output
 
