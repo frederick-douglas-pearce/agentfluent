@@ -5,7 +5,12 @@ from pathlib import Path
 import pytest
 
 from agentfluent.config.models import AgentConfig, Scope, Severity
-from agentfluent.diagnostics.correlator import correlate as _correlate_pairs
+from agentfluent.diagnostics.correlator import (
+    _relpath,
+)
+from agentfluent.diagnostics.correlator import (
+    correlate as _correlate_pairs,
+)
 from agentfluent.diagnostics.models import (
     DiagnosticRecommendation,
     DiagnosticSignal,
@@ -782,3 +787,33 @@ class TestReviewerCaughtRule:
     def test_agent_name_appears_in_action(self) -> None:
         recs = correlate([self._signal(agent_type="code-reviewer")])
         assert "code-reviewer" in recs[0].action
+
+
+class TestRelpath:
+    """``_relpath`` rewrites ``$HOME`` to ``~`` in message text (#340)."""
+
+    def test_path_under_home_becomes_tilde_relative(self) -> None:
+        path = Path.home() / ".claude/agents/architect.md"
+        assert _relpath(path) == "~/.claude/agents/architect.md"
+
+    def test_path_outside_home_unchanged(self) -> None:
+        path = Path("/etc/agentfluent/global.md")
+        assert _relpath(path) == "/etc/agentfluent/global.md"
+
+    def test_recommendation_message_uses_relpath_when_under_home(self) -> None:
+        config = AgentConfig(
+            name="pm",
+            file_path=Path.home() / ".claude/agents/pm.md",
+            scope=Scope.USER,
+            tools=[],
+            disallowed_tools=[],
+            prompt_body="You are a PM agent.",
+            model="claude-sonnet-4-6",
+        )
+        recs = correlate([_signal(keyword="failed")], {"pm": config})
+        assert len(recs) == 1
+        assert "~/.claude/agents/pm.md" in recs[0].action
+        assert str(Path.home()) not in recs[0].action
+        # Programmatic field keeps the absolute path for JSON consumers.
+        assert recs[0].config_file == str(Path.home() / ".claude/agents/pm.md")
+
