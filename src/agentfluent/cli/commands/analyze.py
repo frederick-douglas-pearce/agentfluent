@@ -9,6 +9,7 @@ from typing import Optional
 import typer
 from rich.console import Console
 
+from agentfluent import __version__
 from agentfluent.analytics.pipeline import AnalysisResult, analyze_sessions
 from agentfluent.cli._time_args import parse_time_window
 from agentfluent.cli.exit_codes import EXIT_NO_DATA, EXIT_USER_ERROR
@@ -359,6 +360,7 @@ def analyze(
         _apply_min_severity(result, min_severity)
 
     result.window = window_metadata
+    result.diagnostics_version = __version__
 
     if format == "json":
         _print_json(result, quiet=quiet, project_name=project_info.display_name)

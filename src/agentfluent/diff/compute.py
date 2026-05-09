@@ -17,6 +17,7 @@ from typing import Any
 
 from agentfluent.analytics.tokens import Origin
 from agentfluent.config.models import SEVERITY_RANK, Severity
+from agentfluent.core.filtering import WindowMetadata
 from agentfluent.diagnostics.models import Axis, SignalType
 from agentfluent.diff.models import (
     AgentTypeDelta,
@@ -73,9 +74,35 @@ def compute_diff(
         by_agent_type=agent_deltas,
         baseline_session_count=int(baseline.get("session_count", 0) or 0),
         current_session_count=int(current.get("session_count", 0) or 0),
+        baseline_window=_load_window(baseline),
+        current_window=_load_window(current),
+        baseline_diagnostics_version=_load_version(baseline),
+        current_diagnostics_version=_load_version(current),
         fail_on=fail_on,
         regression_detected=regression,
     )
+
+
+def _load_window(envelope: dict[str, Any]) -> WindowMetadata | None:
+    """Deserialize ``envelope['window']`` to ``WindowMetadata``.
+
+    Returns ``None`` for unfiltered runs (key present but value is
+    ``None``) and for legacy envelopes that predate #316 (key absent).
+    """
+    raw = envelope.get("window")
+    if not isinstance(raw, dict):
+        return None
+    return WindowMetadata.model_validate(raw)
+
+
+def _load_version(envelope: dict[str, Any]) -> str | None:
+    """Read ``diagnostics_version`` from envelope, returning ``None``
+    when absent (legacy v0.6 envelopes) or empty.
+    """
+    raw = envelope.get("diagnostics_version")
+    if not isinstance(raw, str) or not raw:
+        return None
+    return raw
 
 
 def has_regression(result: DiffResult) -> bool:

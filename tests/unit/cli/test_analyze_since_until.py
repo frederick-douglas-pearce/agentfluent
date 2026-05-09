@@ -253,3 +253,21 @@ class TestWindowMetadataInJsonOutput:
         assert window["until"].startswith("2026-05-01")
         assert window["session_count_before_filter"] == 1
         assert window["session_count_after_filter"] == 1
+
+
+class TestDiagnosticsVersionStamp:
+    """``analyze --json`` envelopes carry ``diagnostics_version`` so
+    ``diff`` can warn on detector-version drift between runs (#347)."""
+
+    def test_envelope_includes_package_version(
+        self, runner: CliRunner, cli_app: typer.Typer, populated_home: Path,
+    ) -> None:
+        from agentfluent import __version__
+
+        result = runner.invoke(
+            cli_app, ["analyze", "--project", "project", "--json"],
+        )
+        assert result.exit_code == EXIT_OK
+        data = parse_json_output(result.stdout, expected_command="analyze")
+        assert isinstance(data, dict)
+        assert data.get("diagnostics_version") == __version__

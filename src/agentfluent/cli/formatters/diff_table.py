@@ -25,6 +25,7 @@ from agentfluent.cli.formatters.helpers import (
 if TYPE_CHECKING:
     from rich.console import Console
 
+    from agentfluent.core.filtering import WindowMetadata
     from agentfluent.diff.models import (
         DiffResult,
         ModelTokenDelta,
@@ -58,13 +59,81 @@ def _render_summary(console: Console, result: DiffResult) -> None:
         f"[bold]Resolved:[/bold] {result.resolved_count}",
         f"[bold]Persisting:[/bold] {result.persisting_count}",
     ]
-    if result.baseline_session_count or result.current_session_count:
+    has_window = (
+        result.baseline_window is not None or result.current_window is not None
+    )
+    if not has_window and (
+        result.baseline_session_count or result.current_session_count
+    ):
         pieces.append(
             f"[dim]Sessions: {result.baseline_session_count} "
             f"→ {result.current_session_count}[/dim]",
         )
     console.print("  ".join(pieces))
+
+    if has_window:
+        baseline_label = _format_window_side(
+            result.baseline_window, result.baseline_session_count,
+        )
+        current_label = _format_window_side(
+            result.current_window, result.current_session_count,
+        )
+        console.print(
+            f"[dim]Baseline: {baseline_label}  |  Current: {current_label}[/dim]",
+        )
+
+    version_line = _version_drift_line(result)
+    if version_line is not None:
+        console.print(version_line)
+
     console.print()
+
+
+def _format_window_side(
+    window: WindowMetadata | None, session_count: int,
+) -> str:
+    """Render one half of the baseline/current window summary line.
+
+    ``None`` window means the input envelope predates window stamping
+    (#316) or was an unfiltered run with no window block at all — we
+    can't disambiguate, so both render as ``(window not recorded)`` per
+    #342's acceptance criterion.
+    """
+    if window is None:
+        return f"(window not recorded, {session_count} sessions)"
+    since = window.since.date().isoformat() if window.since else "*"
+    until = window.until.date().isoformat() if window.until else "*"
+    return f"{since} → {until} ({window.session_count_after_filter} sessions)"
+
+
+def _version_drift_line(result: DiffResult) -> str | None:
+    """Return the diagnostics-version warning line, or ``None`` if silent.
+
+    Three cases:
+      * both versions present and equal — return ``None`` (no warning).
+      * both present and differ — yellow drift warning with both versions.
+      * either missing — dim "(version unknown)" line so a CI consumer
+        comparing a v0.6 baseline against a v0.7 current sees that detector
+        sensitivity may have shifted, without claiming the magnitude.
+    """
+    baseline = result.baseline_diagnostics_version
+    current = result.current_diagnostics_version
+    if baseline is None or current is None:
+        if baseline is None and current is None:
+            return None  # both legacy: no information either way
+        which = "baseline" if baseline is None else "current"
+        return (
+            f"[dim]⚠ Diagnostics version unknown for {which} "
+            "envelope — signal counts may include detector-sensitivity "
+            "changes.[/dim]"
+        )
+    if baseline == current:
+        return None
+    return (
+        f"[yellow]⚠ Diagnostics version drift:[/yellow] baseline "
+        f"v{baseline}, current v{current} — signal counts may not be "
+        "directly comparable."
+    )
 
 
 def _render_recommendations(

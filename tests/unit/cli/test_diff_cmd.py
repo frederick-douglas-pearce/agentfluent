@@ -296,6 +296,49 @@ class TestOutputFormats:
         assert "New Recommendations" in result.output
         assert "Token Metrics" in result.output
 
+    def test_json_carries_window_and_version_fields(
+        self,
+        runner: CliRunner,
+        cli_app: typer.Typer,
+        tmp_path: Path,
+    ) -> None:
+        """#342/#347: ``diff --json`` surfaces baseline/current window
+        and diagnostics_version at the top of ``data`` so CI consumers
+        can branch on detector-version drift without re-running analyze."""
+        window_v1 = {
+            "since": "2026-04-25T00:00:00+00:00",
+            "until": "2026-05-03T00:00:00+00:00",
+            "session_count_before_filter": 12,
+            "session_count_after_filter": 6,
+        }
+        window_v2 = {
+            **window_v1,
+            "since": "2026-05-03T00:00:00+00:00",
+            "until": "2026-05-09T00:00:00+00:00",
+            "session_count_after_filter": 11,
+        }
+        baseline = _write_envelope(
+            tmp_path / "baseline.json",
+            _data() | {"window": window_v1, "diagnostics_version": "0.6.1"},
+        )
+        current = _write_envelope(
+            tmp_path / "current.json",
+            _data() | {"window": window_v2, "diagnostics_version": "0.7.0"},
+        )
+
+        result = runner.invoke(
+            cli_app,
+            ["diff", str(baseline), str(current), "--json", "--fail-on", "off"],
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)["data"]
+
+        assert data["baseline_window"]["session_count_after_filter"] == 6
+        assert data["current_window"]["session_count_after_filter"] == 11
+        assert data["baseline_diagnostics_version"] == "0.6.1"
+        assert data["current_diagnostics_version"] == "0.7.0"
+        assert data["diagnostics_version_drift"] is True
+
     def test_help_includes_examples(
         self,
         runner: CliRunner,

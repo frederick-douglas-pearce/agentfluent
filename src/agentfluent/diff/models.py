@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, computed_field
 
 from agentfluent.analytics.tokens import Origin
 from agentfluent.config.models import Severity
+from agentfluent.core.filtering import WindowMetadata
 from agentfluent.diagnostics.models import Axis, SignalType
 
 DeltaStatus = Literal["new", "resolved", "persisting"]
@@ -156,6 +157,36 @@ class DiffResult(BaseModel):
 
     baseline_session_count: int = 0
     current_session_count: int = 0
+
+    baseline_window: WindowMetadata | None = None
+    current_window: WindowMetadata | None = None
+    """Time-filter window metadata copied from each input envelope (#342).
+    ``None`` for unfiltered runs and for legacy envelopes that predate
+    ``analyze --since/--until`` (#316). Renderers print
+    ``(window not recorded)`` in the latter case."""
+
+    baseline_diagnostics_version: str | None = None
+    current_diagnostics_version: str | None = None
+    """Package version that produced each input envelope (#347). ``None``
+    for envelopes that predate v0.7. ``diff`` warns when both are present
+    and differ — signal counts may not be directly comparable across
+    rule-set / calibration changes."""
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def diagnostics_version_drift(self) -> bool:
+        """``True`` iff both versions are present and differ.
+
+        ``None`` on either side does not count as drift — the warning copy
+        differentiates "unknown" from "mismatched" so a v0.6 baseline
+        being re-diffed against a v0.7 current doesn't fire a false alarm
+        about regressions in detector sensitivity it can't actually
+        attest to."""
+        baseline = self.baseline_diagnostics_version
+        current = self.current_diagnostics_version
+        if baseline is None or current is None:
+            return False
+        return baseline != current
 
     fail_on: Severity | None = None
     """The severity threshold the diff was evaluated against (``None``
