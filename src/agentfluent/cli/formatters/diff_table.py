@@ -276,8 +276,13 @@ def _render_token_metrics(console: Console, result: DiffResult) -> None:
 
 
 def _render_by_model(console: Console, rows: list[ModelTokenDelta]) -> None:
+    # Origin column disambiguates parent vs subagent rows for the same
+    # model — otherwise two ``claude-opus-4-7`` rows look like a
+    # rendering bug instead of the legitimate ``(model, origin)`` split
+    # the aggregator emits (#343).
     table = Table(title="Token Metrics by Model")
     table.add_column("Model", style="cyan")
+    table.add_column("Origin")
     table.add_column("Baseline cost", justify="right")
     table.add_column("Current cost", justify="right")
     table.add_column("Cost Δ", justify="right")
@@ -286,6 +291,7 @@ def _render_by_model(console: Console, rows: list[ModelTokenDelta]) -> None:
     for row in rows:
         table.add_row(
             row.model,
+            row.origin,
             format_cost(row.baseline_cost),
             format_cost(row.current_cost),
             _signed_cost(row.cost_delta),
