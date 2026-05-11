@@ -60,6 +60,9 @@ class SignalType(StrEnum):
     MCP audit signals (configured-vs-observed MCP server usage):
     - `MCP_UNUSED_SERVER`, `MCP_MISSING_SERVER`
 
+    Agent audit signals (configured-vs-observed agent delegation):
+    - `UNUSED_AGENT`
+
     Quality signals (extracted from parent-thread message patterns):
     - `USER_CORRECTION`, `FILE_REWORK`, `REVIEWER_CAUGHT`
     """
@@ -74,6 +77,7 @@ class SignalType(StrEnum):
     MODEL_MISMATCH = "model_mismatch"
     MCP_UNUSED_SERVER = "mcp_unused_server"
     MCP_MISSING_SERVER = "mcp_missing_server"
+    UNUSED_AGENT = "unused_agent"
     USER_CORRECTION = "user_correction"
     FILE_REWORK = "file_rework"
     REVIEWER_CAUGHT = "reviewer_caught"

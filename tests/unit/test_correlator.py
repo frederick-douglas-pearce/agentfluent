@@ -473,6 +473,52 @@ class TestMcpAuditCorrelation:
         assert all(r.target != "mcp" for r in recs)
 
 
+class TestUnusedAgentCorrelation:
+    def _unused_signal(
+        self,
+        agent_name: str = "tester",
+        description: str = "Fix pytest failures",
+        source_file: str = "/home/u/.claude/agents/tester.md",
+    ) -> DiagnosticSignal:
+        return _signal(
+            signal_type=SignalType.UNUSED_AGENT,
+            severity=Severity.INFO,
+            agent_type=agent_name,
+            message=(
+                f"Agent '{agent_name}' is defined in {source_file} but "
+                "has 0 invocations across 11 analyzed sessions."
+            ),
+            detail={
+                "agent_name": agent_name,
+                "source_file": source_file,
+                "description": description,
+                "sessions_analyzed": 11,
+            },
+        )
+
+    def test_produces_description_target_recommendation(self) -> None:
+        recs = correlate([self._unused_signal()])
+        assert len(recs) == 1
+        rec = recs[0]
+        assert rec.target == "description"
+        assert rec.severity == Severity.INFO
+        assert rec.agent_type == "tester"
+        # Action surfaces the current description verbatim and points
+        # at the source file.
+        assert "Fix pytest failures" in rec.action
+        assert "tester.md" in rec.action
+        assert rec.signal_types == [SignalType.UNUSED_AGENT]
+
+    def test_empty_description_omits_clause_but_does_not_crash(self) -> None:
+        # `AgentConfig.description` defaults to ""; correlator should
+        # gracefully drop the `Current description: "..."` clause.
+        recs = correlate([self._unused_signal(description="")])
+        assert len(recs) == 1
+        rec = recs[0]
+        # No empty-quotes fragment in the action.
+        assert 'Current description: ""' not in rec.action
+
+
 def _builtin_signal(signal_type: SignalType, agent_type: str = "explore") -> DiagnosticSignal:
     detail: dict[str, object] = {}
     if signal_type == SignalType.ERROR_PATTERN:

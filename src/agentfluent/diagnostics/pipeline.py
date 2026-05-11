@@ -23,6 +23,7 @@ from agentfluent.config.mcp_discovery import discover_mcp_servers
 from agentfluent.config.models import AgentConfig
 from agentfluent.config.scanner import scan_agents
 from agentfluent.core.session import SessionMessage
+from agentfluent.diagnostics.agent_audit import audit_unused_agents
 from agentfluent.diagnostics.aggregation import aggregate_recommendations
 from agentfluent.diagnostics.correlator import correlate
 from agentfluent.diagnostics.delegation import (
@@ -174,6 +175,7 @@ def run_diagnostics(
     claude_config_dir: Path | None = None,
     project_dir: Path | None = None,
     parent_messages: list[SessionMessage] | None = None,
+    session_count: int | None = None,
 ) -> DiagnosticsResult:
     """Run the full diagnostics pipeline on agent invocations.
 
@@ -199,7 +201,14 @@ def run_diagnostics(
     tool-bursts and emits ``DiagnosticsResult.offload_candidates``.
     Empty list when sklearn is missing OR ``parent_messages`` is None
     OR no cluster met the size threshold.
+
+    ``session_count`` is surfaced in #346's ``UNUSED_AGENT`` audit
+    message ("0 invocations across N sessions"). The CLI passes the
+    real session count from ``AnalysisResult``; programmatic callers
+    that don't have it fall back to ``len(invocations) or 1``.
     """
+    if session_count is None:
+        session_count = len(invocations) or 1
     signals = extract_signals(invocations)
 
     # Fold in trace-level signals for any invocation with an attached
@@ -231,6 +240,16 @@ def run_diagnostics(
     # Aggregate-level signals (model-routing) use the same config lookup
     # the correlator will read from; fold them in before correlation.
     signals.extend(extract_model_routing_signals(invocations, configs_by_name))
+
+    # #346: flag custom agents that are configured but never delegated
+    # to in the analyzed window. Empty-invocation suppression lives
+    # inside the audit; built-ins (D033) are silently excluded there.
+    signals.extend(
+        audit_unused_agents(
+            invocations, agent_configs,
+            sessions_analyzed=session_count,
+        ),
+    )
 
     # MCP audit. Runs only when the caller has provided explicit MCP
     # context — avoids silently picking up the user's real

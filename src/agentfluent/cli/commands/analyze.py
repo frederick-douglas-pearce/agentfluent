@@ -359,6 +359,7 @@ def analyze(
             claude_config_dir=config_dir,
             project_dir=project_disk_path,
             parent_messages=all_messages,
+            session_count=result.session_count,
         )
     elif result.agent_metrics.total_invocations == 0 and diagnostics:
         err_console.print(
