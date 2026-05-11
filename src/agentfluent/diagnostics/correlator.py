@@ -622,14 +622,9 @@ class McpAuditRule:
 class UnusedAgentRule:
     """``UNUSED_AGENT`` -> recommend description rewrite or accept-as-unused.
 
-    Description is the trigger logic for delegation — when a custom
-    agent is defined but never delegated to, the most common cause is a
+    Description is the trigger logic for delegation: when a custom
+    agent is defined but never invoked, the most common cause is a
     description mismatch with how the parent thread frames the task.
-    The recommendation surfaces the current description verbatim so the
-    user can compare it against parent phrasing. The partial-window
-    confound (new agents added partway through the window appearing
-    unused) lives in the glossary ``long`` field rather than every
-    recommendation row.
     """
 
     def matches(self, signal: DiagnosticSignal, config: AgentConfig | None) -> bool:
@@ -655,7 +650,7 @@ class UnusedAgentRule:
             f"Compare the description against parent-thread phrasing.{description_clause} "
             f"Consider broadening the description, rewriting it, or accepting "
             f"that '{agent_name}' is unused for this workload. "
-            f"File: {source_file}."
+            f"File: {_relpath(Path(source_file)) if source_file else 'unknown'}."
         )
 
         return DiagnosticRecommendation(

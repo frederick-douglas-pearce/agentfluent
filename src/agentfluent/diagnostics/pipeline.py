@@ -241,9 +241,6 @@ def run_diagnostics(
     # the correlator will read from; fold them in before correlation.
     signals.extend(extract_model_routing_signals(invocations, configs_by_name))
 
-    # #346: flag custom agents that are configured but never delegated
-    # to in the analyzed window. Empty-invocation suppression lives
-    # inside the audit; built-ins (D033) are silently excluded there.
     signals.extend(
         audit_unused_agents(
             invocations, agent_configs,
@@ -273,7 +270,7 @@ def run_diagnostics(
                 audit_mcp_servers(
                     mcp_usage,
                     configured_mcp,
-                    sessions_analyzed=len(invocations) or 1,
+                    sessions_analyzed=session_count,
                 ),
             )
 

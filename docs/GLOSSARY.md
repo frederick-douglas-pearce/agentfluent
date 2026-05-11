@@ -458,21 +458,17 @@ MCP config. Add to ~/.claude.json or .mcp.json.
 analyzed window.
 
 **Detail:** Triggered when a custom `~/.claude/agents/<name>.md` (or project-scoped
-equivalent) is present in the config scanner output but `agent_type`
-has zero invocations across the analyzed sessions. Likely causes:
-
-1. `description` doesn't match how the parent thread frames the task.
-2. `description` is too narrow and only fires for an exact phrase.
-3. The triggering context (e.g., a failing test for a `tester` agent)
-   isn't present in the analyzed window.
-4. The parent has no awareness of the agent (config-discovery gap).
-
-Built-in agents (Explore, Plan, general-purpose, etc.) are silently
-excluded per D033 — their absence in a given window may be entirely
-normal. New agents added partway through the window will appear
-unused due to a partial-window confound; consider re-running on a
-fresh window after enough sessions have accumulated to fire the
-agent.
+equivalent) is present in the config scanner output but `agent_type` has
+zero invocations across the analyzed sessions. Likely causes: the
+`description` doesn't match how the parent frames the task, the
+description is too narrow and only fires for an exact phrase, the
+triggering context (e.g., a failing test for a `tester` agent) isn't
+present in the window, or the parent has no awareness of the agent.
+Built-in agents (Explore, Plan, general-purpose, etc.) are excluded per
+D033 — their absence in any given window may be entirely normal. New
+agents added partway through the window will appear unused due to a
+partial-window confound; consider re-running after enough sessions
+accumulate.
 
 **Example:**
 

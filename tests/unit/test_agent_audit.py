@@ -89,9 +89,7 @@ class TestAuditUnusedAgents:
             == []
         )
 
-    def test_empty_invocations_returns_empty_per_architect_review(self) -> None:
-        # Empty-window suppression: flagging every custom agent as
-        # unused when nothing ran is meaninglessly true.
+    def test_empty_invocations_returns_empty(self) -> None:
         configs = [_config("tester"), _config("pm")]
 
         assert audit_unused_agents([], configs, sessions_analyzed=0) == []

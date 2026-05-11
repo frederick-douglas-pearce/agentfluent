@@ -1,21 +1,10 @@
-"""Agent-config audit: detect custom agents defined but never delegated to.
+"""Configured-vs-observed agent-definition audit (#346).
 
-Mirrors the ``mcp_assessment.audit_mcp_servers`` pattern — compares a
-configured surface (agent definitions from
-``config.scanner.scan_agents``) against an observed surface (agent
-types in the session's ``AgentInvocation`` list) and emits a signal
-for each configured-but-unused custom agent.
-
-Built-in agents (``general-purpose``, ``Explore``, ``Plan``, etc.) are
-silently excluded per D033 — their absence in a given window may be
-entirely normal and a recommendation surface would just produce
-noise.
-
-Empty-invocations early return (per architect review for #346): if
-nothing fired in the window, flagging every custom agent as unused is
-meaninglessly true and undermines the diagnostics surface's signal-
-to-noise ratio. Callers who want config-only checks have
-``agentfluent config-check``.
+Emits ``UNUSED_AGENT`` for each custom agent defined in
+``~/.claude/agents/`` (or the project-scoped equivalent) with zero
+invocations in the analyzed window. Built-ins excluded per D033;
+empty-window suppression so the surface stays useful — callers who
+want config-only checks have ``agentfluent config-check``.
 """
 
 from __future__ import annotations
@@ -40,8 +29,6 @@ def audit_unused_agents(
     default to ``len(invocations) or 1`` via ``run_diagnostics``.
     """
     if not invocations:
-        # Empty-window suppression: flagging every custom agent as
-        # unused when nothing ran is meaninglessly true.
         return []
 
     observed = {inv.agent_type.lower() for inv in invocations}
