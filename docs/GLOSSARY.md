@@ -452,6 +452,39 @@ MCP config. Add to ~/.claude.json or .mcp.json.
 
 **Related:** [`mcp_unused_server`](#mcp_unused_server), [`target_mcp`](#target_mcp)
 
+### `unused_agent`
+
+**Short:** A custom agent is defined but the parent never delegates to it in the
+analyzed window.
+
+**Detail:** Triggered when a custom `~/.claude/agents/<name>.md` (or project-scoped
+equivalent) is present in the config scanner output but `agent_type` has
+zero invocations across the analyzed sessions. Likely causes: the
+`description` doesn't match how the parent frames the task, the
+description is too narrow and only fires for an exact phrase, the
+triggering context (e.g., a failing test for a `tester` agent) isn't
+present in the window, or the parent has no awareness of the agent.
+Built-in agents (Explore, Plan, general-purpose, etc.) are excluded per
+D033 — their absence in any given window may be entirely normal. New
+agents added partway through the window will appear unused due to a
+partial-window confound; consider re-running after enough sessions
+accumulate.
+
+**Example:**
+
+```
+Agent 'tester' is defined in /home/u/.claude/agents/tester.md but has 0
+invocations across 11 analyzed sessions.
+```
+
+**Severity:** info
+
+**Threshold:** 0 invocations across analyzed sessions
+
+**Recommendation target:** `description`
+
+**Related:** [`target_description`](#target_description), [`mcp_unused_server`](#mcp_unused_server)
+
 ### `user_correction`
 
 **Short:** The user interrupted or redirected the parent thread mid-flight ("no, do X
@@ -723,6 +756,25 @@ agent.
 **Aliases:** `mcp`
 
 **Related:** [`mcp_unused_server`](#mcp_unused_server), [`mcp_missing_server`](#mcp_missing_server)
+
+### `target_description`
+
+**Short:** Rewrite the agent's `description:` field in frontmatter -- the trigger
+logic the parent reads when deciding to delegate.
+
+**Detail:** The `description` field is the only configuration surface the parent
+thread sees when deciding whether to delegate to a subagent. A
+misaligned, too-narrow, or vague description is the most common
+reason a defined agent is never invoked. Used for `unused_agent`:
+the recommendation surfaces the current description verbatim so the
+user can compare against typical parent phrasing for the task. The
+fix is to broaden, sharpen, or rewrite the description; accepting
+that the agent is unused for the analyzed workload is also a valid
+outcome.
+
+**Aliases:** `description`
+
+**Related:** [`unused_agent`](#unused_agent)
 
 
 ---

@@ -619,6 +619,54 @@ class McpAuditRule:
         )
 
 
+class UnusedAgentRule:
+    """``UNUSED_AGENT`` -> recommend description rewrite or accept-as-unused.
+
+    Description is the trigger logic for delegation: when a custom
+    agent is defined but never invoked, the most common cause is a
+    description mismatch with how the parent thread frames the task.
+    """
+
+    def matches(self, signal: DiagnosticSignal, config: AgentConfig | None) -> bool:
+        return signal.signal_type == SignalType.UNUSED_AGENT
+
+    def recommend(
+        self, signal: DiagnosticSignal, config: AgentConfig | None,
+    ) -> DiagnosticRecommendation:
+        observation = signal.message
+        agent_name = str(signal.detail.get("agent_name", ""))
+        description = str(signal.detail.get("description", ""))
+        source_file = str(signal.detail.get("source_file", ""))
+
+        reason = (
+            "An agent defined but never delegated to is either misaligned "
+            "with how the parent frames tasks, or the triggering context "
+            "isn't present in this analysis window."
+        )
+        description_clause = (
+            f' Current description: "{description}".' if description else ""
+        )
+        action = (
+            f"Compare the description against parent-thread phrasing.{description_clause} "
+            f"Consider broadening the description, rewriting it, or accepting "
+            f"that '{agent_name}' is unused for this workload. "
+            f"File: {_relpath(Path(source_file)) if source_file else 'unknown'}."
+        )
+
+        return DiagnosticRecommendation(
+            target="description",
+            severity=signal.severity,
+            message=f"{observation} {reason} {action}",
+            observation=observation,
+            reason=reason,
+            action=action,
+            agent_type=signal.agent_type,
+            invocation_id=signal.invocation_id,
+            config_file=source_file,
+            signal_types=[signal.signal_type],
+        )
+
+
 class _QualityRule(ABC):
     """Shared base for cross-cutting and per-agent quality-axis rules.
 
@@ -788,6 +836,7 @@ RULES: list[CorrelationRule] = [
     ErrorSequenceRule(),
     ModelRoutingRule(),
     McpAuditRule(),
+    UnusedAgentRule(),
     UserCorrectionRule(),
     FileReworkRule(),
     ReviewerCaughtRule(),

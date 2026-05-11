@@ -74,6 +74,7 @@ SIGNAL_AXIS_MAP: dict[SignalType, Axis] = {
     SignalType.ERROR_PATTERN: Axis.SPEED,
     SignalType.PERMISSION_FAILURE: Axis.SPEED,
     SignalType.MCP_MISSING_SERVER: Axis.SPEED,
+    SignalType.UNUSED_AGENT: Axis.COST,
     SignalType.USER_CORRECTION: Axis.QUALITY,
     SignalType.FILE_REWORK: Axis.QUALITY,
     SignalType.REVIEWER_CAUGHT: Axis.QUALITY,
