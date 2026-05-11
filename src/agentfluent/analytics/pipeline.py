@@ -98,6 +98,13 @@ class AnalysisResult(BaseModel):
     ``None`` on legacy envelopes; populated as ``agentfluent.__version__``
     by :mod:`agentfluent.cli.commands.analyze`."""
 
+    project_name: str | None = None
+    """Display name of the analyzed project. Stamped by the CLI so
+    ``report`` can render a standalone document (summary header,
+    reproduction command in the footer) without needing the project
+    re-specified at render time. Additive field — ``None`` on legacy
+    envelopes; renderers fall back to ``"(unknown project)"``."""
+
 
 def analyze_session(
     path: Path,

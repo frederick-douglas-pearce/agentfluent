@@ -28,6 +28,14 @@ from typing import Any, Optional
 import typer
 from rich.console import Console
 
+from agentfluent.cli.commands.report_renderers import (
+    render_agent_metrics,
+    render_diagnostics,
+    render_footer,
+    render_offload,
+    render_summary,
+    render_token_metrics,
+)
 from agentfluent.cli.exit_codes import EXIT_USER_ERROR
 from agentfluent.cli.formatters.json_output import parse_json_output
 
@@ -103,40 +111,18 @@ def _load_envelope(path: Path) -> tuple[str, dict[str, Any]]:
     return command, data
 
 
-# Section renderer stubs. #354 implements the section bodies; this story
-# emits headers in the D030 order so the dispatch wiring is testable.
-
-def _render_summary(data: dict[str, Any]) -> str:
-    return "## Summary\n"
-
-
-def _render_token_metrics(data: dict[str, Any]) -> str:
-    return "## Token Metrics\n"
-
-
-def _render_agent_metrics(data: dict[str, Any]) -> str:
-    return "## Agent Metrics\n"
-
-
-def _render_diagnostics(data: dict[str, Any]) -> str:
-    return "## Diagnostics\n"
-
-
-def _render_offload(data: dict[str, Any]) -> str:
-    return "## Offload Candidates\n"
-
-
-def _render_footer(data: dict[str, Any]) -> str:
-    return ""
-
+# Section bodies live in ``report_renderers``. Keep dispatch wiring here
+# so adding a renderer for a new envelope command (e.g., ``diff`` in
+# v0.8) stays a one-line change in ``_RENDERERS`` and doesn't pull
+# rendering helpers into this module.
 
 ANALYZE_SECTIONS: tuple[Callable[[dict[str, Any]], str], ...] = (
-    _render_summary,
-    _render_token_metrics,
-    _render_agent_metrics,
-    _render_diagnostics,
-    _render_offload,
-    _render_footer,
+    render_summary,
+    render_token_metrics,
+    render_agent_metrics,
+    render_diagnostics,
+    render_offload,
+    render_footer,
 )
 
 

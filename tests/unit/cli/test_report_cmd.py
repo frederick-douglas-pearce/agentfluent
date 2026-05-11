@@ -3,7 +3,8 @@
 Covers the #353 acceptance surface: valid envelope ingestion (stdout +
 ``--output``), all four error paths (missing file, malformed JSON,
 wrong envelope, top-level non-object JSON), and ``--help`` exposing
-the workflow examples.
+the workflow examples. Per-renderer behavior lives in
+``test_report_renderers.py``.
 """
 
 from __future__ import annotations
@@ -21,12 +22,14 @@ from agentfluent.cli.formatters.json_output import format_json_output
 def _analyze_data() -> dict[str, Any]:
     """Minimal valid analyze ``data`` payload.
 
-    Intentionally sparse: the skeleton renderers don't read these
-    fields, so we only need enough structure that the envelope passes
-    the version/command/data check. Section bodies that consume these
-    fields are #354's responsibility.
+    Sparse but valid enough that every renderer can produce output.
+    ``offload`` and ``diagnostics`` are empty, so those renderers take
+    their no-findings paths — exercised by the order assertion below
+    (which uses the always-rendered ``## Reproduction`` footer as the
+    tail).
     """
     return {
+        "project_name": "demo-project",
         "session_count": 1,
         "token_metrics": {
             "input_tokens": 100,
@@ -60,13 +63,16 @@ class TestRender:
         out = result.stdout
         assert "# AgentFluent Report" in out
         # D030: Summary -> Token Metrics -> Agent Metrics -> Diagnostics ->
-        # Offload. Verify ordering by index, not just presence.
+        # Offload -> Footer. Offload is correctly omitted when there are no
+        # positive-savings candidates (#344), so the footer (Reproduction)
+        # is the reliable tail marker here.
         idx_summary = out.index("## Summary")
         idx_tokens = out.index("## Token Metrics")
         idx_agents = out.index("## Agent Metrics")
         idx_diag = out.index("## Diagnostics")
-        idx_offload = out.index("## Offload Candidates")
-        assert idx_summary < idx_tokens < idx_agents < idx_diag < idx_offload
+        idx_footer = out.index("## Reproduction")
+        assert idx_summary < idx_tokens < idx_agents < idx_diag < idx_footer
+        assert "## Offload Candidates" not in out
 
     def test_output_flag_writes_file_and_no_stdout(
         self,

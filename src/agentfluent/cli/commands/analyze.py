@@ -371,6 +371,7 @@ def analyze(
 
     result.window = window_metadata
     result.diagnostics_version = __version__
+    result.project_name = project_info.display_name
 
     if format == "json":
         _print_json(result, quiet=quiet, project_name=project_info.display_name)
