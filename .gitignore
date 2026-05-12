@@ -41,3 +41,9 @@ htmlcov/
 
 # Playwright MCP screenshots
 .playwright-mcp/
+
+# Marketing artifacts (social posts, case studies, baselines)
+# Case studies are committed; blog drafts are published via the github_pages
+# repo, and baseline JSONs contain local file paths and tool args (security).
+social/*
+!social/case-study-agentfluent.md
