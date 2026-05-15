@@ -52,6 +52,18 @@ docs/                 # research + market analysis
 
 See [`CLAUDE.md`](CLAUDE.md) for detailed architecture notes.
 
+## Picking work to contribute
+
+AgentFluent is a maintainer-led project on a defined roadmap. To keep contributor effort on a clear path to merge:
+
+1. **Comment on the issue** you want to work on, or open a new issue describing the change first.
+2. **Wait for a maintainer to assign the issue to you** before writing code. Assignment confirms the work is unclaimed, scoped correctly, and aligned with the current milestone.
+3. **Then open a PR** referencing the issue (`Closes #N`).
+
+Issues already assigned, or actively in flight on a feature branch, are not available — please pick another. Issues labeled [`good first issue`](https://github.com/frederick-douglas-pearce/agentfluent/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22) or [`help wanted`](https://github.com/frederick-douglas-pearce/agentfluent/issues?q=is%3Aopen+is%3Aissue+label%3A%22help+wanted%22) are good entry points.
+
+**Unassigned PRs may be closed without review.** This isn't a judgement on the work — it's the only sustainable way to avoid duplicate effort when multiple contributors target the same issue at once. If your PR is closed for this reason, you're welcome to claim a different issue and try again.
+
 ## Development workflow
 
 ### Running tests
