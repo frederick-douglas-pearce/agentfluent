@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import sys
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -122,17 +123,17 @@ ANALYZE_SECTIONS: tuple[Callable[[dict[str, Any]], str], ...] = (
     render_agent_metrics,
     render_diagnostics,
     render_offload,
-    render_footer,
 )
 
 
-def _render_analyze_report(data: dict[str, Any]) -> str:
+def _render_analyze_report(data: dict[str, Any], now: datetime | None = None) -> str:
     """Assemble an analyze report from the section renderers in D030 order."""
     parts = ["# AgentFluent Report\n"]
     for renderer in ANALYZE_SECTIONS:
         section = renderer(data)
         if section:
             parts.append(section)
+    parts.append(render_footer(data, now=now))
     return "\n".join(parts)
 
 
