@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import sys
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -116,23 +117,37 @@ def _load_envelope(path: Path) -> tuple[str, dict[str, Any]]:
 # v0.8) stays a one-line change in ``_RENDERERS`` and doesn't pull
 # rendering helpers into this module.
 
-ANALYZE_SECTIONS: tuple[Callable[[dict[str, Any]], str], ...] = (
+# Body renderers share the ``(data) -> str`` signature; ``render_footer``
+# additionally accepts an injected ``now`` so snapshot tests get
+# deterministic output. Keeping it out of this tuple lets the
+# ``_render_analyze_report`` loop stay uniform.
+ANALYZE_BODY_SECTIONS: tuple[Callable[[dict[str, Any]], str], ...] = (
     render_summary,
     render_token_metrics,
     render_agent_metrics,
     render_diagnostics,
     render_offload,
-    render_footer,
 )
 
 
-def _render_analyze_report(data: dict[str, Any]) -> str:
-    """Assemble an analyze report from the section renderers in D030 order."""
+def _render_analyze_report(
+    data: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> str:
+    """Assemble an analyze report from the section renderers in D030 order.
+
+    ``now`` is forwarded only to :func:`render_footer` so snapshot tests
+    can pin the reproduction timestamp.
+    """
     parts = ["# AgentFluent Report\n"]
-    for renderer in ANALYZE_SECTIONS:
+    for renderer in ANALYZE_BODY_SECTIONS:
         section = renderer(data)
         if section:
             parts.append(section)
+    footer = render_footer(data, now=now)
+    if footer:
+        parts.append(footer)
     return "\n".join(parts)
 
 

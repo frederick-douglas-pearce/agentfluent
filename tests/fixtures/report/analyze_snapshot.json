@@ -1,0 +1,173 @@
+{
+  "version": "2",
+  "command": "analyze",
+  "data": {
+    "project_name": "demo-agent-shop",
+    "session_count": 5,
+    "diagnostics_version": "0.7.0",
+    "window": {
+      "since": "2026-05-01T00:00:00+00:00",
+      "until": "2026-05-08T00:00:00+00:00",
+      "session_count_before_filter": 12,
+      "session_count_after_filter": 5
+    },
+    "token_metrics": {
+      "input_tokens": 24500,
+      "output_tokens": 8200,
+      "cache_creation_input_tokens": 18300,
+      "cache_read_input_tokens": 412000,
+      "total_cost": 7.84,
+      "cache_efficiency": 0.94,
+      "by_model": [
+        {
+          "model": "claude-opus-4-7",
+          "origin": "parent",
+          "input_tokens": 14200,
+          "output_tokens": 5100,
+          "cache_creation_input_tokens": 12500,
+          "cache_read_input_tokens": 280000,
+          "cost": 5.4
+        },
+        {
+          "model": "claude-opus-4-7",
+          "origin": "subagent",
+          "input_tokens": 6300,
+          "output_tokens": 2100,
+          "cache_creation_input_tokens": 4100,
+          "cache_read_input_tokens": 92000,
+          "cost": 1.62
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "origin": "subagent",
+          "input_tokens": 4000,
+          "output_tokens": 1000,
+          "cache_creation_input_tokens": 1700,
+          "cache_read_input_tokens": 40000,
+          "cost": 0.82
+        }
+      ]
+    },
+    "agent_metrics": {
+      "total_invocations": 17,
+      "agent_token_percentage": 38.5,
+      "by_agent_type": {
+        "Explore": {
+          "agent_type": "Explore",
+          "is_builtin": true,
+          "invocation_count": 8,
+          "total_tokens": 42000,
+          "total_tool_uses": 56,
+          "total_duration_ms": 320000
+        },
+        "pm": {
+          "agent_type": "pm",
+          "is_builtin": false,
+          "invocation_count": 6,
+          "total_tokens": 78000,
+          "total_tool_uses": 42,
+          "total_duration_ms": 510000
+        },
+        "tester": {
+          "agent_type": "tester",
+          "is_builtin": false,
+          "invocation_count": 3,
+          "total_tokens": 24000,
+          "total_tool_uses": 18,
+          "total_duration_ms": 145000
+        }
+      }
+    },
+    "diagnostics": {
+      "aggregated_recommendations": [
+        {
+          "agent_type": "pm",
+          "target": "model",
+          "severity": "critical",
+          "signal_types": [
+            "model_mismatch"
+          ],
+          "count": 4,
+          "representative_message": "Agent 'pm' runs Opus on tasks Sonnet handles cleanly; swap the model field to claude-sonnet-4-6.",
+          "primary_axis": "cost",
+          "priority_score": 87.0,
+          "axis_scores": {
+            "cost": 85.0,
+            "speed": 0.0,
+            "quality": 12.0
+          },
+          "contributing_recommendations": []
+        },
+        {
+          "agent_type": "tester",
+          "target": "tools",
+          "severity": "warning",
+          "signal_types": [
+            "tool_error_sequence"
+          ],
+          "count": 3,
+          "representative_message": "Tester retries Bash 4-5 times before giving up; tighten the description so it routes failing builds back to the parent.",
+          "primary_axis": "speed",
+          "priority_score": 52.5,
+          "axis_scores": {
+            "cost": 8.0,
+            "speed": 50.0,
+            "quality": 4.0
+          },
+          "contributing_recommendations": []
+        },
+        {
+          "agent_type": null,
+          "target": "mcp_servers",
+          "severity": "info",
+          "signal_types": [
+            "mcp_unused"
+          ],
+          "count": 1,
+          "representative_message": "MCP server 'github' is configured but no agent invoked it during the analyzed window.",
+          "primary_axis": "cost",
+          "priority_score": 12.0,
+          "axis_scores": {
+            "cost": 10.0,
+            "speed": 0.0,
+            "quality": 0.0
+          },
+          "contributing_recommendations": []
+        }
+      ],
+      "offload_candidates": [
+        {
+          "name": "ts-bulk-edits",
+          "description": "Bulk TypeScript file edits with Read+Edit pattern.",
+          "confidence": "high",
+          "cluster_size": 14,
+          "cohesion_score": 0.88,
+          "top_terms": [
+            "edit",
+            "typescript",
+            "rename"
+          ],
+          "tool_sequence_summary": [],
+          "tools": [
+            "Read",
+            "Edit",
+            "Grep"
+          ],
+          "tools_note": "",
+          "estimated_parent_tokens": 95000,
+          "estimated_parent_cost_usd": 4.2,
+          "estimated_savings_usd": 2.85,
+          "parent_model": "claude-opus-4-7",
+          "alternative_model": "claude-sonnet-4-6",
+          "cost_note": "",
+          "target_kind": "subagent",
+          "subagent_draft": null,
+          "skill_draft": null,
+          "matched_agent": "",
+          "dedup_note": "",
+          "yaml_draft": ""
+        }
+      ]
+    }
+  }
+}

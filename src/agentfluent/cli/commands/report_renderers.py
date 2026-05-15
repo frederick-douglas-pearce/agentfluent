@@ -335,9 +335,16 @@ def _reproduction_command(data: dict[str, Any]) -> str:
     return " ".join(parts)
 
 
-def render_footer(data: dict[str, Any]) -> str:
+def render_footer(data: dict[str, Any], *, now: datetime | None = None) -> str:
+    """Render the reproduction footer.
+
+    ``now`` is an injection seam for snapshot tests so the rendered output
+    is deterministic. Production callers omit it and accept
+    ``datetime.now(UTC)``.
+    """
     cmd = _reproduction_command(data)
-    generated = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    moment = now if now is not None else datetime.now(UTC)
+    generated = moment.strftime("%Y-%m-%dT%H:%M:%SZ")
     return (
         "## Reproduction\n\n"
         "```bash\n"
