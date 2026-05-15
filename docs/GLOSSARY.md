@@ -10,8 +10,8 @@ opening this file.
 
 ## Reading guide
 
-`agentfluent` reports on three layers of agent behavior, and the glossary is
-organized to match them:
+`agentfluent` reports on three layers of agent behavior, with command
+reference material alongside them:
 
 1. **Execution analytics** -- what happened: token counts, tool calls, costs.
    Mostly familiar Anthropic API vocabulary, plus a few AgentFluent-specific
@@ -30,6 +30,10 @@ organized to match them:
    surfaces. The **Recommendation target** and **Built-in agent concern**
    sections explain why two findings on the same agent might suggest
    different fixes.
+
+4. **CLI commands** -- what each `agentfluent` subcommand does and when
+   to use it. Start here if you want a quick overview of available
+   commands before diving into the vocabulary they produce.
 
 ---
 
@@ -1322,6 +1326,53 @@ agent.
 with underscore. The first `__` after the `mcp__` prefix is the
 server/tool boundary. Not a closed enum -- MCP servers contribute
 additional namespaced tools at runtime.
+
+
+---
+
+## CLI commands
+
+### `report`
+
+**Short:** Render a saved `analyze --json` snapshot as a Markdown report.
+
+**Detail:** `agentfluent report` is the composable Markdown rendering step for
+analysis snapshots. Run `agentfluent analyze --json` first, save or pipe
+that JSON envelope, then pass it to `report` to produce a human-readable
+document for PR comments, CI artifacts, or local review. Keeping the
+renderer separate means the same snapshot can be archived, diffed, and
+re-rendered without re-reading session data.
+
+**Example:**
+
+```
+agentfluent analyze --project codefluent --json > snap.json
+agentfluent report snap.json > report.md
+```
+
+**Aliases:** `markdown report`, `snapshot report`
+
+**Related:** [`analyze`](#analyze)
+
+### `analyze`
+
+**Short:** Analyze Claude Code or Agent SDK sessions for tokens, cost, behavior diagnostics, and recommendations.
+
+### `diff`
+
+**Short:** Compare two saved `analyze --json` envelopes and surface new, resolved, and persisting recommendations.
+
+### `config-check`
+
+**Short:** Score agent definitions against prompt, tool access, model, and configuration best practices.
+
+### `explain`
+
+**Short:** Look up an AgentFluent glossary term directly from the terminal.
+
+### `list`
+
+**Short:** Discover Claude Code and Agent SDK projects and sessions available for analysis.
 
 ---
 

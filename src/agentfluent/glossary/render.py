@@ -34,8 +34,8 @@ opening this file.
 
 ## Reading guide
 
-`agentfluent` reports on three layers of agent behavior, and the glossary is
-organized to match them:
+`agentfluent` reports on three layers of agent behavior, with command
+reference material alongside them:
 
 1. **Execution analytics** -- what happened: token counts, tool calls, costs.
    Mostly familiar Anthropic API vocabulary, plus a few AgentFluent-specific
@@ -54,6 +54,10 @@ organized to match them:
    surfaces. The **Recommendation target** and **Built-in agent concern**
    sections explain why two findings on the same agent might suggest
    different fixes.
+
+4. **CLI commands** -- what each `agentfluent` subcommand does and when
+   to use it. Start here if you want a quick overview of available
+   commands before diving into the vocabulary they produce.
 """
 
 FOOTER = """\

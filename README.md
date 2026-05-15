@@ -173,6 +173,16 @@ Near-duplicate recommendations are aggregated per `(agent, target, signal)` shap
 
 Cost numbers reflect current per-token pricing; historical sessions are priced at today's rates until [#80](https://github.com/frederick-douglas-pearce/agentfluent/issues/80) (time-series pricing) lands.
 
+### `agentfluent report` — render a saved analysis as Markdown
+
+```bash
+agentfluent analyze --project codefluent --json > snap.json
+agentfluent report snap.json > report.md
+agentfluent report snap.json --output report.md
+```
+
+Renders an `analyze --json` snapshot as a standalone Markdown report. Use it when you want a human-readable PR comment, CI artifact, or local review document without re-running analysis. The workflow is intentionally composable: `analyze` produces the stable JSON envelope, and `report` turns that saved envelope into Markdown.
+
 ### `agentfluent diff` — compare two analyze runs
 
 ```bash
