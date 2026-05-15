@@ -1,4 +1,4 @@
-"""Golden-fixture snapshot test for ``agentfluent report`` (#355).
+"""Golden-fixture snapshot test for ``agentfluent report``.
 
 The fixture pair lives in ``tests/fixtures/report/``:
 
@@ -213,8 +213,6 @@ class TestSnapshot:
         envelope_text = ANALYZE_SNAPSHOT_PATH.read_text(encoding="utf-8")
         envelope = json.loads(envelope_text)
         rendered = _render_analyze_report(envelope["data"], now=_FIXED_NOW)
-        if not rendered.endswith("\n"):
-            rendered += "\n"
 
         expected = EXPECTED_REPORT_PATH.read_text(encoding="utf-8")
         assert rendered == expected, (
@@ -312,8 +310,6 @@ def _regenerate_golden() -> None:
     ANALYZE_SNAPSHOT_PATH.write_text(envelope_text, encoding="utf-8")
 
     rendered = _render_analyze_report(data, now=_FIXED_NOW)
-    if not rendered.endswith("\n"):
-        rendered += "\n"
     EXPECTED_REPORT_PATH.write_text(rendered, encoding="utf-8")
     print(f"Wrote {ANALYZE_SNAPSHOT_PATH}")
     print(f"Wrote {EXPECTED_REPORT_PATH}")

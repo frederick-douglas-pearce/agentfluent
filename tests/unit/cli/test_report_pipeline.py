@@ -1,4 +1,4 @@
-"""End-to-end pipeline test: ``analyze --json`` -> ``report`` (#355).
+"""End-to-end pipeline test: ``analyze --json`` -> ``report``.
 
 Covers the composition contract: a snapshot produced by ``analyze --json``
 on the same machine round-trips through ``report`` without losing fields
@@ -15,16 +15,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import typer
 from typer.testing import CliRunner
 
 
 class TestAnalyzeReportPipeline:
+    @pytest.mark.usefixtures("populated_home")
     def test_analyze_json_roundtrips_through_report(
         self,
         runner: CliRunner,
         cli_app: typer.Typer,
-        populated_home: Path,  # noqa: ARG002 — patches discovery paths
         tmp_path: Path,
     ) -> None:
         analyze_result = runner.invoke(
@@ -40,7 +41,6 @@ class TestAnalyzeReportPipeline:
         assert report_result.exit_code == 0, report_result.output
 
         out = report_result.stdout
-        # Every always-emitted section header is present, in the D030 order.
         assert "# AgentFluent Report" in out
         idx_summary = out.index("## Summary")
         idx_tokens = out.index("## Token Metrics")
@@ -48,23 +48,20 @@ class TestAnalyzeReportPipeline:
         idx_diag = out.index("## Diagnostics")
         idx_footer = out.index("## Reproduction")
         assert idx_summary < idx_tokens < idx_agents < idx_diag < idx_footer
-
-        # The reproduction footer should echo a runnable analyze command.
         assert "agentfluent analyze --project" in out
 
+    @pytest.mark.usefixtures("populated_home_with_traces")
     def test_diagnostics_path_renders_through_pipeline(
         self,
         runner: CliRunner,
         cli_app: typer.Typer,
-        populated_home_with_traces: Path,  # noqa: ARG002
         tmp_path: Path,
     ) -> None:
-        """The diagnostics-on path produces a populated Diagnostics section.
+        """The diagnostics-on path runs without crashing.
 
-        Uses the trace-carrying fixture so the diagnostics pipeline has
-        signal evidence to aggregate. Asserts only that the section
-        renders without crashing -- the exact recommendations depend on
-        upstream rule weights, which would make this test brittle.
+        Asserts only that the Diagnostics section is present -- the
+        exact recommendations depend on upstream rule weights, which
+        would make a deeper assertion brittle.
         """
         analyze_result = runner.invoke(
             cli_app, ["analyze", "--project", "project", "--json"],

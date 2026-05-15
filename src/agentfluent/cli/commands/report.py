@@ -137,8 +137,10 @@ def _render_analyze_report(
 ) -> str:
     """Assemble an analyze report from the section renderers in D030 order.
 
-    ``now`` is forwarded only to :func:`render_footer` so snapshot tests
-    can pin the reproduction timestamp.
+    Always returns a newline-terminated string so callers (CLI, snapshot
+    test, regenerator) don't each repeat the normalization. ``now`` is
+    forwarded only to :func:`render_footer` so snapshot tests can pin
+    the reproduction timestamp.
     """
     parts = ["# AgentFluent Report\n"]
     for renderer in ANALYZE_BODY_SECTIONS:
@@ -148,7 +150,10 @@ def _render_analyze_report(
     footer = render_footer(data, now=now)
     if footer:
         parts.append(footer)
-    return "\n".join(parts)
+    text = "\n".join(parts)
+    if not text.endswith("\n"):
+        text += "\n"
+    return text
 
 
 _RENDERERS: dict[str, Callable[[dict[str, Any]], str]] = {
@@ -187,8 +192,6 @@ def report(
         raise typer.Exit(code=EXIT_USER_ERROR)
 
     text = renderer(data)
-    if not text.endswith("\n"):
-        text += "\n"
 
     if output is None:
         sys.stdout.write(text)
