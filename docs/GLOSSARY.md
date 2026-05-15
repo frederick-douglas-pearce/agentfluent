@@ -1352,8 +1352,8 @@ agentfluent report snap.json > report.md
 Snapshots round-trip through file storage, PR comments, and CI
 artifact pipelines without re-running analysis. The Markdown
 layout follows D030 section ordering: Summary, Token Metrics,
-Agent Metrics, Diagnostics, Offload Candidates (when any
-positive-savings rows survive #344's filter), and a Reproduction
+Agent Metrics, Diagnostics, Offload Candidates (when at least one
+candidate has positive estimated savings), and a Reproduction
 footer that includes the original command line.
 
 `report` accepts only `analyze` envelopes in v0.7. A `diff`

@@ -196,7 +196,7 @@ agentfluent report snap.json --output report.md               # ...or to a file
 agentfluent analyze --project codefluent --json | agentfluent report /dev/stdin   # one-shot pipe
 ```
 
-Renders an `analyze --json` snapshot envelope as a Markdown document — the same Summary / Token Metrics / Agent Metrics / Diagnostics / Offload / Reproduction sections you see in the CLI table, but in a form you can paste into a PR comment, attach as a CI artifact, or commit alongside a prompt change as a checked-in review trail. `report` is a separate subcommand rather than `analyze --format markdown` so the rendering layer stays decoupled from session ingestion: snapshots round-trip through file storage without re-running analysis. The Reproduction footer always echoes the original `agentfluent analyze` command line so a downstream reader can reproduce the run.
+Renders an `analyze --json` snapshot envelope as a Markdown document — the same Summary / Token Metrics / Agent Metrics / Diagnostics / Offload / Reproduction sections that `analyze` prints to the terminal, but in a form you can paste into a PR comment, attach as a CI artifact, or commit alongside a prompt change as a checked-in review trail. `report` is a separate subcommand rather than `analyze --format markdown` so the rendering layer stays decoupled from session ingestion: snapshots round-trip through file storage without re-running analysis. The Reproduction footer always echoes the original `agentfluent analyze` command line so a downstream reader can reproduce the run.
 
 ### `agentfluent config-check` — score agent definitions
 
