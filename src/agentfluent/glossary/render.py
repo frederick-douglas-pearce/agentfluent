@@ -54,6 +54,11 @@ organized to match them:
    surfaces. The **Recommendation target** and **Built-in agent concern**
    sections explain why two findings on the same agent might suggest
    different fixes.
+
+4. **CLI commands** -- the subcommands that produce all of the above.
+   The **CLI commands** section at the end is a navigation index, not
+   vocabulary -- skim it if you want a one-line orientation to each
+   subcommand and the workflows that compose them.
 """
 
 FOOTER = """\

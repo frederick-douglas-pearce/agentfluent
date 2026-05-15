@@ -1098,3 +1098,92 @@
     that's getting worse without crossing a discrete threshold.
   example: |
     [persisting] warning pm: tool_error_sequence (count_delta=+2, priority_score_delta=+4.1)
+
+# =============================================================================
+# CLI commands
+#
+# Navigation index, not vocabulary. Sibling-command entries are
+# intentionally short-only -- the README and `--help` carry the
+# full reference. `report` gets the full treatment because the
+# command was added in v0.7 and its relationship to `analyze --json`
+# is the most common point of confusion.
+# =============================================================================
+
+- name: report
+  category: cli_command
+  short: |
+    Renders an `analyze --json` snapshot envelope as a Markdown
+    document suitable for PR comments, CI artifacts, or a checked-in
+    review trail.
+  long: |
+    Added in v0.7 (D031). `report` is a separate subcommand rather
+    than `analyze --format markdown` because the two concerns --
+    session ingestion and presentation -- benefit from being
+    composable. The intended workflow is two steps:
+
+    ```bash
+    agentfluent analyze --project P --json > snap.json
+    agentfluent report snap.json > report.md
+    ```
+
+    Snapshots round-trip through file storage, PR comments, and CI
+    artifact pipelines without re-running analysis. The Markdown
+    layout follows D030 section ordering: Summary, Token Metrics,
+    Agent Metrics, Diagnostics, Offload Candidates (when any
+    positive-savings rows survive #344's filter), and a Reproduction
+    footer that includes the original command line.
+
+    `report` accepts only `analyze` envelopes in v0.7. A `diff`
+    envelope renderer is the v0.8 follow-up flagged in
+    `prd-v0.7.md` OQ3 -- the dispatch table in `report.py` is
+    structured so adding it is a one-line change.
+
+    Stdout is the default sink; pass `--output report.md` (or `-o`)
+    to write to a file instead. Exit code 1 on user errors (missing
+    file, invalid JSON, unsupported envelope command).
+  example: |
+    agentfluent analyze --project codefluent --json > snap.json
+    agentfluent report snap.json --output report.md
+  related: [analyze, diff]
+
+- name: analyze
+  category: cli_command
+  short: |
+    Primary analysis command. Reads session JSONL for a project,
+    computes token/cost/agent metrics, and (default) runs the
+    diagnostics pipeline. Output is a Rich table by default or a
+    versioned `{version, command, data}` JSON envelope under
+    `--format json` / `--json`.
+
+- name: diff
+  category: cli_command
+  short: |
+    Compares two `analyze --json` envelopes side-by-side: new,
+    resolved, and persisting recommendations plus token/cost and
+    per-agent invocation deltas. Pair with `--fail-on` to gate a
+    CI check on regressions.
+
+- name: config-check
+  category: cli_command
+  short: |
+    Scans `~/.claude/agents/*.md` and `./.claude/agents/*.md`,
+    parses each agent's YAML frontmatter and body, and scores it
+    against a 4-dimension rubric (description trigger quality, tool
+    access, model selection, prompt completeness). Independent of
+    session data.
+
+- name: explain
+  category: cli_command
+  short: |
+    Terminal-native glossary lookup. `agentfluent explain
+    <term>` prints the same definition that appears in this
+    document; `--list` enumerates every term grouped by category.
+    The source of truth is `src/agentfluent/glossary/terms.yaml`.
+
+- name: list
+  category: cli_command
+  short: |
+    Enumerates the projects discovered under `~/.claude/projects/`
+    (or `--claude-config-dir`) and the session JSONL files within a
+    given project. The starting point when you don't yet know which
+    `--project` slug to pass to `analyze`.

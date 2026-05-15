@@ -187,6 +187,17 @@ agentfluent diff baseline.json current.json --json | jq '.data.regression_detect
 
 Compares two `analyze --json` envelopes and surfaces new, resolved, and persisting recommendations (keyed by `(agent_type, target, signal_types)`), token / cost deltas, and per-agent invocation deltas. The `--fail-on {info|warning|critical|off}` flag gates exit code 3 on new findings at or above the chosen severity, so `agentfluent diff` slots into a PR check the same way a test runner does. Baselines are user-managed files — no internal cache — so re-running against an older snapshot at any time is just `agentfluent diff old.json new.json`.
 
+### `agentfluent report` — render an analyze snapshot as Markdown
+
+```bash
+agentfluent analyze --project codefluent --json > snap.json   # capture a snapshot
+agentfluent report snap.json                                  # Markdown to stdout
+agentfluent report snap.json --output report.md               # ...or to a file
+agentfluent analyze --project codefluent --json | agentfluent report /dev/stdin   # one-shot pipe
+```
+
+Renders an `analyze --json` snapshot envelope as a Markdown document — the same Summary / Token Metrics / Agent Metrics / Diagnostics / Offload / Reproduction sections you see in the CLI table, but in a form you can paste into a PR comment, attach as a CI artifact, or commit alongside a prompt change as a checked-in review trail. `report` is a separate subcommand rather than `analyze --format markdown` so the rendering layer stays decoupled from session ingestion: snapshots round-trip through file storage without re-running analysis. The Reproduction footer always echoes the original `agentfluent analyze` command line so a downstream reader can reproduce the run.
+
 ### `agentfluent config-check` — score agent definitions
 
 ```bash

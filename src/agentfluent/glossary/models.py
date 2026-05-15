@@ -24,6 +24,7 @@ GlossaryCategory = Literal[
     "diff_status",
     "builtin_agent_type",
     "builtin_tool",
+    "cli_command",
 ]
 
 # Display order + label for each category. Drives section ordering in the
@@ -41,6 +42,7 @@ GLOSSARY_CATEGORIES: tuple[tuple[GlossaryCategory, str], ...] = (
     ("diff_status", "Comparison row status"),
     ("builtin_agent_type", "Built-in agent types"),
     ("builtin_tool", "Built-in tools"),
+    ("cli_command", "CLI commands"),
 )
 
 
