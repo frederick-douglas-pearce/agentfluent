@@ -24,7 +24,9 @@ import typer
 from typer.testing import CliRunner
 
 from tests._builders import (
+    assistant_message,
     assistant_with_tool_use,
+    user_message,
     user_with_tool_result,
     write_project_layout,
 )
@@ -230,3 +232,161 @@ class TestScopedFooterRendering:
         )
         assert result.exit_code == 0, result.output
         assert "Sessions analyzed: 2" in result.stdout
+
+
+@pytest.fixture()
+def quality_signals_project(isolated_home: Path) -> Path:
+    """Project with three sessions covering empty-result and quality-signal scope.
+
+    - ``clean.jsonl``: one ``pm`` Agent invocation, no correction
+      patterns in user messages. Used as the scope-control for the
+      USER_CORRECTION leak test.
+    - ``corrections.jsonl``: one ``tester`` Agent invocation plus user
+      messages containing strong-correction phrases (``revert``,
+      ``undo``, ``that's wrong``) that trigger ``USER_CORRECTION``.
+      Three strong matches clear the ``MIN_CORRECTIONS_PER_SESSION = 2``
+      gate even after the wrapper-stripping in #330 / #321.
+    - ``quiet.jsonl``: one plain user message, no Agent invocations.
+      Drives the "diagnostics skipped on zero-invocation session"
+      branch at ``commands/analyze.py:364`` without erroring.
+
+    USER_CORRECTION exercises the same ``parent_messages`` pipeline that
+    feeds FILE_REWORK and REVIEWER_CAUGHT — scope correctness here
+    implies scope correctness for the whole quality-signals layer.
+    """
+    project_dir = isolated_home / "projects" / "-home-user-test-project"
+    project_dir.mkdir()
+
+    clean_messages = [
+        assistant_with_tool_use(
+            "toolu_clean1",
+            name="Agent",
+            inp={
+                "subagent_type": "pm",
+                "description": "Review backlog",
+                "prompt": "Review the backlog cleanly.",
+            },
+            message_id="msg_clean",
+            timestamp="2026-05-01T10:00:00.000Z",
+        ),
+        user_with_tool_result(
+            "toolu_clean1",
+            content="Reviewed backlog.",
+            timestamp="2026-05-01T10:01:00.000Z",
+            tool_use_result={
+                "agentId": "pm-clean",
+                "agentType": "pm",
+                "totalDurationMs": 60_000,
+                "totalTokens": 10_000,
+                "totalToolUseCount": 3,
+            },
+        ),
+    ]
+
+    corrections_messages = [
+        user_message("start the work", timestamp="2026-05-02T10:00:00.000Z"),
+        assistant_message(
+            [{"type": "text", "text": "Working on it."}],
+            message_id="msg_corr_a1",
+            timestamp="2026-05-02T10:00:30.000Z",
+        ),
+        user_message(
+            "revert that change please",
+            timestamp="2026-05-02T10:01:00.000Z",
+        ),
+        assistant_message(
+            [{"type": "text", "text": "Reverted."}],
+            message_id="msg_corr_a2",
+            timestamp="2026-05-02T10:01:30.000Z",
+        ),
+        user_message(
+            "undo it, that's wrong",
+            timestamp="2026-05-02T10:02:00.000Z",
+        ),
+        assistant_with_tool_use(
+            "toolu_corr1",
+            name="Agent",
+            inp={
+                "subagent_type": "tester",
+                "description": "Run tests",
+                "prompt": "Run the test suite.",
+            },
+            message_id="msg_corr_agent",
+            timestamp="2026-05-02T10:03:00.000Z",
+        ),
+        user_with_tool_result(
+            "toolu_corr1",
+            content="Tests run.",
+            timestamp="2026-05-02T10:04:00.000Z",
+            tool_use_result={
+                "agentId": "tester-corr",
+                "agentType": "tester",
+                "totalDurationMs": 60_000,
+                "totalTokens": 8_000,
+                "totalToolUseCount": 4,
+            },
+        ),
+    ]
+
+    quiet_messages = [
+        user_message("just checking in", timestamp="2026-05-03T10:00:00.000Z"),
+    ]
+
+    write_project_layout(project_dir, "clean", clean_messages)
+    write_project_layout(project_dir, "corrections", corrections_messages)
+    write_project_layout(project_dir, "quiet", quiet_messages)
+    return isolated_home
+
+
+class TestEmptyResultDoesNotError:
+    """A scoped session that produces no agent invocations must exit
+    cleanly with no diagnostics block, not raise. Covers the
+    ``commands/analyze.py:364`` branch (``total_invocations == 0``)."""
+
+    @pytest.mark.usefixtures("quality_signals_project")
+    def test_quiet_session_exits_zero_with_no_diagnostics(
+        self, runner: CliRunner, cli_app: typer.Typer,
+    ) -> None:
+        result = runner.invoke(
+            cli_app,
+            ["analyze", "--project", "project", "--session", "quiet.jsonl",
+             "--diagnostics", "--json"],
+        )
+        assert result.exit_code == 0, result.output
+        envelope = json.loads(result.stdout)
+        data = envelope["data"]
+        assert data["scope_session"] == "quiet.jsonl"
+        assert data["session_count"] == 1
+        assert data["diagnostics"] is None
+        assert "Traceback" not in result.output
+
+
+class TestQualitySignalsScope:
+    """Quality signals are extracted from ``parent_messages``, which the
+    CLI's session-path filter constrains to one session. Asserting
+    USER_CORRECTION scope is a proxy for FILE_REWORK and REVIEWER_CAUGHT
+    scope: they all read the same constrained list."""
+
+    @pytest.mark.usefixtures("quality_signals_project")
+    def test_corrections_session_emits_user_correction(
+        self, runner: CliRunner, cli_app: typer.Typer,
+    ) -> None:
+        data = _run_analyze_json(
+            runner, cli_app, "--session", "corrections.jsonl",
+        )
+        signal_types = {s["signal_type"] for s in data["diagnostics"]["signals"]}
+        assert "user_correction" in signal_types, (
+            f"expected user_correction in {signal_types}"
+        )
+
+    @pytest.mark.usefixtures("quality_signals_project")
+    def test_clean_session_does_not_inherit_corrections(
+        self, runner: CliRunner, cli_app: typer.Typer,
+    ) -> None:
+        data = _run_analyze_json(
+            runner, cli_app, "--session", "clean.jsonl",
+        )
+        signal_types = {s["signal_type"] for s in data["diagnostics"]["signals"]}
+        assert "user_correction" not in signal_types, (
+            f"user_correction leaked into clean session scope: {signal_types}"
+        )
