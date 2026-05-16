@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.7.0 — Breaking changes
+
+> Manual prose; release-please will add its auto-generated `## [0.7.0]` block (Features / Bug Fixes / etc.) above the v0.6.0 header when v0.7.0 is cut. Keep this section as-is across release-please regenerations.
+
+### `analyze --session` auto-scopes diagnostics
+
+In v0.6.0, `agentfluent analyze --project P --session <uuid> --diagnostics` scoped token/cost metrics to the named session but **rolled diagnostics up across all sessions in the project** — recommendations, offload candidates, and quality signals reflected the full window even though the metrics did not.
+
+In v0.7.0, `--session` auto-scopes the diagnostics pipeline too. Every metric and finding in the output now reflects only the named session. The same flag means the same scope across the whole envelope.
+
+**Before (v0.6.0):**
+
+```
+$ agentfluent analyze --project P --session abc123.jsonl --diagnostics --json
+# token_metrics: scoped to session abc123
+# diagnostics.recommendations: aggregated across ALL project sessions
+```
+
+**After (v0.7.0):**
+
+```
+$ agentfluent analyze --project P --session abc123.jsonl --diagnostics --json
+# token_metrics: scoped to session abc123
+# diagnostics.recommendations: scoped to session abc123
+# scope_session: "abc123.jsonl"   (new metadata field, lets consumers verify scope)
+```
+
+Two related changes shipped alongside:
+
+- The JSON envelope now carries a top-level `scope_session: str | None` so consumers can confirm scope without re-counting sessions ([#357](https://github.com/frederick-douglas-pearce/agentfluent/pull/383)).
+- `--session` + `--latest` is now an error instead of silently no-op'd ([#358](https://github.com/frederick-douglas-pearce/agentfluent/pull/384)).
+
+**Rationale:** see decision [D032](.claude/specs/decisions.md) — the v0.6 behavior was a latent inconsistency, not a feature anyone depended on. Per [D029](.claude/specs/decisions.md), the change is documented as a breaking note but kept under a `0.x` minor bump rather than a major bump, because the leading-zero version already signals "expect breaking changes."
+
 ## [0.6.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.5.1...v0.6.0) (2026-05-09)
 
 
