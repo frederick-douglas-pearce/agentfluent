@@ -185,7 +185,10 @@ def analyze(
         None,
         "--latest",
         "-n",
-        help="Analyze only the N most recent sessions.",
+        help=(
+            "Analyze only the N most recent sessions. "
+            "Mutually exclusive with --session."
+        ),
     ),
     since: Optional[str] = typer.Option(  # noqa: UP007, UP045
         None,
@@ -283,6 +286,13 @@ def analyze(
         err_console.print(
             "[red]Error:[/red] --since/--until cannot be combined with "
             "--session (which selects a specific file).",
+        )
+        raise typer.Exit(code=EXIT_USER_ERROR)
+
+    if session is not None and latest is not None:
+        err_console.print(
+            "[red]Error:[/red] --latest cannot be combined with --session "
+            "(which already selects a single session).",
         )
         raise typer.Exit(code=EXIT_USER_ERROR)
 
