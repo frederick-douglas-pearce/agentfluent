@@ -168,7 +168,12 @@ def analyze(
         None,
         "--session",
         "-s",
-        help="Specific session filename to analyze.",
+        help=(
+            "Specific session filename to analyze. Scope auto-applies to "
+            "diagnostics: signals, recommendations, and offload candidates "
+            "are computed from this session only (v0.6 rolled them up "
+            "across the project — see CHANGELOG)."
+        ),
     ),
     agent: Optional[str] = typer.Option(  # noqa: UP007, UP045
         None,
@@ -373,6 +378,7 @@ def analyze(
     result.window = window_metadata
     result.diagnostics_version = __version__
     result.project_name = project_info.display_name
+    result.scope_session = session
 
     if format == "json":
         _print_json(result, quiet=quiet, project_name=project_info.display_name)
