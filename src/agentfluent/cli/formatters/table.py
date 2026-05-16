@@ -284,7 +284,10 @@ def format_analysis_table(
         else:
             _format_diagnostics_summary(console, diag)
 
-    console.print(f"\n[bold]Sessions analyzed:[/bold] {result.session_count}")
+    if result.scope_session is not None:
+        console.print(f"\n[bold]Session:[/bold] {result.scope_session}")
+    else:
+        console.print(f"\n[bold]Sessions analyzed:[/bold] {result.session_count}")
 
 
 def _verbose_signal_message(sig: DiagnosticSignal) -> str:

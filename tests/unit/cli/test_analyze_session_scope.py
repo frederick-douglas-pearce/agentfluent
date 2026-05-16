@@ -181,3 +181,52 @@ class TestSessionScopesEverything:
         assert agent_keys == {"pm", "tester"}, (
             "expected both sessions' agent types when --session is omitted"
         )
+
+
+class TestSessionLatestMutualExclusion:
+    """``--session`` + ``--latest`` is silently no-op'd in v0.6 — when
+    ``--session`` is set, ``session_infos`` already has length 1, so
+    ``[:latest]`` is a noop. Make the conflict explicit so users get a
+    clear error instead of a misleading-but-accepted combination."""
+
+    @pytest.mark.usefixtures("two_session_project")
+    def test_session_with_latest_errors(
+        self, runner: CliRunner, cli_app: typer.Typer,
+    ) -> None:
+        result = runner.invoke(
+            cli_app,
+            ["analyze", "--project", "project",
+             "--session", "alpha.jsonl", "--latest", "3"],
+        )
+        assert result.exit_code != 0
+        assert "--latest cannot be combined with --session" in result.stderr
+
+
+class TestScopedFooterRendering:
+    """Table footer must read ``Session: <filename>`` (not ``Sessions
+    analyzed: 1``) when ``scope_session`` is set, so users can confirm
+    scope from the terminal output without reading JSON."""
+
+    @pytest.mark.usefixtures("two_session_project")
+    def test_scoped_footer_shows_session_filename(
+        self, runner: CliRunner, cli_app: typer.Typer,
+    ) -> None:
+        result = runner.invoke(
+            cli_app,
+            ["analyze", "--project", "project", "--session", "alpha.jsonl",
+             "--no-diagnostics"],
+        )
+        assert result.exit_code == 0, result.output
+        assert "Session: alpha.jsonl" in result.stdout
+        assert "Sessions analyzed:" not in result.stdout
+
+    @pytest.mark.usefixtures("two_session_project")
+    def test_unscoped_footer_shows_session_count(
+        self, runner: CliRunner, cli_app: typer.Typer,
+    ) -> None:
+        result = runner.invoke(
+            cli_app,
+            ["analyze", "--project", "project", "--no-diagnostics"],
+        )
+        assert result.exit_code == 0, result.output
+        assert "Sessions analyzed: 2" in result.stdout
