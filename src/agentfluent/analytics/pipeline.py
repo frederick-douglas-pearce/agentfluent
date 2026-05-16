@@ -105,6 +105,12 @@ class AnalysisResult(BaseModel):
     re-specified at render time. Additive field — ``None`` on legacy
     envelopes; renderers fall back to ``"(unknown project)"``."""
 
+    scope_session: str | None = None
+    """Session filename when ``--session`` constrained the run, ``None``
+    otherwise. Surfaced so consumers can verify scope at a glance: when
+    set, every metric and diagnostic in this envelope reflects exactly
+    one session. Stamped by :mod:`agentfluent.cli.commands.analyze` (#357)."""
+
 
 def analyze_session(
     path: Path,
