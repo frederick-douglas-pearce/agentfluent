@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.7.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.6.0...v0.7.0) (2026-05-16)
+
+
+### Features
+
+* **cli:** add `agentfluent report` command skeleton ([#353](https://github.com/frederick-douglas-pearce/agentfluent/issues/353)) ([#365](https://github.com/frederick-douglas-pearce/agentfluent/issues/365)) ([c6f3704](https://github.com/frederick-douglas-pearce/agentfluent/commit/c6f3704a7c68ff9a51217cc6ad7fed36fdb3691c))
+* **cli:** block --session + --latest combination, surface scope in table footer ([#358](https://github.com/frederick-douglas-pearce/agentfluent/issues/358)) ([#384](https://github.com/frederick-douglas-pearce/agentfluent/issues/384)) ([cbe1b45](https://github.com/frederick-douglas-pearce/agentfluent/commit/cbe1b45b703e6b107be52e51530ae0fb61c0d412))
+* **cli:** implement `agentfluent report` section renderers ([#354](https://github.com/frederick-douglas-pearce/agentfluent/issues/354)) ([#366](https://github.com/frederick-douglas-pearce/agentfluent/issues/366)) ([26c2eaa](https://github.com/frederick-douglas-pearce/agentfluent/commit/26c2eaa7495b5adbc59a3fe086d6fb0b768260db))
+* **cli:** surface --session scope on analyze envelope + pin diagnostics scope ([#357](https://github.com/frederick-douglas-pearce/agentfluent/issues/357)) ([#383](https://github.com/frederick-douglas-pearce/agentfluent/issues/383)) ([6f7c86c](https://github.com/frederick-douglas-pearce/agentfluent/commit/6f7c86c87602dbf25a48b8f6d38a48ddcdd575f3))
+* **diagnostics:** detect custom agents defined but never delegated to ([#346](https://github.com/frederick-douglas-pearce/agentfluent/issues/346)) ([#369](https://github.com/frederick-douglas-pearce/agentfluent/issues/369)) ([dfa5ec6](https://github.com/frederick-douglas-pearce/agentfluent/commit/dfa5ec6de95942b0e4ca729eb6d3af408edc84f4))
+* **diagnostics:** hide negative-savings offload + filter cluster-name stopwords ([#363](https://github.com/frederick-douglas-pearce/agentfluent/issues/363)) ([9c94983](https://github.com/frederick-douglas-pearce/agentfluent/commit/9c9498352391f7e1cc96557f4c870ae69e329c94))
+* **diff:** propagate window + diagnostics-version into diff output ([#361](https://github.com/frederick-douglas-pearce/agentfluent/issues/361)) ([7d91861](https://github.com/frederick-douglas-pearce/agentfluent/commit/7d918616878d63fdeca69ffde992a48bde883c16))
+
+
+### Bug Fixes
+
+* **diff:** add Origin column to Token Metrics by Model table ([#343](https://github.com/frederick-douglas-pearce/agentfluent/issues/343)) ([#367](https://github.com/frederick-douglas-pearce/agentfluent/issues/367)) ([552cbe7](https://github.com/frederick-douglas-pearce/agentfluent/commit/552cbe7ed6337bc325f50725587c47817eafb639))
+
 ## [0.6.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.5.1...v0.6.0) (2026-05-09)
 
 
