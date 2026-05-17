@@ -75,11 +75,29 @@ def save(console: Console, filename: str, title: str) -> None:
 def _trimmed_diagnostics(diag: DiagnosticsResult) -> DiagnosticsResult:
     """Return a copy of ``diag`` with signal / recommendation lists
     truncated to keep the diagnostics screenshot within a reasonable
-    vertical footprint. Ordering is preserved (severity desc, count desc)
-    so the most actionable rows stay visible."""
+    vertical footprint.
+
+    Signals are deduplicated by ``signal_type`` first (one row per
+    distinct type, in extraction order), then any remaining slots are
+    filled with additional rows of already-seen types. This guarantees
+    the screenshot showcases the breadth of signals AgentFluent
+    detects (cost + speed + quality axes) instead of N rows of whichever
+    type happened to lead the extraction order on this dataset.
+    """
+    seen_types: set[str] = set()
+    primary: list = []
+    extras: list = []
+    for sig in diag.signals:
+        if sig.signal_type not in seen_types:
+            seen_types.add(sig.signal_type)
+            primary.append(sig)
+        else:
+            extras.append(sig)
+    trimmed_signals = (primary + extras)[:MAX_SIGNALS]
+
     return diag.model_copy(
         update={
-            "signals": diag.signals[:MAX_SIGNALS],
+            "signals": trimmed_signals,
             "recommendations": diag.recommendations[:MAX_AGGREGATED_RECS],
             "aggregated_recommendations": diag.aggregated_recommendations[
                 :MAX_AGGREGATED_RECS
