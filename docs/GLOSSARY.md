@@ -1187,6 +1187,52 @@ is what fell inside `[since, until)` and was actually analyzed.
 }
 ```
 
+### `scope_session`
+
+**Short:** Top-level field on `analyze --json` output naming the session
+filename when `--session` constrained the run; `null` otherwise.
+
+**Detail:** Added in v0.7 (#357). When set, every metric and diagnostic in
+the envelope reflects exactly one session -- token/cost,
+recommendations, offload candidates, and quality signals all
+scope to the named file. Lets a downstream consumer confirm
+scope from a single field instead of re-counting
+`agent_metrics.by_agent_type` or `session_count`.
+
+Pair with the v0.7 breaking-change note in CHANGELOG: in v0.6
+`--session` scoped metrics but rolled diagnostics across the
+full project, which made `--session` + `--diagnostics` output
+misleading. v0.7 unifies the scope under one flag.
+
+**Example:**
+
+```
+"scope_session": "session-abc123.jsonl"
+```
+
+**Related:** [`window`](#window), [`diagnostics_version`](#diagnostics_version)
+
+### `diagnostics_version`
+
+**Short:** Top-level field on `analyze --json` output stamping the
+AgentFluent version that produced the envelope.
+
+**Detail:** Added in v0.7 (#347). `agentfluent diff` reads this from both
+baseline and current and emits a non-fatal warning when they
+differ -- so signal-count deltas don't conflate real behavior
+changes with detector-sensitivity changes between releases.
+Per D034, the warning is informational; `--strict` mode is
+deferred. Absent on pre-v0.7 envelopes; `diff` reads them
+cleanly and skips the warning.
+
+**Example:**
+
+```
+"diagnostics_version": "0.7.0"
+```
+
+**Related:** [`scope_session`](#scope_session), [`window`](#window)
+
 
 ---
 
