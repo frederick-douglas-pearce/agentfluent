@@ -78,6 +78,7 @@ SIGNAL_AXIS_MAP: dict[SignalType, Axis] = {
     SignalType.USER_CORRECTION: Axis.QUALITY,
     SignalType.FILE_REWORK: Axis.QUALITY,
     SignalType.REVIEWER_CAUGHT: Axis.QUALITY,
+    SignalType.FEAT_FIX_PROXIMITY: Axis.QUALITY,
 }
 
 # Signal types that carry comparable scalar metrics in ``detail``. Only

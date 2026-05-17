@@ -17,8 +17,12 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from agentfluent.agents.models import AgentInvocation
+
+if TYPE_CHECKING:
+    from agentfluent.analytics.pipeline import SessionAnalysis
 from agentfluent.config.mcp_discovery import discover_mcp_servers
 from agentfluent.config.models import AgentConfig
 from agentfluent.config.scanner import scan_agents
@@ -33,6 +37,7 @@ from agentfluent.diagnostics.delegation import (
     _count_clusterable_invocations,
     suggest_delegations,
 )
+from agentfluent.diagnostics.git_signals import extract_git_quality_signals
 from agentfluent.diagnostics.mcp_assessment import (
     McpToolCall,
     audit_mcp_servers,
@@ -176,6 +181,8 @@ def run_diagnostics(
     project_dir: Path | None = None,
     parent_messages: list[SessionMessage] | None = None,
     session_count: int | None = None,
+    sessions: list[SessionAnalysis] | None = None,
+    git_repo: Path | None = None,
 ) -> DiagnosticsResult:
     """Run the full diagnostics pipeline on agent invocations.
 
@@ -283,6 +290,18 @@ def run_diagnostics(
         signals.extend(extract_quality_signals(parent_messages, invocations))
     else:
         logger.debug("quality signals skipped: parent_messages=None")
+
+    # Local-git quality signals (#275). Off unless the caller passes
+    # both ``sessions`` (for feat-commit → session correlation) and
+    # ``git_repo`` (the working tree to inspect). The CLI gates this
+    # behind ``--git`` so programmatic callers never silently shell out.
+    if git_repo is not None and sessions is not None:
+        signals.extend(extract_git_quality_signals(sessions, repo_dir=git_repo))
+    else:
+        logger.debug(
+            "git signals skipped: git_repo=%s sessions=%s",
+            git_repo is not None, sessions is not None,
+        )
 
     correlated_pairs = correlate(signals, configs_by_name)
     recommendations = [rec for _, rec in correlated_pairs]

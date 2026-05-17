@@ -275,6 +275,16 @@ def analyze(
             "actionable. JSON output always carries the full list."
         ),
     ),
+    git: bool = typer.Option(
+        False,
+        "--git",
+        help=(
+            "Enable local-git quality signals (FEAT_FIX_PROXIMITY). "
+            "Off by default — AgentFluent does not shell out to git "
+            "unless explicitly opted in. The project's source directory "
+            "must be a git repo; non-repo dirs silently skip."
+        ),
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output."),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Show summary only."),
 ) -> None:
@@ -360,6 +370,10 @@ def analyze(
         project_disk_path = resolve_project_disk_path(
             project_info.slug, claude_config_dir=config_dir,
         )
+        # When --git is set, the project's source directory becomes
+        # the git_repo we hand to diagnostics. project_disk_path is
+        # the ~/.claude/projects mapping resolution; it may or may not
+        # be a git repo, and git_signals silently skips when it isn't.
         result.diagnostics = run_diagnostics(
             all_invocations,
             min_cluster_size=(
@@ -375,6 +389,8 @@ def analyze(
             project_dir=project_disk_path,
             parent_messages=all_messages,
             session_count=result.session_count,
+            sessions=result.sessions if git else None,
+            git_repo=project_disk_path if git else None,
         )
     elif result.agent_metrics.total_invocations == 0 and diagnostics:
         err_console.print(

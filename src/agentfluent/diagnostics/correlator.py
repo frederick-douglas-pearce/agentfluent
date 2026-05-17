@@ -825,6 +825,47 @@ class ReviewerCaughtRule(_QualityRule):
         return observation, reason, action
 
 
+class FeatFixProximityRule(_QualityRule):
+    """FEAT_FIX_PROXIMITY -> recommend a review-style subagent (or
+    revisit reviewer effectiveness when one was already used).
+
+    Cross-cutting (``agent_type=None``). Recommendation copy branches
+    on ``session_used_reviewer``: a fix-storm right after a feature
+    shipped *without* a reviewer is a strong "add review" signal;
+    the same pattern *with* a reviewer in the loop instead asks whether
+    the reviewer's coverage matched the feature's risk surface.
+    """
+
+    SIGNAL_TYPE = SignalType.FEAT_FIX_PROXIMITY
+
+    def _observation_reason_action(
+        self, signal: DiagnosticSignal,
+    ) -> tuple[str, str, str]:
+        used_reviewer = signal.detail.get("session_used_reviewer")
+        observation = signal.message
+        if used_reviewer is True:
+            reason = (
+                "A review-style subagent ran on the originating session, "
+                "yet a fix landed quickly. The reviewer's coverage may not "
+                "have matched the feature's risk surface."
+            )
+            action = (
+                "Audit the reviewer's prompt and tool access against the "
+                "kinds of issues the fix commits addressed."
+            )
+        else:
+            reason = (
+                "Fixes landing within days of a feature on the same files "
+                "indicate a quality miss an independent reviewer could "
+                "have caught before merge."
+            )
+            action = (
+                "Consider routing similar feature work through an "
+                "architect or code-reviewer subagent before commit."
+            )
+        return observation, reason, action
+
+
 RULES: list[CorrelationRule] = [
     AccessErrorRule(),
     ErrorHandlingRule(),
@@ -840,6 +881,7 @@ RULES: list[CorrelationRule] = [
     UserCorrectionRule(),
     FileReworkRule(),
     ReviewerCaughtRule(),
+    FeatFixProximityRule(),
 ]
 
 
