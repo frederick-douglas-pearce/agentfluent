@@ -65,6 +65,10 @@ class SignalType(StrEnum):
 
     Quality signals (extracted from parent-thread message patterns):
     - `USER_CORRECTION`, `FILE_REWORK`, `REVIEWER_CAUGHT`
+
+    Local-git quality signals (extracted from `git log` history,
+    opt-in via `--git`):
+    - `FEAT_FIX_PROXIMITY`
     """
 
     ERROR_PATTERN = "error_pattern"
@@ -81,6 +85,7 @@ class SignalType(StrEnum):
     USER_CORRECTION = "user_correction"
     FILE_REWORK = "file_rework"
     REVIEWER_CAUGHT = "reviewer_caught"
+    FEAT_FIX_PROXIMITY = "feat_fix_proximity"
 
 
 # Signal types emitted by the trace-level extractor. Used by the dedup

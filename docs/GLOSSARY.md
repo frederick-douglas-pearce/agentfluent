@@ -629,6 +629,47 @@ per-(session, agent_type) substantive rate >= MIN_REVIEWER_CAUGHT_RATE
 
 **Related:** [`user_correction`](#user_correction), [`file_rework`](#file_rework), [`primary_axis`](#primary_axis)
 
+### `feat_fix_proximity`
+
+**Short:** A `feat:` commit followed within a short window by `fix:` commits
+touching the same files -- evidence that the feature shipped with
+quality issues an independent reviewer might have caught.
+
+**Detail:** Local-git quality-axis signal (v0.7). Off by default; runs only
+when the CLI passes `--git`. Scans the last 90 days of `git log`
+in the project's source directory for `feat:` commits, then for
+each one looks 7 days forward for any `fix:` commits that share
+at least one file. Each matched pair becomes one signal.
+
+Cross-cutting (`agent_type=None`). Severity branches on whether
+the originating session used a review-style subagent (architect,
+code-reviewer, tester, security-review): WARNING when no reviewer
+ran (strong "add review" signal), INFO when one ran (weaker --
+the reviewer was present but the issue slipped, so the
+recommendation pivots from "add a reviewer" to "audit the
+reviewer's coverage").
+
+Session correlation: AgentFluent picks the session whose last
+message timestamp most closely precedes the feat commit, then
+inspects its invocations. Commits made outside any analyzed
+session window yield `session_used_reviewer: null`.
+
+Subprocess invocation is bounded (30s timeout); missing git
+binary, non-repo dir, or empty window all silently skip the
+pipeline rather than raising.
+
+**Example:**
+
+```
+feat a1b2c3d followed by 2 fixes on shared file(s) within 3d
+```
+
+**Severity:** info -> warning
+
+**Recommendation target:** `subagent`
+
+**Related:** [`user_correction`](#user_correction), [`file_rework`](#file_rework), [`reviewer_caught`](#reviewer_caught), [`primary_axis`](#primary_axis)
+
 
 ---
 
