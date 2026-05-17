@@ -1,24 +1,26 @@
 ---
 name: tester
 description: >
-  Invoke when one or more pytest tests are failing and the goal is to
-  diagnose and fix the failures. Returns the failure cause and either a
-  proposed minimal Edit (or applied fix) or a clear description of what's
-  wrong if the fix isn't safe to auto-apply. Do NOT invoke for: writing
-  new tests, designing test strategy, refactoring tests, fixing tests
-  that reflect intended new behavior changes, or chasing mypy/ruff/CI
-  failures (those belong to the parent thread). Do NOT invoke before
-  pytest has been run — if no failure has been observed yet, run pytest
-  in the parent thread first and report what failed.
+  Invoke for pytest work on this repo: diagnosing and fixing existing
+  failures, writing new tests for a feature or bug fix, refactoring
+  test setup, or extending fixtures. Returns either applied edits +
+  the resulting pytest output, or a clear description of what's wrong
+  if the fix isn't safe to auto-apply. Do NOT invoke for: chasing
+  mypy/ruff/CI failures (those belong to the parent thread); changing
+  test behavior to mask a real production-code bug; or fixing tests
+  that reflect an intentional spec change the parent hasn't yet
+  decided on. For failure-diagnosis work, prefer running pytest in
+  the parent thread first and passing the failure output rather than
+  re-running the whole suite from scratch.
 model: claude-sonnet-4-6
 tools:
   - Read
+  - Write
   - Edit
   - Bash
   - Grep
   - Glob
 disallowedTools:
-  - Write
   - Agent
   - WebFetch
   - WebSearch
