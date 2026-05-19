@@ -652,3 +652,39 @@ primary_axis = max(AXIS_TIEBREAKER, key=lambda a: axis_scores[a])
 **Reference:** epic #349 body; issue #347.
 
 ---
+
+## D035: LLM-call augmentation candidates — tracking discipline established
+
+**Date:** 2026-05-18
+**Context:** The `TOOL_ORCHESTRATION_CHAIN` signal (PRD `prd-advanced-tool-use-diagnostics.md`) uses a rule-based proxy to detect wasteful tool-call chains. The semantic sub-detection ("did this intermediate result affect the final output?") is the kind of judgment that an LLM call would handle well but that rules approximate poorly. Fred flagged that AgentFluent should start collecting these cases systematically so the project is ready when LLM-call augmentation becomes worth the cost.
+
+**Decision:** Establish a running list of "future LLM-call augmentation candidates" as a section within the Advanced Tool Use Diagnostics PRD (Section 9). Each candidate records: the signal, the sub-detection an LLM would improve, what the rule-based version does, approximate cost/call, and expected precision/recall delta. The list starts with one entry (TOOL_ORCHESTRATION_CHAIN intermediate-result relevance) and grows as new candidates are identified.
+
+**This is NOT a commitment to add LLM calls.** It is a tracking discipline that ensures:
+- The project knows exactly where rule-based precision falls short
+- Cost/benefit is quantified before implementation
+- The decision to add an LLM call (if it ever happens) has a clear trigger: rule-based FP rate exceeds threshold AND infrastructure exists for optional LLM integration
+
+**Format per candidate:**
+
+| Field | Purpose |
+|---|---|
+| Signal | Which diagnostic signal benefits |
+| Sub-detection | The specific classification step an LLM would perform |
+| Rule-based approach | What the current heuristic does |
+| LLM approach | What the LLM call would do |
+| Approximate cost/call | Estimated token cost at cheapest suitable model |
+| Expected precision delta | How much precision improves over rule-based |
+| When to implement | Triggering conditions for actual implementation |
+
+**Candidate #1:** `TOOL_ORCHESTRATION_CHAIN` — intermediate-result relevance classification. Rule-based: token-to-tool ratio proxy (estimated 60-70% precision). LLM-augmented: semantic relevance check (estimated 85-90% precision). Cost: ~$0.02-0.05/invocation at Haiku pricing. Trigger: dogfood confirms >30% FP rate AND AgentFluent has an opt-in LLM infrastructure layer.
+
+**Rationale:**
+- Avoids the anti-pattern of adding LLM calls reactively without tracking why. Each candidate is justified by a specific precision gap.
+- Keeps D002 (rule-based for MVP and beyond) intact while creating a structured path for evolution.
+- The tracking cost is near-zero: a section in the PRD, updated when new candidates are identified.
+- Quantifying cost/call now ensures future implementation decisions compare marginal precision gain against marginal API cost — not vibes.
+
+**Reference:** `prd-advanced-tool-use-diagnostics.md` Section 9. D002 (rule-based constraint). Fred's directive: "start collecting examples where LLM API calls would have high impact."
+
+---
