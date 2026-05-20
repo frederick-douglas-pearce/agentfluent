@@ -49,6 +49,7 @@ the human (or the pm agent on the human's instruction).
 
 | Date | URL | Title | Takeaway | Tag | Candidate ref |
 |---|---|---|---|---|---|
+| 2026-05-20 | https://raw.githubusercontent.com/anthropics/claude-agent-sdk-typescript/main/CHANGELOG.md | Claude Agent SDK (TypeScript) Changelog (v0.3.142–v0.3.145) | Three releases: `model_not_found` error type replacing `invalid_request` + new `api_error_status` field (v0.3.144); `TodoWrite` removed, replaced by `TaskCreate`/`TaskUpdate`/`TaskGet`/`TaskList` (v0.3.142); new `request_id`, `subagent_type`, `task_description` fields on SDK message types; peer-dep restructure (v0.3.143); Bun binary extraction helper (v0.3.144) | candidate-added | C-007, C-008 |
 | 2026-05-20 | https://raw.githubusercontent.com/anthropics/claude-code/refs/heads/main/CHANGELOG.md | Claude Code Changelog (v2.1.119–2.1.145) | 27 releases covering new hook fields (`duration_ms`, `background_tasks`, `session_crons`), `agent_id`/`parent_agent_id` in OTEL spans, `alwaysLoad` MCP option, PostToolUse output replacement, agent frontmatter `mcpServers`, `context: fork` infinite-loop fix, `claude agents --json` | candidate-added | C-001, C-002, C-003, C-004, C-005 |
 | 2026-05-20 | https://www.anthropic.com/engineering/april-23-postmortem | An update on recent Claude Code quality reports | Three production bugs (reasoning effort default, thinking-cache clear loop, verbosity prompt) degraded Claude Code quality Mar–Apr 2026; describes detection challenges and the new per-model eval discipline | candidate-added | C-006 |
 | 2026-05-20 | https://www.anthropic.com/engineering/managed-agents | Scaling Managed Agents: Decoupling the brain from the hands | Architecture paper on decoupling harness/tools/session-log for resilient agents; session log as external durable state; `emitEvent`/`getEvents` interfaces | not-actionable | — |
@@ -175,5 +176,41 @@ the human (or the pm agent on the human's instruction).
 **Suggested shape:** Two separate actionable items: (a) Config scanner check — scan agent system prompts for extreme word-count constraints (`≤N words`, `max N words`, `keep responses under N words`) that could degrade output quality; flag with a reference to this postmortem as evidence. (b) Behavior diagnostic signal — when session data shows high cache-miss rates alongside repetitive tool-call sequences (same tool, similar inputs, within the same session), emit a new `THINKING_CACHE_ANOMALY` signal or augment existing STUCK_PATTERN to note the cache-miss correlation. The JSONL `cache_read_input_tokens` field going unexpectedly to zero mid-session is the observable.
 
 **Relevance strength:** strong fit
+
+**Status:** queued
+
+---
+
+### C-007: `model_not_found` error type + `api_error_status` field — discrete model-config error signal
+
+**Source:** https://raw.githubusercontent.com/anthropics/claude-agent-sdk-typescript/main/CHANGELOG.md — v0.3.144, approx. May 2026
+
+**Added:** 2026-05-20
+
+**Summary:** The TypeScript Agent SDK v0.3.144 introduced a discrete `error: 'model_not_found'` error type on assistant messages and `StopFailure` hooks, replacing the prior generic `'invalid_request'` error for model-unavailability failures. A companion `api_error_status` field was added to result messages to carry the HTTP status code alongside the error type.
+
+**AgentFluent relevance:** Behavior Diagnostics and Config Assessment — AgentFluent's `ERROR_PATTERN` signal currently pattern-matches on error text strings in session data. A structured `model_not_found` error type, if surfaced in JSONL session output (as `"error": "model_not_found"` in tool_result content or assistant message fields), is a higher-confidence, lower-noise signal than text matching. It maps directly to an agent config problem: the `model:` frontmatter field or `ClaudeAgentOptions.model` specifies a model that is unavailable — a concrete recommendation (update the model field) follows immediately. This closes a known gap in the `MODEL_MISMATCH` signal, which currently focuses on cost/efficiency rather than hard availability failures.
+
+**Suggested shape:** Two parts: (a) JSONL format drift monitor — verify whether `model_not_found` and `api_error_status` appear in session JSONL output for SDK-run agents, and if so, add them as parseable fields on `ToolResultMetadata` (currently uses `extra="ignore"`). (b) New signal or `ERROR_PATTERN` subtype — when a session shows `error: model_not_found`, emit a high-severity diagnostic: "Agent invocation failed with `model_not_found` — the configured model (`<model>`) is unavailable in this API context. Update the agent's `model:` field to a currently available model." This is a concrete, paste-ready fix rather than a probabilistic recommendation.
+
+**Relevance strength:** strong fit
+
+**Status:** queued
+
+---
+
+### C-008: `TodoWrite` → Task tools rename — tool name normalization for analytics
+
+**Source:** https://raw.githubusercontent.com/anthropics/claude-agent-sdk-typescript/main/CHANGELOG.md — v0.3.142, approx. May 2026
+
+**Added:** 2026-05-20
+
+**Summary:** The TypeScript Agent SDK v0.3.142 removed the deprecated `TodoWrite` tool and replaced it with four Task tools: `TaskCreate`, `TaskUpdate`, `TaskGet`, and `TaskList`. Sessions generated by SDK agents running v0.3.142+ will show `TaskCreate`/`TaskUpdate`/`TaskGet`/`TaskList` tool_use blocks where older sessions showed `TodoWrite`. The rename is not backward-compatible in the session data stream.
+
+**AgentFluent relevance:** Execution Analytics — AgentFluent's tool pattern analytics (tool frequency, diversity, retry detection) key on tool names extracted from `tool_use` content blocks. Any analytics or diagnostics logic that checks for `TodoWrite` by name will silently miss usage in sessions generated by SDK v0.3.142+. Conversely, `TaskCreate`/`TaskUpdate`/`TaskGet`/`TaskList` will appear as unknown/new tools rather than being recognized as task-management tools. This is a data-continuity problem for diff comparisons across the version boundary.
+
+**Suggested shape:** Analytics normalization update — add `TaskCreate`, `TaskUpdate`, `TaskGet`, and `TaskList` to the recognized tool taxonomy, classified as "task management" tools (same category as the old `TodoWrite`). In diff output, flag a known-rename annotation when a session baseline shows `TodoWrite` usage and the current run shows `TaskCreate`/`TaskUpdate` usage — this is not a regression but a tool rename. Also: if AgentFluent's config scanner checks for task-management tool coverage, update the check to recognize both the old and new tool names for backward compatibility with mixed-version session archives.
+
+**Relevance strength:** moderate fit
 
 **Status:** queued
