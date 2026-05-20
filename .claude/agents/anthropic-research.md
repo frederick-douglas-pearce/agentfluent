@@ -72,6 +72,7 @@ Required:
 - https://www.anthropic.com/news — product/news (last 30 days)
 - https://docs.claude.com/en/release-notes/claude-code — Claude Code changelog
 - https://raw.githubusercontent.com/anthropics/claude-agent-sdk-python/main/CHANGELOG.md — Claude Agent SDK (Python) changelog
+- https://raw.githubusercontent.com/anthropics/claude-agent-sdk-typescript/main/CHANGELOG.md — Claude Agent SDK (TypeScript) changelog
 
 Conditional (only if a required source mentions them):
 - Specific feature docs linked from the above
@@ -79,7 +80,7 @@ Conditional (only if a required source mentions them):
 
 ## Budget per run (hard caps)
 
-- WebFetch: max 12 calls
+- WebFetch: max 14 calls
 - WebSearch: max 3 calls
 - Bash (gh/git): max 10 calls
 
