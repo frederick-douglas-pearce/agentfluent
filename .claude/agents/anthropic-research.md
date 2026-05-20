@@ -46,7 +46,6 @@ hooks:
                 echo "{\"decision\": \"block\", \"reason\": \"anthropic-research Bash is restricted to read-only gh/git lookups for dedup\"}"
               fi
             '
-memory: project
 ---
 
 # Anthropic Feature Research
@@ -72,7 +71,7 @@ Required:
 - https://www.anthropic.com/engineering — engineering blog (last 30 days)
 - https://www.anthropic.com/news — product/news (last 30 days)
 - https://docs.claude.com/en/release-notes/claude-code — Claude Code changelog
-- https://docs.claude.com/en/release-notes/agent-sdk — Agent SDK changelog (if present)
+- https://raw.githubusercontent.com/anthropics/claude-agent-sdk-python/main/CHANGELOG.md — Claude Agent SDK (Python) changelog
 
 Conditional (only if a required source mentions them):
 - Specific feature docs linked from the above
