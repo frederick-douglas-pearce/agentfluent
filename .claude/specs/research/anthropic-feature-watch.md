@@ -1,12 +1,15 @@
 # Anthropic Feature Watch
 
 **Purpose:** Queue of candidate features for AgentFluent's roadmap, sourced
-from Anthropic announcements and ecosystem chatter. Maintained by the
-`anthropic-research` subagent.
+from Anthropic announcements and ecosystem chatter. Maintained jointly by
+the `anthropic-research`, `candidate-verifier`, and `candidate-promoter`
+subagents plus a human review gate.
 
-**Workflow:** subagent appends candidates here → human reviews on cadence
-→ human says "spec out candidate C-NNN" → pm agent produces PRD/issues →
-candidate status flips to `promoted` with the resulting issue/PR link.
+**Pipeline:**
+1. `anthropic-research` surveys upstream sources and appends candidates with `Status: queued`.
+2. `candidate-verifier` grounds each candidate's claims in the codebase, decisions log, and GitHub backlog, adds a Verification block, and flips Status to `verified`, `needs-evidence`, or `duplicate`.
+3. The human reviews each annotated candidate and adds a `Decision` line: `approve`, `defer`, `dismiss`, or `override-route <route>`.
+4. `candidate-promoter` executes the decision — files issues, comments on overlaps, or delegates to the `pm` subagent — and records the outcome in a Promotion block. Status flips to `promoted` or `dismissed`.
 
 ---
 
@@ -25,6 +28,12 @@ candidate status flips to `promoted` with the resulting issue/PR link.
 
 ### Candidate entry
 
+Each candidate is a block under `## Candidates Queue` that accumulates
+annotations as it moves through the pipeline. Scout fields are written
+once and never edited; later agents and the human append blocks below.
+
+**Scout fields** (anthropic-research, append-only):
+
 | Field | Required | Notes |
 |---|---|---|
 | ID | yes | `C-NNN`, monotonic |
@@ -35,11 +44,51 @@ candidate status flips to `promoted` with the resulting issue/PR link.
 | AgentFluent relevance | yes | Which of the 4 core features it touches + which data source signals it |
 | Suggested shape | yes | New signal? Config scanner check? Analytics metric? Diff annotation? |
 | Relevance strength | yes | `strong fit` / `moderate fit` / `speculative fit` |
-| Status | yes | `queued` / `promoted` / `dismissed` / `duplicate` |
-| Status notes | conditional | If promoted: linked issue/PRD. If dismissed: reason. If duplicate: existing issue/PRD. |
 
-Candidates are append-only by the subagent. Status changes are made by
-the human (or the pm agent on the human's instruction).
+**Verification block** (candidate-verifier, after scout fields):
+
+```
+**Verification (YYYY-MM-DD):**
+- Premise check: confirmed | unconfirmed | partial — <evidence; file:line or issue#>
+- Dedup check: no overlap | overlaps with #N (state) | covers decision D-NNN
+- Suggested route: pm-first | architect-first | dismiss-as-duplicate — <reason>
+- Notes: <optional 1-2 lines>
+```
+
+**Decision line** (human, after Verification — this is the human gate):
+
+```
+**Decision (YYYY-MM-DD):** <decision>
+```
+
+Where `<decision>` is one of:
+- `approve` — execute the verifier's Suggested route
+- `defer — <reason>` — leave the candidate for later (no action; Status unchanged)
+- `dismiss — <reason>` — drop the candidate (no GitHub action; Status → `dismissed`)
+- `override-route <route> — <reason>` — execute a different route than the verifier suggested
+
+**Promotion block** (candidate-promoter, after Decision):
+
+```
+**Promotion (YYYY-MM-DD):** <route> → <outcome>
+```
+
+Examples:
+- `pm-first → filed epic #411, stories #412, #413`
+- `dismiss-as-duplicate → commented on #164`
+- `needs-evidence → filed #414 (blocked-on-evidence)`
+- `dismiss → not worth tracking`
+
+**Status line** (always last; reflects current state):
+
+| Status | Set by | Meaning |
+|---|---|---|
+| `queued` | scout | initial; awaiting verification |
+| `verified` | verifier | premise confirmed, awaiting human gate |
+| `needs-evidence` | verifier | premise depends on unobserved data; human decides whether to track |
+| `duplicate` | verifier | overlaps with existing issue or decision; awaiting human gate |
+| `promoted` | promoter | downstream action complete (issue filed, pm invoked, comment posted) |
+| `dismissed` | promoter | human chose to drop |
 
 ---
 
