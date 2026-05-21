@@ -141,6 +141,8 @@ Examples:
 - Dedup check: no overlap — no open or recently-closed issues cover hook-script content analysis or `duration_ms` config check.
 - Suggested route: architect-first — touches existing config scanner module and requires defining what "hook references duration_ms" means at the script-inspection level; scope needs design before PM can spec.
 
+**Decision (2026-05-21):** approve
+
 **Status:** verified
 
 ---
@@ -163,6 +165,8 @@ Examples:
 - Premise check: unconfirmed — config scanner reads `hooks` dict from frontmatter (scanner.py:98) and `skills` list (line 99) but has no `crons:` frontmatter field in `AgentConfig` model (`src/agentfluent/config/models.py`). No fixture or session data contains `background_tasks`/`session_crons` fields to confirm they surface in JSONL. The Stop-hook inspection logic the candidate assumes does not exist.
 - Dedup check: no overlap — no open or recently-closed issues cover background-task / cron hook auditing.
 - Suggested route: needs-evidence — `crons:` is not in the current `AgentConfig` model; confirm whether `crons:` appears in real agent frontmatter and whether Stop hook input JSONL captures `background_tasks`. Route to `pm-first` once the frontmatter field and session data are confirmed.
+
+**Decision (2026-05-21):** approve
 
 **Status:** needs-evidence
 
@@ -187,6 +191,8 @@ Examples:
 - Dedup check: overlaps with #164 (open) — format drift monitor is the stated home for OTEL/agentId cross-validation.
 - Suggested route: dismiss-as-duplicate — the actionable part (format drift monitor for agentId/OTEL alignment) belongs in #164. No standalone feature warranted.
 
+**Decision (2026-05-21):** approve
+
 **Status:** duplicate
 
 ---
@@ -209,6 +215,8 @@ Examples:
 - Premise check: confirmed — `AgentConfig.mcp_servers` field confirmed at `src/agentfluent/config/models.py:90`; scanner already reads `mcpServers` frontmatter key at `src/agentfluent/config/scanner.py:97`. The field is parsed today. The candidate's concern is that `McpServerConfig` discovery (issue #117, closed) and MCP audit logic need to merge agent-frontmatter `mcpServers` with project/user `.mcp.json` sources — a gap in the audit layer, not the scanner.
 - Dedup check: overlaps with #163 (open) and #171 (open) — MCP audit signal work is active. #163 covers `MCP_DISABLED_SERVER_USED`; #171 covers verifying MCP audit rules fire. Frontmatter-source merging is the missing connector between the already-parsed field and the audit rules.
 - Suggested route: architect-first — scanner already ingests the field; the gap is in MCP audit source-merging logic which touches #163/#171 in-flight work. Architect should confirm the merge point before PM specs.
+
+**Decision (2026-05-21):** approve
 
 **Status:** verified
 
@@ -234,6 +242,8 @@ Examples:
 - Suggested route: pm-first — once #183 ships the skill scanner, the fork-loop check is a small additive rule. PM can spec the check scoped as a follow-on story to #183.
 - Notes: The STUCK_PATTERN + high tool-count session heuristic (no skill scanner needed) could ship as a standalone diagnostic note earlier if desired.
 
+**Decision (2026-05-21):** approve
+
 **Status:** verified
 
 ---
@@ -256,6 +266,8 @@ Examples:
 - Premise check: partial — `cache_read_input_tokens` is parsed and confirmed in `Usage` model at `src/agentfluent/core/session.py:23`. `ERROR_PATTERN` signal confirmed at `src/agentfluent/diagnostics/signals.py:74`. The verbosity-constraint scanner check (prompt body text scan) is additive to the existing `AgentConfig.prompt_body` field. The `THINKING_CACHE_ANOMALY` / cache-miss-goes-zero signal depends on per-session `cache_read_input_tokens` trajectory — no mid-session token-timeline tracking exists today.
 - Dedup check: no overlap — no open or recently-closed issues cover prompt verbosity constraints or thinking-cache anomaly detection.
 - Suggested route: architect-first — the two sub-items (prompt scan vs. session-timeline cache-miss signal) have different implementation homes (config scorer vs. diagnostics pipeline) and different data requirements. Splitting them cleanly needs design input before PM specs either.
+
+**Decision (2026-05-21):** approve
 
 **Status:** verified
 
@@ -280,6 +292,8 @@ Examples:
 - Dedup check: no overlap — no open or recently-closed issues cover structured `model_not_found` error parsing; #170 (open) covers model recommendation copy but not error-type parsing.
 - Suggested route: needs-evidence — confirm whether `model_not_found` / `api_error_status` appear in actual Python-SDK or Claude Code JSONL (not just the TS SDK type definitions). Collect a session fixture showing the field before implementing. Route to `pm-first` once confirmed.
 
+**Decision (2026-05-21):** approve
+
 **Status:** needs-evidence
 
 ---
@@ -302,5 +316,7 @@ Examples:
 - Premise check: confirmed — tool names are extracted from `tool_use` content blocks in the session parser and flow through `AgentInvocation` models; `AgentConfig.skills` field exists at `src/agentfluent/config/models.py:96`. The tool-taxonomy gap is real: no recognized tool set or "task-management" category exists in the codebase today. `TodoWrite` does not appear in any source file. `TaskCreate`/`TaskUpdate`/`TaskGet`/`TaskList` are similarly absent. The diff annotation concern is real for anyone comparing pre/post v0.3.142 TS SDK sessions.
 - Dedup check: no overlap — no open or recently-closed issues cover tool name normalization or rename annotations.
 - Suggested route: pm-first — clean additive scope: new tool category constant + diff annotation. No existing module conflicts. PM can spec independently.
+
+**Decision (2026-05-21):** approve
 
 **Status:** verified
