@@ -248,7 +248,9 @@ Examples:
 
 **Decision (2026-05-21):** approve
 
-**Status:** verified
+**Promotion (2026-05-21):** pm-first → filed epic #414, stories #415, #416; PRD at `.claude/specs/prd-context-fork-loop-detection.md`
+
+**Status:** promoted
 
 ---
 
