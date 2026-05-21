@@ -168,7 +168,9 @@ Examples:
 
 **Decision (2026-05-21):** approve
 
-**Status:** needs-evidence
+**Promotion (2026-05-21):** needs-evidence → filed #412 (blocked-on-evidence)
+
+**Status:** promoted
 
 ---
 
@@ -193,7 +195,9 @@ Examples:
 
 **Decision (2026-05-21):** approve
 
-**Status:** duplicate
+**Promotion (2026-05-21):** dismiss-as-duplicate → commented on #164
+
+**Status:** promoted
 
 ---
 
@@ -294,7 +298,9 @@ Examples:
 
 **Decision (2026-05-21):** approve
 
-**Status:** needs-evidence
+**Promotion (2026-05-21):** needs-evidence → filed #413 (blocked-on-evidence)
+
+**Status:** promoted
 
 ---
 
