@@ -1,15 +1,21 @@
 # Anthropic Feature Watch
 
 **Purpose:** Queue of candidate features for AgentFluent's roadmap, sourced
-from Anthropic announcements and ecosystem chatter. Maintained jointly by
-the `anthropic-research`, `candidate-verifier`, and `candidate-promoter`
-subagents plus a human review gate.
+from Anthropic announcements and ecosystem chatter. Maintained by the
+`anthropic-research` and `candidate-verifier` subagents, the
+`promote-candidates` skill, and a human review gate.
 
 **Pipeline:**
-1. `anthropic-research` surveys upstream sources and appends candidates with `Status: queued`.
-2. `candidate-verifier` grounds each candidate's claims in the codebase, decisions log, and GitHub backlog, adds a Verification block, and flips Status to `verified`, `needs-evidence`, or `duplicate`.
+1. `anthropic-research` subagent surveys upstream sources and appends candidates with `Status: queued`.
+2. `candidate-verifier` subagent grounds each candidate's claims in the codebase, decisions log, and GitHub backlog, adds a Verification block, and flips Status to `verified`, `needs-evidence`, or `duplicate`.
 3. The human reviews each annotated candidate and adds a `Decision` line: `approve`, `defer`, `dismiss`, or `override-route <route>`.
-4. `candidate-promoter` executes the decision — files issues, comments on overlaps, or delegates to the `pm` subagent — and records the outcome in a Promotion block. Status flips to `promoted` or `dismissed`.
+4. `promote-candidates` skill (invoked via `/promote-candidates`, runs in the parent thread) executes the decision — files issues, comments on overlaps, or invokes the `pm` subagent — and records the outcome in a Promotion block. Status flips to `promoted` or `dismissed`.
+
+The dispatch step is a skill (not a subagent) because subagents cannot
+invoke other subagents in Claude Code, and the `pm-first` route requires
+invoking the `pm` subagent via the `Agent` tool. Skills run in the parent
+thread, which has unrestricted Agent access. See
+`.claude/skills/promote-candidates/SKILL.md` for the implementation.
 
 ---
 
@@ -67,7 +73,7 @@ Where `<decision>` is one of:
 - `dismiss — <reason>` — drop the candidate (no GitHub action; Status → `dismissed`)
 - `override-route <route> — <reason>` — execute a different route than the verifier suggested
 
-**Promotion block** (candidate-promoter, after Decision):
+**Promotion block** (`promote-candidates` skill, after Decision):
 
 ```
 **Promotion (YYYY-MM-DD):** <route> → <outcome>
@@ -87,8 +93,8 @@ Examples:
 | `verified` | verifier | premise confirmed, awaiting human gate |
 | `needs-evidence` | verifier | premise depends on unobserved data; human decides whether to track |
 | `duplicate` | verifier | overlaps with existing issue or decision; awaiting human gate |
-| `promoted` | promoter | downstream action complete (issue filed, pm invoked, comment posted) |
-| `dismissed` | promoter | human chose to drop |
+| `promoted` | `promote-candidates` skill | downstream action complete (issue filed, pm invoked, comment posted) |
+| `dismissed` | `promote-candidates` skill | human chose to drop |
 
 ---
 
