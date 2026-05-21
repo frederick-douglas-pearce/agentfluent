@@ -1,0 +1,220 @@
+---
+name: promote-candidates
+description: Dispatch decision-annotated candidates from .claude/specs/research/anthropic-feature-watch.md per route. Files blocked-on-evidence stubs, comments on overlapping issues for duplicates, or invokes the pm subagent for pm-first candidates. Runs as a parent-thread skill (not a subagent) because subagents cannot invoke other subagents in Claude Code, and the pm-first route requires Agent-tool access.
+argument-hint: "[dry-run|live] [ALL|C-NNN,C-NNN,...]"
+allowed-tools:
+  - Read
+  - Edit
+  - Bash(gh issue list:*)
+  - Bash(gh issue view:*)
+  - Bash(gh pr list:*)
+  - Bash(gh pr view:*)
+  - Bash(gh search:*)
+  - Bash(gh label list:*)
+  - Bash(git log:*)
+  - Bash(git show:*)
+  - Bash(git diff:*)
+  - Bash(git status:*)
+  - Bash(git rev-parse:*)
+  - Bash(git blame:*)
+  - Agent
+  - mcp__github__add_issue_comment
+  - mcp__github__create_issue
+  - mcp__github__get_issue
+  - mcp__github__list_issues
+  - mcp__github__search_issues
+---
+
+# Promote Candidates
+
+You are AgentFluent's dispatch step in the research pipeline. Read the
+human-annotated candidates from `.claude/specs/research/anthropic-feature-watch.md`
+and execute each candidate's implied route. You make NO product
+judgments — every approve/defer/dismiss decision and route override
+has already been recorded in the `Decision` line. Your job is to
+execute that decision faithfully and record what you did in a
+Promotion block.
+
+This is a project-level skill (parent-thread orchestrator), not a
+subagent, because subagents cannot invoke other subagents in Claude
+Code (see [docs](https://code.claude.com/docs/en/sub-agents.md)) and
+the `pm-first` route requires invoking the `pm` subagent via the
+`Agent` tool. Skills run in the parent thread, which has unrestricted
+Agent access.
+
+## Tool surface
+
+`allowed-tools` in the frontmatter restricts this skill to:
+- `Read` / `Edit` — full access (use Edit only on the feature-watch
+  file; see "what you must NOT do")
+- `Bash` — read-only `gh` and `git` lookups, restricted by glob patterns
+- `Agent` — for pm dispatch only (do not invoke architect or any other
+  subagent; the architect-first route is Phase 3, not implemented)
+- `mcp__github__*` — issue create/comment/get/list/search only
+
+If you need a tool outside the allow-list, stop and surface the gap in
+the run summary instead of working around it.
+
+## Arguments
+
+Parse $ARGUMENTS for two positional values:
+
+1. **Mode** — `dry-run` (default) or `live`
+   - `dry-run`: describe planned actions per candidate, do NOT call
+     any GitHub MCP tool, do NOT invoke pm, do NOT edit the queue
+   - `live`: execute the plan
+2. **Scope** — `ALL` (default) or a comma-separated list of candidate
+   IDs like `C-002,C-005`. Candidates outside the scope are left
+   untouched (not deferred — they remain valid for a later run).
+
+If $ARGUMENTS is empty, default to `dry-run ALL`. If $ARGUMENTS
+contains context but no explicit mode/scope, infer from the user's
+chat message, state your assumption at the top of the run, and
+proceed.
+
+## Inputs to read first
+
+- `.claude/specs/research/anthropic-feature-watch.md` — the queue.
+  Process every candidate that has a `**Decision (YYYY-MM-DD):**`
+  line AND whose `**Status:**` is `verified`, `needs-evidence`, or
+  `duplicate`. Skip:
+  - `queued` (verifier hasn't run yet)
+  - `promoted` / `dismissed` (already handled)
+  - anything without a Decision line (human gate not closed)
+- `CLAUDE.md` — only to pass full context to pm when delegating.
+
+## Process per candidate
+
+For each candidate in scope with a Decision line:
+
+### 1. Resolve effective decision + route
+
+| Decision | Action |
+|---|---|
+| `approve` | Use the verifier's `Suggested route` from the Verification block |
+| `defer — <reason>` | Skip. No action, no Status change, no Promotion block. |
+| `dismiss — <reason>` | Flip Status to `dismissed`. Append Promotion block: `dismiss → <reason>`. No GitHub action. |
+| `override-route <route> — <reason>` | Use the route from the Decision line (overrides verifier's suggestion) |
+
+### 2. Dispatch per effective route
+
+**`pm-first`** — invoke the `pm` subagent via the Agent tool with a
+prompt that includes:
+- The full candidate body (Title through `Relevance strength`)
+- The Verification block (so pm knows premise + dedup grounding)
+- The Decision line (so pm sees any overrides)
+- Any dependency context from the Verification's Notes line (e.g.,
+  "depends on #183 — scope as a follow-on, not blocking")
+- A clear instruction: "Produce a PRD at
+  `.claude/specs/prd-<slug>.md` and file the matching epic + stories
+  in GitHub. Return the issue numbers."
+
+Capture the returned issue numbers and the PRD path. If pm returns
+without issue numbers, record what it produced and surface it in the
+run summary as a partial failure — do NOT flip Status to `promoted`.
+
+**`dismiss-as-duplicate`** — Extract the overlapping issue number
+from the Verification's Dedup check (e.g., `overlaps with #164
+(open)`). Then:
+1. `mcp__github__get_issue` to confirm the issue still exists and
+   is in the expected state.
+2. `mcp__github__add_issue_comment` to post:
+
+   ```
+   Candidate C-NNN (anthropic-feature-watch) routed here as duplicate.
+
+   **Upstream:** <Source URL>
+   **Summary:** <one-line takeaway from candidate Summary>
+   **Why this issue:** <Verifier's Dedup check reasoning, one sentence>
+
+   See `.claude/specs/research/anthropic-feature-watch.md` for full context.
+   ```
+
+**`needs-evidence`** — Before filing, search via
+`mcp__github__search_issues` for existing issues whose title contains
+the candidate ID (e.g., title contains `C-007`) to avoid double-filing
+on re-runs. If none exist, use `mcp__github__create_issue`:
+- **title:** `[candidate C-NNN] <Title> — blocked on evidence`
+- **body:**
+  ```
+  Candidate C-NNN from `.claude/specs/research/anthropic-feature-watch.md`.
+
+  **Source:** <Source URL>
+  **Summary:** <candidate Summary>
+
+  **Why blocked:** <Verifier's Notes on what would resolve it>
+
+  This issue tracks the candidate until the required evidence
+  appears. When a session fixture or upstream documentation confirms
+  the premise, re-run candidate-verifier to update the Verification
+  block, then re-run /promote-candidates to dispatch the unblocked
+  candidate.
+  ```
+- **labels:** `blocked-on-evidence` (must already exist in the repo;
+  if it doesn't, surface that as a setup error and skip the candidate)
+
+**`architect-first`** — SKIP. Phase 3 (architect-first choreography)
+is not yet implemented. Add the candidate to the run summary's
+`skipped — architect-first` list. Do not edit the candidate's Status
+or add a Promotion block.
+
+### 3. Annotate the queue
+
+For each candidate that took action, edit
+`.claude/specs/research/anthropic-feature-watch.md`:
+1. Insert a Promotion block AFTER the Decision line and BEFORE the
+   `**Status:**` line:
+   ```
+   **Promotion (YYYY-MM-DD):** <route> → <outcome>
+   ```
+2. Flip `**Status:**` to `promoted` (any route that took action) or
+   `dismissed` (for `dismiss` decisions).
+
+Outcome format examples:
+- `pm-first → filed epic #414, stories #415, #416; PRD at .claude/specs/prd-<slug>.md`
+- `dismiss-as-duplicate → commented on #164`
+- `needs-evidence → filed #412 (blocked-on-evidence)`
+- `dismiss → not worth tracking`
+
+Use today's date in the Promotion block header.
+
+## Output
+
+Return a structured run summary (under 300 words):
+
+1. **Mode:** dry-run | live
+2. **Scope:** ALL | comma-separated IDs
+3. **Candidates processed:** N of M (in scope, eligible)
+4. **Per-candidate table:** ID, decision, effective route, action taken
+   (or "would take" in dry-run), outcome
+5. **Skipped — architect-first:** list of IDs
+6. **Skipped — out of scope this run:** list of IDs (only when scope
+   is not ALL)
+7. **Skipped — no Decision line:** list of IDs (human gate not closed)
+8. **Errors / partial failures:** anything that didn't complete cleanly
+9. **Budget consumption:** Edit / Bash / MCP / Agent counts
+
+## What you must NOT do
+
+- Do not make product judgments. Never override a Decision line,
+  never skip a candidate because you "disagree with the route", never
+  refuse to dispatch because the candidate "doesn't look ready". The
+  Decision line is the contract. If a Decision line looks malformed
+  or internally inconsistent, surface it in the run summary and stop
+  on that candidate — let the human revise.
+- Do not process candidates without a Decision line. The human gate
+  is the gate.
+- Do not file duplicate issues. Search by candidate ID first.
+- Do not retry a failed dispatch silently. Record the failure in the
+  run summary and leave the candidate's Status untouched.
+- Do not edit the Verification block, the Decision line, or any
+  field above them. Promotion blocks go strictly between Decision and
+  Status.
+- Do not use the `Edit` tool on any file other than
+  `.claude/specs/research/anthropic-feature-watch.md`. The PRD file
+  is written by the `pm` subagent during its dispatch, not by you.
+  (This is a body-level rule; allowed-tools cannot path-restrict
+  Edit, so the discipline is on you. Stop and surface the issue if
+  you find yourself wanting to edit elsewhere.)
+- Do not invoke any subagent except `pm` via the `Agent` tool. The
+  architect-first route is Phase 3 and not implemented.
