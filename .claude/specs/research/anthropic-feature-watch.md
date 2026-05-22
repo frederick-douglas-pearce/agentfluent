@@ -230,7 +230,9 @@ Examples:
 
 **Decision (2026-05-21):** approve
 
-**Status:** verified
+**Promotion (2026-05-21):** architect-first → stub epic #427; architect design comment on #427 (kept separate from #163/#171); pm filed stories #428, #429, #430; cross-reference comment posted on #163; no separate PRD. #171 is soft prerequisite (audit-wiring investigation) — #428/#429 unblocked, #430 should wait on #171 confirmation.
+
+**Status:** promoted
 
 ---
 
