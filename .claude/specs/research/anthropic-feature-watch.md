@@ -285,7 +285,9 @@ Examples:
 
 **Decision (2026-05-21):** approve
 
-**Status:** verified
+**Promotion (2026-05-22):** architect-first → stub epic #431; architect recommended splitting the two sub-items (Track A: verbosity scanner, Track B: thinking-cache anomaly) — #431 renamed to Track A (C-006a), new stub #433 filed for Track B (C-006b); pm dispatch pending on both. Side observation: closed drive-by PR #432 (filed ~1h after #427's stories were scoped, before C-006 dispatch); tracking issue #434 logs occurrences + queued contributor-gating improvements.
+
+**Status:** promoted
 
 ---
 
