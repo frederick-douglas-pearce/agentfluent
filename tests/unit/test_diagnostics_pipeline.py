@@ -670,6 +670,29 @@ class TestMcpAuditWiring:
         assert len(unused) == 1
         assert unused[0].detail["server_name"] == "unused-svc"
 
+    def test_agent_frontmatter_mcp_servers_join_audit_config(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> None:
+        def fake_scan(scope: str) -> list[AgentConfig]:
+            assert scope == "all"
+            return [
+                AgentConfig(
+                    name="pm",
+                    file_path=tmp_path / ".claude" / "agents" / "pm.md",
+                    scope=Scope.PROJECT,
+                    mcp_servers=["github"],
+                ),
+            ]
+
+        monkeypatch.setattr("agentfluent.diagnostics.pipeline.scan_agents", fake_scan)
+        calls = [McpToolCall(server_name="github", tool_name="create_issue", is_error=True)]
+
+        result = run_diagnostics([_inv()], mcp_tool_calls=calls)
+
+        assert all(
+            s.signal_type != SignalType.MCP_MISSING_SERVER for s in result.signals
+        )
+
 
 class TestQualitySignalsWiring:
     """``parent_messages`` opts the caller into quality-signal extraction.

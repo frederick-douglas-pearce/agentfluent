@@ -22,11 +22,42 @@ import pytest
 
 from agentfluent.config.mcp_discovery import (
     MCP_PROJECT_FILENAME,
+    dedup_by_name_with_precedence,
     discover_mcp_servers,
+    mcp_servers_from_agent_configs,
     resolve_project_disk_path,
 )
+from agentfluent.config.models import AgentConfig, McpServerConfig, Scope
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "mcp"
+
+
+def _agent_config(
+    name: str,
+    path: Path,
+    mcp_servers: list[str],
+) -> AgentConfig:
+    return AgentConfig(
+        name=name,
+        file_path=path,
+        scope=Scope.PROJECT,
+        mcp_servers=mcp_servers,
+    )
+
+
+def _server(
+    name: str,
+    *,
+    source: Path,
+    scope: str = "project_local",
+) -> McpServerConfig:
+    return McpServerConfig(
+        server_name=name,
+        enabled=True,
+        configured_tools=None,
+        source_file=source,
+        scope=scope,  # type: ignore[arg-type]
+    )
 
 
 def _write_claude_json(
@@ -93,6 +124,68 @@ def _override_claude_json_location(
     ``claude_config_dir`` whose parent contains ``claude_json``.
     """
     monkeypatch.setattr(Path, "home", lambda: claude_json.parent)
+
+
+class TestAgentFrontmatterScope:
+    def test_agent_configs_are_converted_to_mcp_server_configs(
+        self, tmp_path: Path,
+    ) -> None:
+        agent_path = tmp_path / ".claude" / "agents" / "pm.md"
+        configs = [_agent_config("pm", agent_path, ["github", "slack"])]
+
+        servers = mcp_servers_from_agent_configs(configs)
+
+        assert [s.server_name for s in servers] == ["github", "slack"]
+        for server in servers:
+            assert server.enabled is True
+            assert server.configured_tools is None
+            assert server.source_file == agent_path
+            assert server.scope == "agent_frontmatter"
+
+    def test_empty_agent_configs_return_no_servers(self) -> None:
+        assert mcp_servers_from_agent_configs([]) == []
+
+    def test_duplicate_agent_frontmatter_servers_keep_later_agent(
+        self, tmp_path: Path,
+    ) -> None:
+        first_path = tmp_path / ".claude" / "agents" / "pm.md"
+        second_path = tmp_path / ".claude" / "agents" / "reviewer.md"
+
+        servers = mcp_servers_from_agent_configs(
+            [
+                _agent_config("pm", first_path, ["github"]),
+                _agent_config("reviewer", second_path, ["github"]),
+            ],
+        )
+
+        assert len(servers) == 1
+        assert servers[0].server_name == "github"
+        assert servers[0].source_file == second_path
+        assert servers[0].scope == "agent_frontmatter"
+
+    def test_agent_frontmatter_overrides_project_local_precedence(
+        self, tmp_path: Path,
+    ) -> None:
+        project_server = _server(
+            "github",
+            source=tmp_path / ".claude.json",
+            scope="project_local",
+        )
+        agent_server = mcp_servers_from_agent_configs(
+            [
+                _agent_config(
+                    "pm",
+                    tmp_path / ".claude" / "agents" / "pm.md",
+                    ["github"],
+                ),
+            ],
+        )[0]
+
+        servers = dedup_by_name_with_precedence([project_server], [agent_server])
+
+        assert len(servers) == 1
+        assert servers[0].source_file == agent_server.source_file
+        assert servers[0].scope == "agent_frontmatter"
 
 
 class TestReadUserScope:

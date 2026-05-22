@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-McpScope = Literal["user", "project_shared", "project_local"]
+McpScope = Literal["user", "project_shared", "project_local", "agent_frontmatter"]
 """Where an MCP server entry was discovered.
 
 - ``user`` — top-level ``mcpServers`` in ``~/.claude.json``.
@@ -22,10 +22,14 @@ McpScope = Literal["user", "project_shared", "project_local"]
   ``enabledMcpjsonServers`` / ``disabledMcpjsonServers`` lists).
 - ``project_local`` — per-project ``mcpServers`` inside
   ``~/.claude.json:projects[<project_dir>]``.
+- ``agent_frontmatter`` — ``mcpServers`` listed in a scanned agent
+  definition's YAML frontmatter.
 
 Precedence when the same server name appears in multiple scopes:
-``project_local > project_shared > user`` (matches Claude Code's
-documented ``local > project > user`` resolution order)."""
+``agent_frontmatter > project_local > project_shared > user``. The
+base config scopes match Claude Code's documented
+``local > project > user`` resolution order; agent frontmatter is most
+specific for an agent audit context."""
 
 
 class Scope(StrEnum):

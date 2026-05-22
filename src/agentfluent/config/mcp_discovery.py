@@ -1,13 +1,14 @@
 """Discover configured MCP servers from Claude Code config files.
 
-Reads MCP server entries from three effective sources and dedups by
-server name using the precedence ``project_local > project_shared >
-user`` (matches Claude Code's ``local > project > user`` resolution
-order). This module is the config-layer counterpart to
+Reads MCP server entries from Claude Code config sources and dedups by
+server name using the precedence ``agent_frontmatter > project_local >
+project_shared > user``. The base config scopes match Claude Code's
+``local > project > user`` resolution order; agent frontmatter is the
+most specific audit source. This module is the config-layer counterpart to
 ``config/scanner.py``: it discovers what the user *configured*, not
 what the agent *did* — that lives in ``diagnostics/mcp_assessment.py``.
 
-The three sources:
+The sources:
 
 - **User** — top-level ``mcpServers`` key in ``~/.claude.json``.
 - **Project-shared** — ``mcpServers`` in ``.mcp.json`` at the project
@@ -15,6 +16,8 @@ The three sources:
   ``enabledMcpjsonServers`` / ``disabledMcpjsonServers`` lists).
 - **Project-local** — per-project ``mcpServers`` inside
   ``~/.claude.json:projects[<project_dir>]``.
+- **Agent frontmatter** — ``mcpServers`` names parsed from
+  ``.claude/agents/*.md`` by ``config/scanner.py``.
 
 The ``settings.json`` files (``~/.claude/settings.json``,
 ``.claude/settings.json``) carry hooks and other settings but no
@@ -29,7 +32,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from agentfluent.config.models import McpScope, McpServerConfig
+from agentfluent.config.models import AgentConfig, McpScope, McpServerConfig
 from agentfluent.core.paths import claude_json_for
 
 logger = logging.getLogger(__name__)
@@ -118,9 +121,35 @@ def discover_mcp_servers(
             disabled_list=disabled_list,
         )
 
-    return _dedup_by_name_with_precedence(
+    return dedup_by_name_with_precedence(
         user_servers, project_shared_servers, project_local_servers,
     )
+
+
+def mcp_servers_from_agent_configs(
+    agent_configs: list[AgentConfig],
+) -> list[McpServerConfig]:
+    """Convert scanned agent frontmatter ``mcpServers`` names into config.
+
+    Agent frontmatter carries server names only, so generated records
+    are enabled, have no configured tool allow-list, and point
+    ``source_file`` at the agent definition that declared the server.
+    """
+    servers: list[McpServerConfig] = []
+    for agent_config in agent_configs:
+        for server_name in agent_config.mcp_servers:
+            if not server_name:
+                continue
+            servers.append(
+                McpServerConfig(
+                    server_name=server_name,
+                    enabled=True,
+                    configured_tools=None,
+                    source_file=agent_config.file_path,
+                    scope="agent_frontmatter",
+                ),
+            )
+    return dedup_by_name_with_precedence(servers)
 
 
 @lru_cache(maxsize=16)
@@ -313,11 +342,16 @@ def _read_project_shared_mcp_servers(
     return servers
 
 
-_PRECEDENCE_ORDER: tuple[McpScope, ...] = ("user", "project_shared", "project_local")
+_PRECEDENCE_ORDER: tuple[McpScope, ...] = (
+    "user",
+    "project_shared",
+    "project_local",
+    "agent_frontmatter",
+)
 """Lowest → highest precedence. Later scopes overwrite earlier ones."""
 
 
-def _dedup_by_name_with_precedence(
+def dedup_by_name_with_precedence(
     *scope_buckets: list[McpServerConfig],
 ) -> list[McpServerConfig]:
     """Merge multiple scope buckets into a precedence-ordered list.

@@ -23,7 +23,11 @@ from agentfluent.agents.models import AgentInvocation
 
 if TYPE_CHECKING:
     from agentfluent.analytics.pipeline import SessionAnalysis
-from agentfluent.config.mcp_discovery import discover_mcp_servers
+from agentfluent.config.mcp_discovery import (
+    dedup_by_name_with_precedence,
+    discover_mcp_servers,
+    mcp_servers_from_agent_configs,
+)
 from agentfluent.config.models import AgentConfig
 from agentfluent.config.scanner import scan_agents
 from agentfluent.core.session import SessionMessage
@@ -271,6 +275,10 @@ def run_diagnostics(
         mcp_usage = extract_mcp_usage(invocations, mcp_tool_calls)
         configured_mcp = discover_mcp_servers(
             claude_config_dir=claude_config_dir, project_dir=project_dir,
+        )
+        configured_mcp = dedup_by_name_with_precedence(
+            configured_mcp,
+            mcp_servers_from_agent_configs(agent_configs),
         )
         if mcp_usage or configured_mcp:
             signals.extend(

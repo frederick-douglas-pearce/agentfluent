@@ -416,6 +416,20 @@ class TestAuditMcpServers:
         )
         assert signals == []
 
+    def test_agent_frontmatter_config_suppresses_missing_server(self) -> None:
+        signals = audit_mcp_servers(
+            usage_by_server={"github": _usage("github", total=10, errors=2)},
+            configured=[
+                _server(
+                    "github",
+                    source="/repo/.claude/agents/pm.md",
+                    scope="agent_frontmatter",
+                ),
+            ],
+            sessions_analyzed=3,
+        )
+        assert signals == []
+
     def test_mixed_scenario_emits_per_server_signals(self) -> None:
         # Four servers: github (used + configured), slack (unused +
         # configured), unknown (missing + errors), friendly (missing
