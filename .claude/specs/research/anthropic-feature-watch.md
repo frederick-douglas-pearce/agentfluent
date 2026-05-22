@@ -333,4 +333,6 @@ Examples:
 
 **Decision (2026-05-21):** approve
 
-**Status:** verified
+**Promotion (2026-05-21):** pm-first → filed epic #418, stories #419, #420, #421, #422; PRD at .claude/specs/prd-tool-name-normalization.md
+
+**Status:** promoted
