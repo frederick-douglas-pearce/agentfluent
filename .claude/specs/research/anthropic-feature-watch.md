@@ -151,6 +151,8 @@ Examples:
 
 **Promotion (2026-05-21):** architect-first → stub epic #423; architect design comment on #423; pm filed stories #424, #425, #426; no separate PRD (architect comment serves as design doc). Open question for verifier re: `duration_ms` field presence per tool type — non-blocking for #424, should resolve before #425 ships.
 
+**Verifier follow-up (2026-05-22):** premise resolved → `duration_ms` likely populated for all tool types (no documented restrictions in v2.1.119 release notes or hooks reference docs). Caveat language drafted for #425's recommendation copy — see [#425 comment](https://github.com/frederick-douglas-pearce/agentfluent/issues/425#issuecomment-4517236220).
+
 **Status:** promoted
 
 ---
@@ -286,6 +288,8 @@ Examples:
 **Decision (2026-05-21):** approve
 
 **Promotion (2026-05-22):** architect-first → stub epic #431; architect recommended splitting the two sub-items. Track A (verbosity scanner, C-006a) stays on #431 (renamed), pm filed story #437 (single story; no score deduction). Track B (thinking-cache anomaly, C-006b) on new stub #433, pm filed stories #435, #436, #438 + decision D036 (target="platform" over "model"). Pm recommends a verifier bounce on Track B's `cache_read_input_tokens`-drops-to-zero observable, non-blocking. Side observation: closed drive-by PR #432 (filed ~1h after #427's stories were scoped); tracking issue #434 logs contributor-gating issues.
+
+**Verifier follow-up (2026-05-22):** Track B premise classified as **likely** (not confirmed) — postmortem describes the bug's functional behavior but doesn't explicitly state the JSONL telemetry shape. Architect's sliding-window algorithm is structurally correct for the inferred observable. Implementation should add a docstring note acknowledging the inference and attempt empirical validation before #435 PR merges. See [#435 comment](https://github.com/frederick-douglas-pearce/agentfluent/issues/435#issuecomment-4517238683).
 
 **Status:** promoted
 
