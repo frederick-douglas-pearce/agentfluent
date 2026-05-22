@@ -149,7 +149,9 @@ Examples:
 
 **Decision (2026-05-21):** approve
 
-**Status:** verified
+**Promotion (2026-05-21):** architect-first → stub epic #423; architect design comment on #423; pm filed stories #424, #425, #426; no separate PRD (architect comment serves as design doc). Open question for verifier re: `duration_ms` field presence per tool type — non-blocking for #424, should resolve before #425 ships.
+
+**Status:** promoted
 
 ---
 
