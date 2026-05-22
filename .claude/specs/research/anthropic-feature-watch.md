@@ -285,7 +285,7 @@ Examples:
 
 **Decision (2026-05-21):** approve
 
-**Promotion (2026-05-22):** architect-first → stub epic #431; architect recommended splitting the two sub-items (Track A: verbosity scanner, Track B: thinking-cache anomaly) — #431 renamed to Track A (C-006a), new stub #433 filed for Track B (C-006b); pm dispatch pending on both. Side observation: closed drive-by PR #432 (filed ~1h after #427's stories were scoped, before C-006 dispatch); tracking issue #434 logs occurrences + queued contributor-gating improvements.
+**Promotion (2026-05-22):** architect-first → stub epic #431; architect recommended splitting the two sub-items. Track A (verbosity scanner, C-006a) stays on #431 (renamed), pm filed story #437 (single story; no score deduction). Track B (thinking-cache anomaly, C-006b) on new stub #433, pm filed stories #435, #436, #438 + decision D036 (target="platform" over "model"). Pm recommends a verifier bounce on Track B's `cache_read_input_tokens`-drops-to-zero observable, non-blocking. Side observation: closed drive-by PR #432 (filed ~1h after #427's stories were scoped); tracking issue #434 logs contributor-gating issues.
 
 **Status:** promoted
 

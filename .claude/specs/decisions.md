@@ -688,3 +688,27 @@ primary_axis = max(AXIS_TIEBREAKER, key=lambda a: axis_scores[a])
 **Reference:** `prd-advanced-tool-use-diagnostics.md` Section 9. D002 (rule-based constraint). Fred's directive: "start collecting examples where LLM API calls would have high impact."
 
 ---
+
+## D036: Cache-anomaly recommendation target — `"platform"` (not `"model"`)
+
+**Date:** 2026-05-22
+**Context:** Epic #433 (C-006b) adds a `CACHE_ANOMALY` signal for detecting the April 2026 thinking-cache bug pattern. The architect's design proposed `target = "model"` on the correlator rule's recommendation but flagged it as a stretch: "there's no config change the user can make to fix a platform infrastructure bug." Architect left this as a PM judgment call, noting that a new `target = "platform"` value has "downstream implications for the CLI formatter's column rendering."
+
+**Options considered:**
+- A) `target = "model"` — reuse the closest existing target value; no new target string.
+- B) `target = "platform"` — new target value that honestly communicates "this is a platform advisory, not a config change."
+
+**Decision:** Option B — `target = "platform"`.
+
+**Rationale:**
+- **Semantic honesty.** Every existing `target` value names a user-editable config surface: `tools`, `prompt`, `model`, `mcp`, `description`, `subagent`. The user reads the Target column as "where to look / what to change." For a platform bug, the answer is "platform" — not "model." Using `"model"` would teach users that the Target column lies.
+- **Zero formatter cost.** The architect's concern about "downstream implications for the CLI formatter's column rendering" was investigated and resolved: `table.py` renders `target` as a plain `escape(agg.target)` string (lines 377, 467). No enum, no branching, no hardcoded list. A new `"platform"` value displays correctly with zero code changes.
+- **Aggregation and priority scoring are orthogonal.** `target` is not an input to `SIGNAL_AXIS_MAP`, `priority_score`, or `axis_scores`. The axis for `CACHE_ANOMALY` is `Axis.SPEED` (independent of target).
+- **Establishes the advisory pattern.** This is the first recommendation where the user cannot fix the issue by editing their agent config. Future signals of this type (version deprecations, known platform regressions, API changes) will also need a non-config target. `"platform"` sets the precedent cleanly.
+- **Low cost, high reversibility.** One new string value. If it turns out to confuse users in practice, changing to `"model"` later is a one-line edit with no schema break.
+
+**Deferred:** Formalizing `target` as a `Literal` or `StrEnum` type. Today it is `str` on `DiagnosticRecommendation`. If more platform advisories accumulate, typing it is a separate cleanup story.
+
+**Reference:** Epic #433 body (architect's open question); stories #435, #436, #438.
+
+---
