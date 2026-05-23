@@ -93,6 +93,7 @@ Examples:
 | `verified` | verifier | premise confirmed, awaiting human gate |
 | `needs-evidence` | verifier | premise depends on unobserved data; human decides whether to track |
 | `duplicate` | verifier | overlaps with existing issue or decision; awaiting human gate |
+| `architect-reviewed` | `promote-candidates` skill | architect-first stub filed + architect design comment posted; awaiting human review before pm dispatch |
 | `promoted` | `promote-candidates` skill | downstream action complete (issue filed, pm invoked, comment posted) |
 | `dismissed` | `promote-candidates` skill | human chose to drop |
 
