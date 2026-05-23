@@ -192,3 +192,49 @@ The 3 manual architect invocations had varying-quality prompts (the C-006 prompt
 2. **Open questions discussion** — particularly whether verifier-bounce auto-detection is worth building now or deferred.
 3. **PM agent scopes stories** to implement Phase 3 per the approved design.
 4. **Architect reviews the implementation plan** before coding starts (meta-dogfood: this is itself a pm-first candidate, not architect-first, since the design is now spec'd).
+
+---
+
+## Resolved decisions (2026-05-23)
+
+Architect PRD review on [#439](https://github.com/frederick-douglas-pearce/agentfluent/issues/439#issuecomment-4517334578) validated all 6 design decisions, gave recommendations on the 3 open questions, and surfaced 5 gaps the PRD missed. Human walked through each one-by-one. Resolutions below are the **contract** for pm to scope implementation stories from.
+
+### Design decisions
+
+| ID | Resolution | Rationale |
+|---|---|---|
+| **D1** | Extend the existing `promote-candidates` skill with two new modes | Architect-recommended. Queue-parsing, candidate-iteration, and annotation logic is non-trivial to duplicate; two-mode shape maps cleanly to the existing dispatch-per-route switch. |
+| **D2** | Skill stops after architect comment; human must re-invoke for pm dispatch | Architect-recommended. All 3 manual dispatches required human review here; C-006 needed a structural split that would have been silently wrong on auto-continue. |
+| **D3** | Add new `architect-reviewed` status to the queue vocabulary | Architect-recommended. Filterable status is worth the schema cost; encoding progress in Promotion block text makes candidate filtering ambiguous. |
+| **D4** | Universal pause from D2 handles structural recommendations | Architect-recommended. Detect-and-stop on trigger phrases requires a fragile keyword list; the universal pause makes detection unnecessary. |
+| **D5** | Hard-code stub template in skill body; **file stubs unlabeled** | Architect-recommended template approach; human chose no-label after confirming labels don't address the bot-PR problem (orthogonal concern tracked on #434). |
+| **D6** | Hard-code architect prompt template; **add required "Forward compatibility" section** | Architect-recommended addition. Section caught a forward-compat issue on C-001 #423 but didn't appear on C-004/C-006 because their prompts didn't push for it; reinforcement needed since architect is invoked programmatically, not interactively. |
+
+### Open questions
+
+| ID | Resolution | Rationale |
+|---|---|---|
+| **Q1** | Stop-if-already-in-progress (file-idempotent, architect-invocation NOT idempotent) | Architect-recommended. Re-invoking architect produces duplicate comments pm phase would have to disambiguate; if original was bad, human handles manually. |
+| **Q2** | Defer auto-detection; **require "Open questions for verifier" section heading in D6 template** | Architect-recommended. Action on detection is unspecified (invoke verifier? file TODO?) and human reads architect comment during the pause anyway. Scaffolding heading enables future automation. |
+| **Q3** | Template the verifier-bounce context in the pm prompt | Architect-recommended. All 3 manual dispatches needed the same framing ("non-blocking for scoping, should resolve before #NNN ships"); content comes from Q2's required heading. |
+
+### Gaps from architect's review
+
+| ID | Resolution | Rationale |
+|---|---|---|
+| **Gap 1** | Drop `mcp__github__get_issue_comments` from AC; use `Bash(gh issue view:*)` for comment reads | Architect-recommended. The MCP function doesn't exist in our current toolset; gh CLI is already in the existing skill's allowed-tools. |
+| **Gap 2** | Defer `mcp__github__update_issue` to Phase 3.C (restructure-split mode) | Architect-recommended. Adding tools that serve no implemented purpose violates the existing skill's "stop and surface the gap" discipline. |
+| **Gap 3** | **Edit-in-place Promotion block**: pm-after-architect mode finds the partial Promotion line and string-replaces it with the complete line | Cleanest queue file; single Promotion entry per candidate matches existing structure. Implementation requires the skill to learn a new I/O pattern (find-and-replace on the queue, not just append). |
+| **Gap 4** | Add "Update SKILL.md line 219 to allow architect invocation; preserve the rule against invoking other subagents" as explicit AC on the implementation story | Architect-recommended. Prevents the skill from being internally inconsistent at ship time. |
+| **Gap 5** | (folded into D5 — no labels on stubs) | Same as D5 resolution. |
+
+### Updated acceptance criteria (supersedes "Acceptance criteria for Phase 3 implementation" above)
+
+- `/promote-candidates architect-first-init <C-NNN>` files stub, invokes architect, **flips Status to `architect-reviewed`** and writes a **partial Promotion block** to the queue. Idempotent on stub-filing only: if a stub already exists for the candidate (Promotion block contains `→ stub #NNN`), skill stops with "already in progress" — does NOT re-invoke architect.
+- `/promote-candidates architect-first-pm <C-NNN>` reads the architect comment via `gh issue view <n> --comments`, invokes pm with the verifier-bounce context templated in, captures story numbers, **edits the partial Promotion line in-place** to the complete form, flips Status to `promoted`.
+- Both modes work end-to-end against a real candidate without parent-thread babysitting.
+- Skill body's stub template requires: source candidate ref, upstream signal, summary, AgentFluent relevance, verification status, design questions, decision line. **No labels applied to filed stubs.**
+- Skill body's architect prompt template requires the architect comment to include sections: location, mechanism, scope, output, fixtures, risks, **Forward compatibility**, **Open questions for verifier**.
+- New status `architect-reviewed` added to the queue file schema header documentation.
+- SKILL.md body's "What you must NOT do" section (line 219) updated: allow architect invocation; preserve the rule against invoking other subagents.
+- Skill's `allowed-tools` extended only as needed for the implemented features (architect invocation via Agent is already permitted; comment reads use existing `Bash(gh issue view:*)`). **No new MCP tools added.**
