@@ -48,8 +48,8 @@ Agent access.
 - `Read` / `Edit` — full access (use Edit only on the feature-watch
   file; see "what you must NOT do")
 - `Bash` — read-only `gh` and `git` lookups, restricted by glob patterns
-- `Agent` — for pm dispatch only (do not invoke architect or any other
-  subagent; the architect-first route is Phase 3, not implemented)
+- `Agent` — for pm and architect dispatch (do not invoke any other
+  subagent)
 - `mcp__github__*` — issue create/comment/get/list/search only
 
 If you need a tool outside the allow-list, stop and surface the gap in
@@ -153,10 +153,8 @@ on re-runs. If none exist, use `mcp__github__create_issue`:
 - **labels:** `blocked-on-evidence` (must already exist in the repo;
   if it doesn't, surface that as a setup error and skip the candidate)
 
-**`architect-first`** — SKIP. Phase 3 (architect-first choreography)
-is not yet implemented. Add the candidate to the run summary's
-`skipped — architect-first` list. Do not edit the candidate's Status
-or add a Promotion block.
+**`architect-first`** — See `architect-first-init` and
+`architect-first-pm` mode handling below.
 
 ### 3. Annotate the queue
 
@@ -216,5 +214,5 @@ Return a structured run summary (under 300 words):
   (This is a body-level rule; allowed-tools cannot path-restrict
   Edit, so the discipline is on you. Stop and surface the issue if
   you find yourself wanting to edit elsewhere.)
-- Do not invoke any subagent except `pm` via the `Agent` tool. The
-  architect-first route is Phase 3 and not implemented.
+- Do not invoke any subagent other than `pm` or `architect` via the
+  `Agent` tool.
