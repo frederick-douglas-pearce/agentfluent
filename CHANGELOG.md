@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.8.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.7.0...v0.8.0) (2026-05-24)
+
+
+### Features
+
+* **research:** add anthropic-research subagent + feature-watch queue ([#408](https://github.com/frederick-douglas-pearce/agentfluent/issues/408)) ([c0134de](https://github.com/frederick-douglas-pearce/agentfluent/commit/c0134de8857621b15e05dbe19ba701b1d0481f2e))
+* **research:** add TypeScript Agent SDK changelog as required source ([31e8296](https://github.com/frederick-douglas-pearce/agentfluent/commit/31e8296770e8435fb3965a2049147035a4d1a7ff))
+* **research:** candidate-verifier subagent — premise-check stage between scout and human gate ([#410](https://github.com/frederick-douglas-pearce/agentfluent/issues/410)) ([89c949b](https://github.com/frederick-douglas-pearce/agentfluent/commit/89c949b33d448e4497ff5732c33e4e4ff730b879))
+* **research:** research pipeline Phase 1+2 — Decision schema + candidate-promoter ([#411](https://github.com/frederick-douglas-pearce/agentfluent/issues/411)) ([d88c101](https://github.com/frederick-douglas-pearce/agentfluent/commit/d88c101be5376ccbcc5e2ee121faeded793d057d))
+* **skills:** [#441](https://github.com/frederick-douglas-pearce/agentfluent/issues/441) — add architect-first-init mode to promote-candidates ([#445](https://github.com/frederick-douglas-pearce/agentfluent/issues/445)) ([35f5adb](https://github.com/frederick-douglas-pearce/agentfluent/commit/35f5adba23134d646a330405c26164c230395e0e))
+
+
+### Bug Fixes
+
+* **research:** drop memory:project, point Agent SDK source at raw GitHub changelog ([28a4caa](https://github.com/frederick-douglas-pearce/agentfluent/commit/28a4caa38c07466ad8257bcd1659311f11542373))
+
 ## [0.7.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.6.0...v0.7.0) (2026-05-17)
 
 
