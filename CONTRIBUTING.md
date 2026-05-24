@@ -88,6 +88,7 @@ All three must pass before merge. CI runs them on every PR (`.github/workflows/c
 
 - Branch from `main` using `feature/<issue-number>-short-description` or `fix/<issue-number>-...`
 - Use [Conventional Commits](https://www.conventionalcommits.org/): `feat:`, `fix:`, `docs:`, `test:`, `chore:`, `refactor:`. These drive automated version bumps via release-please.
+- **Scope for internal-tooling changes:** Use `chore:` or `docs:` (NOT `feat:`/`fix:`) when a change only touches `.claude/skills/`, `.claude/agents/`, `.claude/hooks/`, `.claude/specs/`, or `.claude/commands/`. Those paths are maintainer-only Claude Code tooling and don't ship in the PyPI package, so they shouldn't appear in the user-facing changelog. Examples: `chore(skills): update prompt template`, `docs(specs): clarify PRD wording`, `chore(agents): add new subagent definition`. Reserve `feat:`/`fix:` for changes to `src/agentfluent/` (the shipped Python code) or top-level config affecting installation (`pyproject.toml`, CLI entry points).
 - Breaking changes: add `!` (`feat!: remove legacy API`) or include `BREAKING CHANGE:` in the body.
 - Keep PRs focused — one issue per PR whenever possible.
 

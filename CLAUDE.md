@@ -155,6 +155,8 @@ This project uses [Conventional Commits](https://www.conventionalcommits.org/).
 
 **Breaking changes:** Add `!` after the type (e.g., `feat!: remove legacy API`) or include `BREAKING CHANGE:` in the commit body. Triggers a major version bump.
 
+**Scope for `.claude/` paths:** Changes that only touch `.claude/skills/`, `.claude/agents/`, `.claude/hooks/`, `.claude/specs/`, or `.claude/commands/` are maintainer-only Claude Code tooling — they don't ship in the PyPI package. Use `chore:` or `docs:` for these (e.g., `chore(skills): ...`, `docs(specs): ...`, `chore(agents): ...`), NOT `feat:`/`fix:`. Reserve `feat:`/`fix:` for changes to `src/agentfluent/`, `pyproject.toml` runtime deps, or CLI entry points — anything a `pip install agentfluent` user would see. This prevents the release-please changelog from advertising internal-tooling commits as user-facing features (and prevents spurious version bumps driven by maintainer-only work). See [#446](https://github.com/frederick-douglas-pearce/agentfluent/issues/446) for the convention's history and [#447](https://github.com/frederick-douglas-pearce/agentfluent/issues/447) for the mechanical enforcement work.
+
 ## Production Standards
 
 - **All new features must have tests.** No merging without test coverage for the change.
