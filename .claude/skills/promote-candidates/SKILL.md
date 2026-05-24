@@ -1,7 +1,7 @@
 ---
 name: promote-candidates
-description: Dispatch decision-annotated candidates from .claude/specs/research/anthropic-feature-watch.md per route. In default mode, files blocked-on-evidence stubs, comments on overlapping issues for duplicates, or invokes the pm subagent for pm-first candidates. In architect-first-init mode, files an architect-review stub and invokes the architect subagent. Runs as a parent-thread skill (not a subagent) because subagents cannot invoke other subagents in Claude Code, and pm/architect dispatch requires Agent-tool access.
-argument-hint: "[architect-first-init] [dry-run|live] [ALL|C-NNN,C-NNN,...]"
+description: Dispatch decision-annotated candidates from .claude/specs/research/anthropic-feature-watch.md per route. In default mode, files blocked-on-evidence stubs, comments on overlapping issues for duplicates, or invokes the pm subagent for pm-first candidates. In architect-first-init mode, files an architect-review stub and invokes the architect subagent. In architect-first-pm mode, completes architect-first dispatch by reading the architect comment and invoking pm for a specific candidate. Runs as a parent-thread skill (not a subagent) because subagents cannot invoke other subagents in Claude Code, and pm/architect dispatch requires Agent-tool access.
+argument-hint: "[architect-first-init|architect-first-pm] [dry-run|live] [ALL|C-NNN,C-NNN,...]"
 allowed-tools:
   - Read
   - Edit
@@ -62,7 +62,7 @@ Parse $ARGUMENTS for an optional mode prefix and two positional values:
 1. **Mode prefix** (optional, first positional if present) — one of:
    - (none) — **default mode:** processes `pm-first`, `dismiss-as-duplicate`, `needs-evidence` routes; skips `architect-first` candidates
    - `architect-first-init` — processes ONLY `architect-first` candidates; files stub + invokes architect, then stops for human review (see "Architect-first init mode" section below)
-   - `architect-first-pm` — completes architect-first dispatch by invoking pm (Phase 3 PR #442 — not yet implemented; the skill should refuse this mode with a "not yet implemented" error in the run summary)
+   - `architect-first-pm` — completes architect-first dispatch by invoking pm AFTER human has reviewed the architect comment (see "Architect-first pm mode" section below). Requires a candidate ID in the scope argument — this mode is invoked per-candidate after the human has reviewed that candidate's architect comment.
 
    Detection: if the first arg matches `architect-first-*`, it is the mode prefix. Otherwise the first arg is the `dry-run`/`live` mode below.
 
@@ -95,7 +95,9 @@ proceed.
 
   **`architect-first-init` mode** — process candidates with Status `verified`, a Decision line, AND effective route `architect-first`. See "Architect-first init mode" section below for the per-candidate flow.
 
-- `CLAUDE.md` — only to pass full context to pm when delegating (default mode pm-first route only).
+  **`architect-first-pm` mode** — process the SINGLE candidate named in the Scope argument whose Status is `architect-reviewed`, with a partial Promotion block (containing `stub epic #NNN`) but no `pm filed` text yet. See "Architect-first pm mode" section below.
+
+- `CLAUDE.md` — only to pass full context to pm when delegating (default mode pm-first route or architect-first-pm mode).
 
 ## Process per candidate
 
@@ -293,7 +295,98 @@ Use today's date in the Promotion block header. The `architect-first-pm` mode (#
 
 ### 6. Stop
 
-The skill does NOT continue to pm dispatch in `architect-first-init` mode. The human reads the architect comment and explicitly re-invokes the skill in `architect-first-pm` mode (#442) to complete the dispatch. This pause is intentional (PRD D2/D4) — it catches architect's structural recommendations (split/fold/defer) that auto-continue would silently miss.
+The skill does NOT continue to pm dispatch in `architect-first-init` mode. The human reads the architect comment and explicitly re-invokes the skill in `architect-first-pm` mode (see next section) to complete the dispatch. This pause is intentional (PRD D2/D4) — it catches architect's structural recommendations (split/fold/defer) that auto-continue would silently miss.
+
+## Architect-first pm mode
+
+When invoked with `architect-first-pm` as the mode prefix and a single candidate ID in the Scope argument, the skill completes the architect-first dispatch for that candidate. This mode runs AFTER the human has reviewed the architect's design comment on the stub epic and decided "go pm" (PRD D2).
+
+### 1. Eligibility
+
+Process the SINGLE candidate named in Scope when ALL of these conditions hold:
+- `**Status:**` is `architect-reviewed`
+- A partial Promotion block exists containing `stub epic #\d+`
+- The Promotion block does NOT already contain `pm filed` text (idempotency — pm has not yet been dispatched)
+
+Skip with a clear note in the run summary:
+- Status other than `architect-reviewed` — "wrong status for this mode; use `architect-first-init` first or the default mode for other routes"
+- No partial Promotion block — "candidate has not been through `architect-first-init` yet"
+- Promotion block already contains `pm filed` — "pm already dispatched"
+- Scope is `ALL` or contains multiple IDs — "this mode requires a single candidate ID after human review of the architect comment"
+
+### 2. Read the architect comment (PRD Gap 1)
+
+Extract the stub epic number from the partial Promotion block via regex `stub epic #(\d+)`. Then read the architect comment from the stub epic:
+
+```bash
+gh issue view <stub-epic-number> --comments
+```
+
+(No new MCP tools — `Bash(gh issue view:*)` is already in the allow-list per PRD Gap 1.)
+
+The architect comment starts with `## Architect design review (YYYY-MM-DD)` and contains the required sections from `architect-first-init` mode's architect prompt (Location, Mechanism, Scope, Output, Test fixtures, Risks, Forward compatibility, Open questions for verifier).
+
+If the architect comment is not found, or the issue has no comments, stop with an error in the run summary and do NOT proceed to pm dispatch.
+
+### 3. Invoke the pm subagent (PRD Q3 — templated verifier-bounce context)
+
+Invoke `pm` via the `Agent` tool. The prompt must include:
+
+- **Stub epic pointer:** "Read GitHub issue #NNN in `frederick-douglas-pearce/agentfluent` for full context. The architect's design comment is the design contract for story scoping."
+- **How to read the architect comment:** "Use `gh issue view <NNN> --comments` to read the architect's design review on the stub epic."
+- **Full candidate body from the queue:** the candidate's Title through the Verification block, verbatim from `.claude/specs/research/anthropic-feature-watch.md`.
+- **Decision line:** the candidate's Decision line verbatim.
+- **Templated verifier-bounce context (PRD Q3):** Inspect the architect's comment for an `Open questions for verifier` section. **IF that section has non-empty content** (architect actually flagged questions), include this paragraph in the pm prompt:
+
+  > The architect flagged open questions for the verifier (see the "Open questions for verifier" section in the architect comment on #NNN). These are **non-blocking for scoping** — stories should be implementable without answers. However, the questions should resolve before the relevant story ships. Include a note in the affected story's Dependencies or Implementation Notes section calling out which verifier question affects which story.
+
+  **IF the section is empty or absent**, omit this templated paragraph from the pm prompt entirely.
+
+- **Scoping instructions:** "File the epic-level work plan and the matching stories in GitHub. Return the epic + story issue numbers when done."
+- **PRD guidance:** "Write a PRD at `.claude/specs/prd-<slug>.md` only if the architect comment doesn't fully serve as the design doc (rare). All 3 prior architect-first dispatches used the architect comment as the canonical design doc and did NOT write a separate PRD."
+
+### 4. Capture pm output
+
+Capture the epic number, story numbers, and optionally a PRD path returned by pm.
+
+If pm returns WITHOUT issue numbers:
+- Record the partial failure in the run summary
+- Do NOT flip Status to `promoted`
+- Do NOT edit the Promotion block
+- Surface what pm produced so the human can recover (e.g., draft text, design notes pm wrote but didn't file)
+
+### 5. Edit the Promotion block in-place (PRD Gap 3)
+
+Find the existing partial Promotion line in the candidate's section of `.claude/specs/research/anthropic-feature-watch.md`. The format from `architect-first-init` mode is:
+
+```
+**Promotion (YYYY-MM-DD):** architect-first → stub epic #NNN; architect design comment on #NNN — awaiting human review before pm dispatch.
+```
+
+**Replace it in-place** with the complete form (do NOT append a second Promotion line):
+
+```
+**Promotion (YYYY-MM-DD):** architect-first → stub epic #NNN; architect design comment; pm filed epic #NNN, stories #NNN, #NNN, #NNN.
+```
+
+Use today's date in the updated Promotion line — may differ from the original partial Promotion date if days have elapsed since `architect-first-init` ran.
+
+**Implementation:** use the `Edit` tool with `replace_all=false`. The partial Promotion line contains the stub epic number (`#NNN`), which is unique per candidate, so matching on the full partial line is unambiguous. If pm also returned a PRD path, append `; PRD at <path>` to the outcome string.
+
+### 6. Status flip
+
+Update `**Status:**` from `architect-reviewed` to `promoted`:
+
+```
+**Status:** promoted
+```
+
+### Dry-run mode handling
+
+In `dry-run` mode for this section:
+- Steps 1 (eligibility) and 2 (read architect comment) execute — both are read-only operations and dry-run should validate the architect comment exists before reporting "would dispatch pm"
+- Steps 3 (pm invocation) and 5 (queue edit) DO NOT execute — describe what would happen, including a preview of the pm prompt and the planned Promotion-line replacement
+- Steps 4 (capture pm output) and 6 (status flip) are N/A in dry-run
 
 ## Output
 
@@ -328,6 +421,19 @@ Return a structured run summary (under 300 words). The summary fields differ by 
 9. **Errors / partial failures:** anything that didn't complete cleanly (filing failure, architect-invocation failure, queue-annotation failure)
 10. **Budget consumption:** Edit / Bash / MCP / Agent counts
 
+### `architect-first-pm` mode
+
+1. **Mode:** architect-first-pm (dry-run | live)
+2. **Candidate:** ID (this mode requires a single candidate ID; ALL or multi-ID scope is an error)
+3. **Stub epic #:** the stub the candidate routes to
+4. **Architect comment status:** found | not-found
+5. **PM outcome:** epic # and story #s filed; PRD path if any (or "would invoke" in dry-run)
+6. **Queue edits:** old Promotion line → new Promotion line; old Status (`architect-reviewed`) → new Status (`promoted`)
+7. **Skipped — wrong status:** the candidate's actual status if not `architect-reviewed`
+8. **Skipped — pm already dispatched:** if Promotion block already contains `pm filed`
+9. **Errors / partial failures:** anything that didn't complete cleanly (architect comment not found, pm-invocation failure without returned issue numbers, queue-edit failure)
+10. **Budget consumption:** Edit / Bash / MCP / Agent counts
+
 ## What you must NOT do
 
 - Do not make product judgments. Never override a Decision line,
@@ -352,3 +458,7 @@ Return a structured run summary (under 300 words). The summary fields differ by 
   you find yourself wanting to edit elsewhere.)
 - Do not invoke any subagent other than `pm` or `architect` via the
   `Agent` tool.
+- In `architect-first-pm` mode, do NOT append a second Promotion line
+  to the candidate's queue entry — find-and-replace the existing
+  partial Promotion line in-place. Two Promotion lines on the same
+  candidate is a malformed queue state.
