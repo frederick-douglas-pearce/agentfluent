@@ -245,6 +245,7 @@ def format_analysis_table(
         inv_table.add_column("Tokens", justify="right")
         inv_table.add_column("Tool uses", justify="right")
         inv_table.add_column("Duration", justify="right")
+        any_unreliable = False
         for s in result.sessions:
             for inv in s.invocations:
                 tokens = format_tokens(inv.total_tokens) if inv.total_tokens else "-"
@@ -255,6 +256,9 @@ def format_analysis_table(
                 # no idle was detected.
                 if inv.duration_ms is None:
                     duration = "-"
+                elif not inv.duration_reliable:
+                    any_unreliable = True
+                    duration = f"~{inv.duration_ms / 1000:.1f}s*"
                 elif inv.idle_gap_ms and inv.active_duration_ms is not None:
                     duration = (
                         f"{inv.active_duration_ms / 1000:.1f}s "
@@ -271,6 +275,12 @@ def format_analysis_table(
                     duration,
                 )
         console.print(inv_table)
+        if any_unreliable:
+            console.print(
+                "* Duration estimated from wall-clock; no subagent trace available "
+                "(may include user-wait time).",
+                style="dim",
+            )
 
     console.print(API_RATE_FOOTNOTE, style="dim")
 

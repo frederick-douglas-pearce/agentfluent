@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, computed_field
 
 from agentfluent.traces.models import SubagentTrace
 
@@ -124,6 +124,21 @@ class AgentInvocation(BaseModel):
         if self.trace is None:
             return None
         return self.trace.active_duration_ms
+
+    # mypy + pydantic ``@computed_field`` interaction (pydantic/pydantic#6709).
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def duration_reliable(self) -> bool:
+        """Whether ``duration_ms`` represents active work rather than
+        wall-clock-including-wait. ``True`` only when a subagent trace is
+        linked: with a trace, the idle-gap heuristic can subtract user-
+        wait time. Without a trace, the only available duration is the
+        parent-side wall-clock, which silently includes any time the user
+        spent away from the keyboard between tool calls. Consumers
+        (formatter, ``duration_outlier`` signal, aggregate stats) should
+        treat unreliable durations as wall-clock estimates, not active
+        work, and either annotate or filter them out."""
+        return self.trace is not None
 
     @property
     def active_duration_per_tool_use(self) -> float | None:

@@ -219,10 +219,14 @@ def _extract_duration_outliers(invocations: list[AgentInvocation]) -> list[Diagn
     """Detect invocations with unusually high active duration per tool call.
 
     Uses ``active_duration_per_tool_use`` so user-approval wait time
-    isn't attributed to the agent.
+    isn't attributed to the agent. Filters to ``duration_reliable``
+    invocations only: no-trace invocations fall back to wall-clock,
+    which silently includes user-wait time and would produce false
+    "this agent is slow" outliers (see #453).
     """
+    reliable = [inv for inv in invocations if inv.duration_reliable]
     return _detect_outliers(
-        invocations,
+        reliable,
         accessor=lambda i: i.active_duration_per_tool_use,
         signal_type=SignalType.DURATION_OUTLIER,
         format_message=lambda inv, val, q3, iqr: (

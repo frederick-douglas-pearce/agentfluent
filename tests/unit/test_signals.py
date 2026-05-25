@@ -14,8 +14,9 @@ def _inv(
     duration_ms: int | None = None,
     tool_use_id: str = "toolu_01",
     agent_id: str | None = None,
+    with_trace: bool = False,
 ) -> AgentInvocation:
-    return AgentInvocation(
+    inv = AgentInvocation(
         agent_type=agent_type,
         description="test",
         prompt="do something",
@@ -26,6 +27,17 @@ def _inv(
         output_text=output_text,
         agent_id=agent_id,
     )
+    if with_trace:
+        from agentfluent.traces.models import SubagentTrace
+
+        inv.trace = SubagentTrace(
+            agent_id=agent_id or "test-trace",
+            agent_type=agent_type,
+            delegation_prompt="x",
+            duration_ms=duration_ms,
+            idle_gap_ms=None,
+        )
+    return inv
 
 
 class TestErrorPatternDetection:
@@ -185,17 +197,30 @@ class TestDurationOutlierDetection:
     def test_detects_outlier(self) -> None:
         # Spread of 1000–1800 ms/use + one outlier at 50000.
         invocations = [
-            _inv(duration_ms=10_000 + 1000 * i, tool_uses=10) for i in range(9)
-        ] + [_inv(duration_ms=500_000, tool_uses=10)]
+            _inv(duration_ms=10_000 + 1000 * i, tool_uses=10, with_trace=True)
+            for i in range(9)
+        ] + [_inv(duration_ms=500_000, tool_uses=10, with_trace=True)]
         signals = extract_signals(invocations)
         outliers = [s for s in signals if s.signal_type == SignalType.DURATION_OUTLIER]
         assert len(outliers) == 1
 
     def test_single_invocation_skipped(self) -> None:
-        invocations = [_inv(duration_ms=50000, tool_uses=10)]
+        invocations = [_inv(duration_ms=50000, tool_uses=10, with_trace=True)]
         signals = extract_signals(invocations)
         outliers = [s for s in signals if s.signal_type == SignalType.DURATION_OUTLIER]
         assert len(outliers) == 0
+
+    def test_no_trace_invocations_excluded(self) -> None:
+        # #453: no-trace invocations have duration_reliable=False and
+        # must not produce duration_outlier signals (would false-positive
+        # because wall-clock duration silently includes user-wait time).
+        invocations = [
+            _inv(duration_ms=10_000 + 1000 * i, tool_uses=10, with_trace=True)
+            for i in range(9)
+        ] + [_inv(duration_ms=500_000, tool_uses=10, with_trace=False)]
+        signals = extract_signals(invocations)
+        outliers = [s for s in signals if s.signal_type == SignalType.DURATION_OUTLIER]
+        assert outliers == []
 
     def test_uses_active_duration_when_trace_present(self) -> None:
         # #230: outlier detection compares active_duration_per_tool_use.
@@ -277,10 +302,16 @@ class TestInvocationIdPropagation:
 
     def test_duration_outlier_signal_carries_invocation_id(self) -> None:
         peers = [
-            _inv(duration_ms=1000 + 100 * i, tool_uses=10, agent_id=f"ag-{i}")
+            _inv(
+                duration_ms=1000 + 100 * i, tool_uses=10,
+                agent_id=f"ag-{i}", with_trace=True,
+            )
             for i in range(9)
         ]
-        slow = _inv(duration_ms=100_000, tool_uses=10, agent_id="ag-slow")
+        slow = _inv(
+            duration_ms=100_000, tool_uses=10,
+            agent_id="ag-slow", with_trace=True,
+        )
         signals = extract_signals([*peers, slow])
         outlier = next(s for s in signals if s.signal_type == SignalType.DURATION_OUTLIER)
         assert outlier.invocation_id == "ag-slow"
