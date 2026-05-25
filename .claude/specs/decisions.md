@@ -712,3 +712,58 @@ primary_axis = max(AXIS_TIEBREAKER, key=lambda a: axis_scores[a])
 **Reference:** Epic #433 body (architect's open question); stories #435, #436, #438.
 
 ---
+
+## D037: anthropic-research scout cadence — bi-weekly default + manual postmortem trigger
+
+**Date:** 2026-05-24
+**Context:** The `anthropic-research` subagent ([`.claude/agents/anthropic-research.md`](../../.claude/agents/anthropic-research.md)) surveys Anthropic engineering blog posts, news, Claude Code changelog, and Agent SDK changelogs to surface candidates for AgentFluent's roadmap. The agent description explicitly mentions "scheduled or manual research ticks" but the cadence was never specified. With Phase 3 of the research pipeline complete (Epic #439) and the cron-deployment work tracked in #451, picking a default cadence is the next gap.
+
+**Research (upstream tempo data, gathered 2026-05-24):**
+
+| Source | Tempo | Most recent activity |
+|---|---|---|
+| Claude Code `CHANGELOG.md` | **30 commits in 30 days** (~1/day in active periods); some clustering (May 21 had 4 commits) | last commit 2026-05-23 |
+| Claude Code versions in current changelog | 35 distinct (v2.1.108–v2.1.150) | — |
+| TypeScript Agent SDK `CHANGELOG.md` | ~9 recent versions visible (0.3.142–0.3.150) | active |
+| Python Agent SDK `CHANGELOG.md` | ~6 recent versions visible (0.2.82–0.2.87) | less active |
+| Anthropic Engineering blog | **1-2 articles/month** | postmortem published 2026-04-23 |
+| Anthropic News | ~1-2/week, mostly non-technical announcements | continuous |
+
+**Scout yield (single data point, 2026-05-20 manual run):** 32 sources reviewed → 8 candidates (~25% conversion).
+- 27 Claude Code versions → 5 candidates (C-001 through C-005)
+- 4 TS SDK versions → 2 candidates (C-007, C-008)
+- 1 postmortem → 1 candidate (C-006)
+- 9 news + 4 blog posts → 0 candidates (mostly partnerships, plan tiers, governance)
+
+**Options considered:**
+
+- A) **Weekly (every 7 days)** — captures ~7 Claude Code releases per pass; matches the busiest upstream source's tempo
+- B) **Bi-weekly (every 14 days)** — captures ~14 Claude Code releases per pass; matches typical Anthropic sprint rhythm
+- C) **Monthly (every 30 days)** — captures ~30 releases per pass; reduces operational overhead but produces a large per-pass backlog
+- D) **Triggered (on changelog modification)** — GitHub webhook on the upstream `CHANGELOG.md` files fires the scout. Most responsive but very noisy without debouncing.
+- E) **Reactive (RSS-only)** — fire scout only when engineering blog publishes. Catches postmortems but misses changelog drift entirely.
+
+**Decision:** Option B (bi-weekly cron) as the default, plus a manual trigger exception for engineering postmortems.
+
+**Rationale:**
+
+- **Bi-weekly matches Anthropic's apparent sprint rhythm.** The engineering blog publishes ~1-2/month, so bi-weekly catches all of it within a sprint cycle. The Claude Code changelog tempo (~1/day) is too fast to drive cadence directly; we'd produce sparse, repetitive passes if we ran weekly.
+- **Manageable per-pass backlog.** 8 candidates per pass (from the 2026-05-20 data point) translates to 8 verifier + human review + dispatch cycles — feasible in a single batch session every two weeks. More frequent and each pass produces fewer candidates (the Reviewed Sources deny-list catches more); less frequent and the queue accumulates more candidates than a single review session can absorb cleanly.
+- **Postmortems are time-sensitive and rare.** The April 23 postmortem alone produced C-006, AgentFluent's most interesting Behavior Diagnostics candidate to date. We don't want to wait up to 14 days to catch the next one. Manual trigger when a postmortem drops is the right shape. Future enhancement (per #451): RSS-watch on the engineering blog could automate this.
+- **Bounded cost.** The scout has hard budget caps (14 WebFetch + 3 WebSearch + 10 Bash calls per run; documented in [`.claude/agents/anthropic-research.md`](../../.claude/agents/anthropic-research.md) line 83-87). Bi-weekly is cheap to operate.
+- **Calibration window built in.** Cadence is a default, not a permanent contract. After 4-6 weeks (2-3 scout passes), real data on candidate yield and backlog should refine the choice. If we see "wish we'd known sooner" moments, tighten to weekly. If the queue stays empty, loosen to monthly. Tracking discipline: see #451 acceptance criteria.
+
+**Calibration signals to watch (per-pass observability):**
+
+| Signal | Action if observed |
+|---|---|
+| Per-pass candidate yield <2 for 2+ passes | Loosen to monthly (signal density too low for bi-weekly) |
+| Per-pass candidate yield >12 for 2+ passes | Tighten to weekly (changelog volume outpaces scout) |
+| Queue backlog (unprocessed candidates) >10 between human review sessions | Slow scout OR speed up human review batch |
+| User-reported AgentFluent gap that scout would have caught earlier at higher cadence | Tighten cadence; file as occurrence note |
+
+**Cron deployment is out of scope for this decision** — see #451 for the implementation tracking (Claude Code `schedule` skill vs. GitHub Actions vs. local cron). D037 picks the cadence; #451 picks the mechanism.
+
+**Reference:** Issue #451 (cron deployment); `.claude/agents/anthropic-research.md`; `.claude/specs/research/anthropic-feature-watch.md` Reviewed Sources section (2026-05-20 scout pass data).
+
+---
