@@ -48,18 +48,19 @@ Four independent stories addressing the dominant misleading signals from the v0.
 
 **Priority:** medium
 **Labels:** `enhancement`, `priority:medium`
-**Sizing:** M (2-3 days)
+**Sizing:** S (~1-2 days, revised down from M after architect review removed the phantom split-constants risk — see D038-A)
 **Dependencies:** Soft dependency on #453 (for dogfood validation AC only)
 **Status:** IN SCOPE
 **Replaces:** #394 (Cause B -- see D038)
 
-**Summary:** The idle-gap heuristic (`IDLE_GAP_K=10`, `IDLE_GAP_FLOOR_MS=300_000`) catches dramatic gaps but misses moderate 1-4 minute user-coupled waits. Re-run the calibration notebook against the v0.7+ corpus to find new constants that catch moderate gaps while maintaining 100% `stuck_session` recall. May require splitting idle-gap vs stuck-session thresholds.
+**Summary:** The idle-gap heuristic (`IDLE_GAP_K=10`, `IDLE_GAP_FLOOR_MS=300_000`) catches dramatic gaps but misses moderate 1-4 minute user-coupled waits. Re-run the calibration notebook against the v0.7+ corpus to find lower constants that catch moderate gaps without regressing subtraction on the original 12 "obviously-stuck" traces from §11. `STUCK_PATTERN` signal is unaffected (different mechanism — retry-attempt counting).
 
 **Key considerations:**
-- Constants are shared with `stuck_session` signal -- calibrated to 100% recall on 12 stuck traces in `scripts/calibration/threshold_validation.ipynb` section 11
-- Sweep `IDLE_GAP_K` (5, 7, 8, 10) and `IDLE_GAP_FLOOR_MS` (60k, 120k, 180k, 300k)
-- If constants can't serve both signals, consider splitting into separate threshold pairs
-- Dogfood target: pm avg duration < 10 min (reliable invocations only, per #453)
+- Constants are used **only** by `_compute_idle_gap_ms` at `traces/parser.py:188`. Notebook §11's 12-trace validation is a regression guard for subtraction quality, NOT recall for a separate stuck-detection signal (architect review on #454 corrected the original framing).
+- Sweep `IDLE_GAP_K` (5, 7, 8, 10) and `IDLE_GAP_FLOOR_MS` (30k, 60k, 120k, 180k, 300k) — extending the floor sweep downward to 30s because `gap > threshold` is a strict inequality (a 60s floor never flags a 60s gap).
+- Add a new validation target: the moderate-gap pm invocations from #394 re-diagnosis (gaps in the 1-4 min range that currently report `idle_gap_ms = 0`).
+- Dogfood target: pm avg duration < 10 min (reliable invocations only, per #453).
+- Likely smaller than original M sizing now that the phantom split-constants risk is removed — re-estimate at S after architect review (see #454).
 
 **Blocks:** Nothing
 
