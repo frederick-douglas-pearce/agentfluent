@@ -796,3 +796,24 @@ primary_axis = max(AXIS_TIEBREAKER, key=lambda a: axis_scores[a])
 - **AskUserQuestion explicitly moved to Non-Goals** in `prd-v0.8.md` -- it cannot be built until the upstream gap is resolved.
 
 **Reference:** Issue #394 (closed); #453; #454. Empirical re-diagnosis: #394 comment (2026-05-25). `backlog-v0.8.md` and `prd-v0.8.md` updated to reflect the split.
+
+---
+
+## D038-A: #454 risk-model correction — phantom stuck_session coupling
+
+**Date:** 2026-05-25
+**Context:** Architect review on #454 ([comment](https://github.com/frederick-douglas-pearce/agentfluent/issues/454#issuecomment-4536983496)) identified that the "shared with `stuck_session`" coupling claim in D038, #454's body, `prd-v0.8.md` (Risks table row), and `backlog-v0.8.md` (A1b summary) does not match the actual code. Grep verification: `IDLE_GAP_K` and `IDLE_GAP_FLOOR_MS` are referenced only at `src/agentfluent/traces/parser.py:188` (definition + single use in `_compute_idle_gap_ms`). No `stuck_session` signal type exists in the codebase. The `STUCK_PATTERN` signal (`diagnostics/trace_signals.py:198`) uses a completely different mechanism: retry-attempt counting with identical input matching (`_STUCK_MIN_ATTEMPTS = 4`). It never reads the idle-gap constants.
+
+**Where the phantom came from:** Notebook §11 (`scripts/calibration/threshold_validation.ipynb`) validates idle-gap detection against 12 "obviously-stuck" traces (span > 10min AND biggest_gap > 50% of span). The terminology "stuck traces" in the notebook is a regression-guard target for the idle-gap subtraction path -- not a separate signal's recall metric. The conflation propagated from #230's narrative into #394's framing, my own re-diagnosis comment on #394 (2026-05-25), PM's re-scope of #394, D038, and the v0.8 spec artifacts.
+
+**Correction:**
+- The 12-trace set in §11 is a regression guard for *subtraction quality on dramatic gaps*, not stuck-detection recall.
+- `STUCK_PATTERN` recall is structurally unaffected by any change to `IDLE_GAP_K` / `IDLE_GAP_FLOOR_MS`.
+- The "split into separate threshold pairs" mitigation in D038 and the v0.8 PRD is unnecessary; there is nothing to split.
+- The "heuristic-shape change" alternative (median anchor vs absolute) is unnecessary; the floor is the binding constraint in the regime #454 targets.
+
+**Decision:** #454 simplifies to approach (1) from the architect review: sweep `IDLE_GAP_K` and `IDLE_GAP_FLOOR_MS` downward (floor extended to 30_000ms because `gap > threshold` is strict), validate regression-guard on the 12-trace §11 set, validate positive detection on the moderate-gap pm invocations from the #394 re-diagnosis. Sizing revised M → S. `prd-v0.8.md` risks row, `backlog-v0.8.md` A1b, and #454 body all updated to remove the phantom coupling claim and reframe the validation target. D038's narrative remains historically accurate as the re-scope decision; D038-A documents the correction without rewriting the original entry (append-only log).
+
+**Reference:** Issue #454 architect review comment (2026-05-25). `prd-v0.8.md`, `backlog-v0.8.md`, #454 issue body updated.
+
+---
