@@ -137,3 +137,47 @@ class TestActiveDuration:
         )
         inv.trace = self._trace(idle_gap_ms=3000)  # type: ignore[assignment]
         assert inv.active_duration_per_tool_use is None
+
+
+class TestDurationReliable:
+    """`duration_reliable` indicates whether duration_ms represents
+    active work or wall-clock-including-wait. True only when a trace
+    is linked (#453)."""
+
+    @staticmethod
+    def _trace(*, idle_gap_ms: int | None) -> object:
+        from agentfluent.traces.models import SubagentTrace
+
+        return SubagentTrace(
+            agent_id="abc",
+            agent_type="pm",
+            delegation_prompt="x",
+            duration_ms=120_000,
+            idle_gap_ms=idle_gap_ms,
+        )
+
+    def test_no_trace_is_unreliable(self) -> None:
+        inv = _full_invocation()
+        assert inv.trace is None
+        assert inv.duration_reliable is False
+
+    def test_trace_attached_is_reliable(self) -> None:
+        inv = _full_invocation()
+        inv.trace = self._trace(idle_gap_ms=60_000)  # type: ignore[assignment]
+        assert inv.duration_reliable is True
+
+    def test_trace_without_idle_gap_still_reliable(self) -> None:
+        # Trace exists but couldn't compute idle_gap (too few paired
+        # calls). Duration is still derived from trace timestamps, so
+        # the flag tracks trace presence, not idle_gap computability.
+        inv = _full_invocation()
+        inv.trace = self._trace(idle_gap_ms=None)  # type: ignore[assignment]
+        assert inv.duration_reliable is True
+
+    def test_serialized_in_json(self) -> None:
+        inv = _full_invocation()
+        payload = inv.model_dump(mode="json")
+        assert payload["duration_reliable"] is False
+        inv.trace = self._trace(idle_gap_ms=60_000)  # type: ignore[assignment]
+        payload = inv.model_dump(mode="json")
+        assert payload["duration_reliable"] is True

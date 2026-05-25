@@ -12,31 +12,54 @@ Ordered backlog for v0.8 (Sharpen the Signal). Issues are sequenced by dependenc
 
 | Disposition | Count | Issues |
 |-------------|-------|--------|
-| In scope (open) | 9 | #394, #395, #396, #402, #399, #400, #401, #392, #390 |
-| Stretch | 1 | #333 |
-| Total in milestone | 10 | (including parent epic #398) |
+| In scope (open) | 11 | #453, #454, #395, #396, #402, #399, #400, #401, #392, #390, #333 |
+| Closed (superseded) | 1 | #394 (replaced by #453 + #454, see D038) |
+| Total in milestone | 12 | (including parent epic #398) |
 
 ---
 
 ## Stream A: Diagnostics Signal Quality (dogfood fixes)
 
-Three independent stories addressing the dominant misleading signals from the v0.7 dogfood analysis (2026-05-17). All three can be implemented in parallel.
+Four independent stories addressing the dominant misleading signals from the v0.7 dogfood analysis (2026-05-17). All four can be implemented in parallel (though #454 has a soft dependency on #453 for its dogfood validation AC).
 
-### A1. #394 -- Extend `active_duration_ms` to non-trace agents (AskUserQuestion-anchored wait detection)
+### A1a. #453 -- Tag no-trace agent invocations as duration-unreliable
 
 **Priority:** high
 **Labels:** `bug`, `enhancement`, `priority:high`
-**Sizing:** M (2-3 days)
+**Sizing:** XS-S (~1 day)
 **Dependencies:** None
 **Status:** IN SCOPE
+**Replaces:** #394 (Cause A -- see D038)
 
-**Summary:** pm's `active_duration_ms` returns `None` when no subagent trace exists, causing the CLI table to fall back to wall-clock duration (33 min avg in dogfood). The original #230 spec called out the AskUserQuestion-anchored detection path but it was never implemented. Extend the computation to subtract AskUserQuestion wait gaps from wall-clock duration for parent-thread agents.
+**Summary:** 6 of 31 pm invocations (~20%) have no subagent trace file on disk (all from one session). Without trace data, `active_duration_ms` returns `None` and the table silently falls back to wall-clock duration. Add a `duration_reliable` flag to `AgentInvocation` so consumers can distinguish real active durations from wall-clock fallbacks. Table formatter annotates unreliable durations. `duration_outlier` signal skips unreliable invocations.
 
 **Key considerations:**
-- Option A (recommended by issue author): compute from parent-thread messages by detecting AskUserQuestion tool_result blocks between invocation start/end, summing gaps, subtracting from wall-clock
-- Option B (pragmatic fallback): tag invocations as "may include user-wait time" without computing active duration
-- Requires plumbing parent_messages into the AgentInvocation computation path
-- `duration_outlier` signal must use active duration for AskUserQuestion-using agents
+- `duration_reliable: bool` property on `AgentInvocation` -- True when trace exists, False otherwise
+- Table formatter annotates (e.g., `~33m*` with footnote)
+- `duration_outlier` gated: skip or down-weight to INFO for unreliable invocations
+- JSON output includes `duration_reliable` per invocation
+- No heuristic changes, no calibration risk
+
+**Blocks:** Nothing (but #454's dogfood validation AC uses this flag)
+
+---
+
+### A1b. #454 -- Re-tune idle-gap thresholds for moderate user-coupled waits
+
+**Priority:** medium
+**Labels:** `enhancement`, `priority:medium`
+**Sizing:** M (2-3 days)
+**Dependencies:** Soft dependency on #453 (for dogfood validation AC only)
+**Status:** IN SCOPE
+**Replaces:** #394 (Cause B -- see D038)
+
+**Summary:** The idle-gap heuristic (`IDLE_GAP_K=10`, `IDLE_GAP_FLOOR_MS=300_000`) catches dramatic gaps but misses moderate 1-4 minute user-coupled waits. Re-run the calibration notebook against the v0.7+ corpus to find new constants that catch moderate gaps while maintaining 100% `stuck_session` recall. May require splitting idle-gap vs stuck-session thresholds.
+
+**Key considerations:**
+- Constants are shared with `stuck_session` signal -- calibrated to 100% recall on 12 stuck traces in `scripts/calibration/threshold_validation.ipynb` section 11
+- Sweep `IDLE_GAP_K` (5, 7, 8, 10) and `IDLE_GAP_FLOOR_MS` (60k, 120k, 180k, 300k)
+- If constants can't serve both signals, consider splitting into separate threshold pairs
+- Dogfood target: pm avg duration < 10 min (reliable invocations only, per #453)
 
 **Blocks:** Nothing
 
@@ -193,25 +216,23 @@ New external data source. Sequential dependency chain: infrastructure -> signal 
 **Dependencies:** All feature work complete (docs reflect what shipped)
 **Status:** IN SCOPE
 
-**Summary:** Auto-created when v0.8.0 milestone was opened. Update README (feature list, CLI flags, JSON example for `--github`), GLOSSARY (new terms: `ci_failure_first_push`, `pr_review_comment_density`, `tier3_degraded`, updated `reviewer_caught`), CHANGELOG (prose expansion).
+**Summary:** Auto-created when v0.8.0 milestone was opened. Update README (feature list, CLI flags, JSON example for `--github`), GLOSSARY (new terms: `ci_failure_first_push`, `pr_review_comment_density`, `tier3_degraded`, `duration_reliable`, updated `reviewer_caught`), CHANGELOG (prose expansion).
 
 **Blocks:** Nothing
 
 ---
 
-## Stretch Scope
+## Stream E: Additional Signal-Quality Fix
 
-### S1. #333 -- ERROR_PATTERN FP reduction on prose-heavy outputs
+### E1. #333 -- ERROR_PATTERN FP reduction on prose-heavy outputs
 
-**Priority:** low (within stretch)
+**Priority:** low
 **Labels:** `bug`, `priority:low`
 **Sizing:** M (2-3 days)
 **Dependencies:** None
-**Status:** STRETCH
+**Status:** IN SCOPE
 
-**Summary:** Residual ERROR_PATTERN false-positive rate post-#281. ~10 of 11 leading-200 matches on the dogfood corpus are false positives (issue titles, code identifiers, schema field mentions). Five hypotheses in the issue; hypothesis 5 (suppress metadata fallback for trace-linked invocations) is the simplest scope-cut. Fits the "sharpen the signal" theme but lower priority than the three anchor fixes.
-
-**Why stretch:** The anchors (#394/#395/#396) address the three highest-volume misleading signals. #333 addresses a lower-volume FP class. Pull in if time allows after must-include scope completes.
+**Summary:** Residual ERROR_PATTERN false-positive rate post-#281. ~10 of 11 leading-200 matches on the dogfood corpus are false positives (issue titles, code identifiers, schema field mentions). Five hypotheses in the issue; hypothesis 5 (suppress metadata fallback for trace-linked invocations) is the simplest scope-cut. Fits the "sharpen the signal" theme alongside the Stream A anchor fixes.
 
 ---
 
@@ -219,29 +240,30 @@ New external data source. Sequential dependency chain: infrastructure -> signal 
 
 ### Wave 1 -- Dogfood fixes + Tier 3 infrastructure (start immediately, parallel)
 
-All four are independent. Start them in parallel or interleave.
+All five are independent. Start them in parallel or interleave.
 
-1. **#394** -- active_duration_ms for non-trace agents (M, no deps, highest-impact dogfood fix)
-2. **#395** -- retry_loop built-in-tool down-weight (S, no deps)
-3. **#396** -- reviewer_caught healthy-band (S-M, no deps)
-4. **#399** -- Tier 3 infrastructure (M-L, no deps, blocks Stream B)
+1. **#453** -- tag no-trace invocations as duration-unreliable (XS-S, no deps, quick win)
+2. **#454** -- idle-gap threshold re-tuning (M, soft dep on #453 for validation)
+3. **#395** -- retry_loop built-in-tool down-weight (S, no deps)
+4. **#396** -- reviewer_caught healthy-band (S-M, no deps)
+5. **#399** -- Tier 3 infrastructure (M-L, no deps, blocks Stream B)
 
 ### Wave 2 -- Tier 3 signals + calibration (days 5-12)
 
-5. **#400** -- CI_FAILURE_FIRST_PUSH signal (M, depends on #399)
-6. **#401** -- PR_REVIEW_COMMENT_DENSITY signal (M, depends on #399, parallel with #400)
-7. **#402** -- feat_fix_proximity calibration (S-M, independent)
-8. **#392** -- CHANGELOG tidy (XS, independent early win)
+6. **#400** -- CI_FAILURE_FIRST_PUSH signal (M, depends on #399)
+7. **#401** -- PR_REVIEW_COMMENT_DENSITY signal (M, depends on #399, parallel with #400)
+8. **#402** -- feat_fix_proximity calibration (S-M, independent)
+9. **#392** -- CHANGELOG tidy (XS, independent early win)
 
-### Wave 3 -- Stretch (if time allows)
+### Wave 3 -- Additional signal-quality fix
 
-9. **#333** -- ERROR_PATTERN FP reduction (M, independent)
+10. **#333** -- ERROR_PATTERN FP reduction (M, independent)
 
 ### Wave 4 -- Release prep (days 16-22)
 
-10. **#390** -- Docs catch-up (M, depends on all features)
-11. Dogfood validation runs (Tier 3 signals, duration fix, retry ranking)
-12. Release prep (changelog, version bump, CI green)
+11. **#390** -- Docs catch-up (M, depends on all features)
+12. Dogfood validation runs (Tier 3 signals, duration fix, retry ranking)
+13. Release prep (changelog, version bump, CI green)
 
 ---
 
@@ -249,22 +271,32 @@ All four are independent. Start them in parallel or interleave.
 
 | Order | # | Title | In/Out | Priority | Deps | Stream |
 |-------|---|-------|--------|----------|------|--------|
-| 1 | #394 | active_duration_ms non-trace agents | IN | high | none | A |
-| 2 | #395 | retry_loop built-in down-weight | IN | medium | none | A |
-| 3 | #396 | reviewer_caught healthy band | IN | medium | none | A |
-| 4 | #399 | Tier 3 infrastructure | IN | high | none | B |
-| 5 | #400 | CI_FAILURE_FIRST_PUSH signal | IN | high | #399 | B |
-| 6 | #401 | PR_REVIEW_COMMENT_DENSITY signal | IN | high | #399 | B |
-| 7 | #402 | feat_fix_proximity calibration | IN | medium | none | C |
-| 8 | #392 | CHANGELOG tidy | IN | low | none | D |
-| 9 | #333 | ERROR_PATTERN FP reduction | STRETCH | low | none | -- |
-| 10 | #390 | Docs catch-up | IN | required | all features | D |
+| 1 | #453 | Tag no-trace as duration-unreliable | IN | high | none | A |
+| 2 | #454 | Idle-gap threshold re-tuning | IN | medium | soft #453 | A |
+| 3 | #395 | retry_loop built-in down-weight | IN | medium | none | A |
+| 4 | #396 | reviewer_caught healthy band | IN | medium | none | A |
+| 5 | #399 | Tier 3 infrastructure | IN | high | none | B |
+| 6 | #400 | CI_FAILURE_FIRST_PUSH signal | IN | high | #399 | B |
+| 7 | #401 | PR_REVIEW_COMMENT_DENSITY signal | IN | high | #399 | B |
+| 8 | #402 | feat_fix_proximity calibration | IN | medium | none | C |
+| 9 | #392 | CHANGELOG tidy | IN | low | none | D |
+| 10 | #333 | ERROR_PATTERN FP reduction | IN | low | none | E |
+| 11 | #390 | Docs catch-up | IN | required | all features | D |
+
+---
+
+## Closed / Superseded
+
+| # | Title | Disposition | Replaced by |
+|---|-------|-------------|-------------|
+| #394 | active_duration_ms non-trace agents (AskUserQuestion-anchored) | Closed -- premise disproved (D038) | #453 + #454 |
 
 ---
 
 ## Estimated Total
 
-**Must-include: 9 open issues, ~18-26 dev days (3-4 weeks)**
-**With stretch: +1 issue, ~2-3 additional dev days**
+**11 open issues, ~20-29 dev days (3-4+ weeks)**
 
-Streams A, B, and C are fully independent. Within Stream B, the infrastructure story (#399) blocks the two signal stories (#400, #401) which are independent of each other. A solo developer can start with Wave 1 (interleaving #394 with #399), then shift to Wave 2 (Tier 3 signals + calibration) once infrastructure lands.
+Net effect of the #394 split: one M issue replaced by one XS-S + one M. Total effort is similar but risk is better distributed -- the quick win (#453) ships independently of the calibration work (#454). If #454 threatens the timeline, it can slip to v0.8.1 without leaving users with silently misleading durations (because #453 tags them).
+
+Streams A, B, C, and E are fully independent. Within Stream B, the infrastructure story (#399) blocks the two signal stories (#400, #401) which are independent of each other. A solo developer can start with Wave 1 (interleaving #453 with #399), then shift to Wave 2 (Tier 3 signals + calibration) once infrastructure lands.

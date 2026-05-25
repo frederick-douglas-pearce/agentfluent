@@ -767,3 +767,32 @@ primary_axis = max(AXIS_TIEBREAKER, key=lambda a: axis_scores[a])
 **Reference:** Issue #451 (cron deployment); `.claude/agents/anthropic-research.md`; `.claude/specs/research/anthropic-feature-watch.md` Reviewed Sources section (2026-05-20 scout pass data).
 
 ---
+## D038: #394 re-scope -- split into #453 (tag no-trace) + #454 (threshold re-tuning)
+
+**Date:** 2026-05-25
+**Context:** #394 ("extend active_duration_ms to non-trace agents via AskUserQuestion-anchored wait detection") was the highest-priority story in v0.8 Stream A. Before implementation, an empirical investigation ran the existing extractor + trace parser against the agentfluent project corpus (25 sessions, 31 pm invocations). The investigation disproved the issue's premise and identified two distinct root causes for the inflated 33-min pm average.
+
+**Findings:**
+1. **AskUserQuestion does not appear in pm traces** -- zero occurrences across 31 invocations. The upstream gap (anthropics/claude-code#55240) is real. The "AskUserQuestion-anchored detection path" proposed in #394 and #230 cannot be built.
+2. **The existing idle-gap heuristic works** for dramatic gaps (8h, 1.5h) but misses moderate 1-4 min user-coupled waits.
+3. **Two distinct causes inflate the average:**
+   - **Cause A:** 6/31 pm invocations (~20%) have no subagent trace file; `active_duration_ms` returns `None`; table silently falls back to wall-clock.
+   - **Cause B:** Moderate idle gaps (1-4 min) fall below the `IDLE_GAP_K=10` / `IDLE_GAP_FLOOR_MS=300_000` threshold, which is shared with the `stuck_session` signal and calibrated to 100% recall on 12 stuck traces.
+
+**Options considered:**
+- A) Edit #394 in place with new title/body/ACs -- rejected because the original title, ACs, and comment thread all reference AskUserQuestion anchoring; overwriting creates a confusing audit trail.
+- B) Close #394, open two replacement issues -- chosen. Preserves the diagnostic trail (original framing + empirical rebuttal + re-scope rationale all readable in one thread). Splits scope by risk profile.
+- C) Close #394, open one combined replacement -- rejected because Cause A (XS-S, zero calibration risk) and Cause B (M, notebook re-run, calibration risk) have fundamentally different risk profiles and should not block each other.
+
+**Decision:** Option B. Close #394 as superseded. Open:
+- **#453** -- Tag no-trace invocations as duration-unreliable (Cause A). `priority:high`, XS-S, v0.8.0.
+- **#454** -- Re-tune idle-gap thresholds for moderate user-coupled waits (Cause B). `priority:medium`, M, v0.8.0 (slippable to v0.8.1 if calibration threatens timeline).
+
+**Rationale:**
+- **Risk separation.** #453 has zero calibration risk and can ship immediately. #454 requires notebook re-validation and risks degrading `stuck_session` recall. Bundling them means the quick win waits for the risky work.
+- **Audit trail.** Closing #394 with a pointer to replacements preserves the diagnostic journey. Future readers see: original hypothesis, empirical rebuttal, re-scope decision, and the two replacement issues -- all linked.
+- **Milestone stability.** Both replacements stay in v0.8.0. #454 has an explicit deferral path to v0.8.1 if needed, documented in its ACs. #453 alone ensures users are never silently misled by wall-clock fallback durations.
+- **Dogfood goal.** The pm avg < 10 min success criterion requires both issues. #453 prevents no-trace invocations from inflating the average. #454 catches moderate idle gaps in trace-attached invocations. Spec files updated to reflect that this goal depends on both.
+- **AskUserQuestion explicitly moved to Non-Goals** in `prd-v0.8.md` -- it cannot be built until the upstream gap is resolved.
+
+**Reference:** Issue #394 (closed); #453; #454. Empirical re-diagnosis: #394 comment (2026-05-25). `backlog-v0.8.md` and `prd-v0.8.md` updated to reflect the split.
