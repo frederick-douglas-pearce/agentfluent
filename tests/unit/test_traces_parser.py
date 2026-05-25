@@ -526,11 +526,12 @@ class TestResultTimestamp:
 
 
 class TestIdleGapDetection:
-    """`SubagentTrace.idle_gap_ms` / `active_duration_ms` (#230).
+    """`SubagentTrace.idle_gap_ms` / `active_duration_ms` (#230, re-tuned in #454).
 
     Heuristic: per-call gap > max(IDLE_GAP_K * median, IDLE_GAP_FLOOR_MS)
-    counts as idle. The floor is 5 minutes (300_000 ms) and dominates
-    in tests where median tool latency is small.
+    counts as idle. After the #454 re-calibration, the floor is 60 s
+    (60_000 ms) and dominates in tests where median tool latency is
+    small. See `scripts/calibration/threshold_validation.ipynb` §11.
     """
 
     @staticmethod
@@ -605,6 +606,25 @@ class TestIdleGapDetection:
         assert trace.duration_ms is not None
         assert trace.active_duration_ms is not None
         assert trace.active_duration_ms == trace.duration_ms - 780_000
+
+    def test_moderate_gap_above_60s_floor_flagged(self, write_jsonl: WriteJSONL) -> None:
+        # #454: a 90-second gap on a fast-tool trace must be flagged
+        # under the lowered floor (60_000 ms). Under the pre-#454 floor
+        # (300_000 ms) this gap would have passed through unsubtracted —
+        # the exact regime that inflated pm's reported duration.
+        path = write_jsonl(
+            "agent-x.jsonl",
+            [
+                _user("go", timestamp="2026-04-21T10:00:00.000Z"),
+                *self._pair("t1", "2026-04-21T10:00:01.000Z", "2026-04-21T10:00:02.000Z"),
+                *self._pair("t2", "2026-04-21T10:00:03.000Z", "2026-04-21T10:01:33.000Z"),
+                *self._pair("t3", "2026-04-21T10:01:34.000Z", "2026-04-21T10:01:35.000Z"),
+            ],
+        )
+        trace = parse_subagent_trace(path)
+        # Median gap is ~1000 ms, K-arm is 5000 ms, floor is 60_000 ms.
+        # The 90_000 ms gap exceeds the floor; the two 1000 ms gaps don't.
+        assert trace.idle_gap_ms == 90_000
 
     def test_clock_skew_negative_gap_ignored(self, write_jsonl: WriteJSONL) -> None:
         # tool_result timestamp before tool_use timestamp — clock skew or
