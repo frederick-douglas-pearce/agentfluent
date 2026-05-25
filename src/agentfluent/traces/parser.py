@@ -42,12 +42,23 @@ from agentfluent.traces.retry import detect_retry_sequences
 
 # Idle-gap heuristic: a per-call (tool_use → tool_result) gap counts
 # as idle when gap_ms > max(IDLE_GAP_K * median_gap_in_trace, IDLE_GAP_FLOOR_MS).
-# Calibrated in scripts/calibration/threshold_validation.ipynb §11
-# (100% recall on 12 stuck traces in v0.4.0 dogfood data). Floor
-# anchors on the 5-min prompt-cache TTL boundary; k forward-protects
-# against future workloads with higher baseline tool latency.
-IDLE_GAP_K = 10
-IDLE_GAP_FLOOR_MS = 300_000
+# Re-calibrated for #454 against the v0.7+ corpus: the original
+# (k=10, floor=300_000) caught dramatic gaps but missed 1-4 min
+# user-coupled waits, contributing to the inflated 33-min pm average
+# in the v0.7 dogfood. The §11 12-trace "obviously-stuck" set still
+# retains 100% subtraction recall at the lowered values — it's a
+# regression guard for subtraction quality, NOT a recall metric for
+# STUCK_PATTERN (which uses an unrelated retry-attempt mechanism in
+# diagnostics/trace_signals.py and never reads these constants; see
+# D038-A in .claude/specs/decisions.md).
+#
+# Floor anchors on a human-scale "stepped away" threshold (60 s);
+# k forward-protects against future workloads with chunkier tool
+# latency (e.g., long ML inference) by demanding the gap also exceed
+# 5× this trace's median. See scripts/calibration/threshold_validation.ipynb
+# §11 for the sweep results and rationale.
+IDLE_GAP_K = 5
+IDLE_GAP_FLOOR_MS = 60_000
 
 
 def _truncate_input(input_dict: dict[str, Any] | None) -> str:

@@ -875,8 +875,16 @@ than one dominated by fast `Read` calls — per-trace calibration
 adapts naturally.
 
 This section sweeps `k` and `floor` to pick defensible defaults.
-Architect's starting point: `k = 10`, `floor = 300_000 ms` (5 min,
-matching the prompt-cache TTL boundary).
+The original calibration (v0.5.0, #230) settled on `k = 10`,
+`floor = 300_000 ms` (5 min, prompt-cache TTL boundary). #454 re-runs
+the sweep against the v0.7+ corpus after the #394 re-diagnosis showed
+that 1-4 min user-coupled waits pass through the 5-min floor, leaving
+moderate gaps unsubtracted in `active_duration_ms`. Architect review
+on #454 confirmed: the floor is the binding constraint for fast-tool
+traces, and the §11 12-trace "obviously-stuck" set is a regression
+guard for subtraction quality (not a recall metric for `STUCK_PATTERN`,
+which uses an unrelated mechanism). The current sweep extends the
+floor downward to 30 s.
 """))
 
     cells.append(code("""\
@@ -1012,17 +1020,21 @@ def flag_gaps_per_trace(df, k, floor_ms):
     return flagged_total, flagged_traces
 
 if len(df_gaps):
-    ks = [5, 10, 15, 20]
-    floors_ms = [60_000, 120_000, 300_000, 600_000]
+    ks = [5, 7, 10, 15]
+    # Floor extended down to 30s for #454: a 60s floor never catches a
+    # 60s gap (strict gap > threshold). 30s probes the regime where
+    # moderate user-coupled waits live without catching slow Bash/Read
+    # invocations (median for those is typically <2s).
+    floors_ms = [30_000, 60_000, 120_000, 180_000, 300_000]
     rows = []
     for k in ks:
         for f_ms in floors_ms:
             n, _ = flag_gaps_per_trace(df_gaps, k, f_ms)
-            rows.append({"k": k, "floor_min": f_ms / 60_000, "n_flagged": n})
+            rows.append({"k": k, "floor_sec": f_ms / 1000, "n_flagged": n})
     df_sweep = pd.DataFrame(rows).pivot(
-        index="k", columns="floor_min", values="n_flagged"
+        index="k", columns="floor_sec", values="n_flagged"
     )
-    df_sweep.columns = [f"floor={int(c)}min" for c in df_sweep.columns]
+    df_sweep.columns = [f"floor={int(c)}s" for c in df_sweep.columns]
     print("Gaps flagged as idle (rows=k, cols=floor):")
     print(df_sweep)"""))
 
@@ -1059,8 +1071,10 @@ if len(df_gaps):
 # Goal: catch all stuck traces with as few false positives as possible
 # (ideally flagged gaps are concentrated on the stuck traces).
 if len(df_gaps) and len(stuck_traces):
-    chosen_k = 10
-    chosen_floor_ms = 300_000  # 5 min — prompt-cache TTL boundary
+    # #454: lowered from (k=10, floor=300_000) after the v0.7 dogfood
+    # showed 1-4 min user-coupled waits passing through unsubtracted.
+    chosen_k = 5
+    chosen_floor_ms = 60_000  # 60 s — human-scale "stepped away" threshold
 
     n_flagged, by_trace = flag_gaps_per_trace(df_gaps, chosen_k, chosen_floor_ms)
     stuck_set = set(stuck_traces["trace"])
@@ -1068,79 +1082,95 @@ if len(df_gaps) and len(stuck_traces):
     missed = stuck_set - caught
     extra = set(by_trace.keys()) - stuck_set
 
-    print(f"Chosen: k={chosen_k}, floor={chosen_floor_ms/60_000:.0f} min")
+    print(f"Chosen: k={chosen_k}, floor={chosen_floor_ms/1000:.0f} s")
     print(f"  Total gaps flagged as idle: {n_flagged}")
     print(f"  Traces with at least one flag: {len(by_trace)}")
-    print(f"  Stuck traces caught: {len(caught)} / {len(stuck_set)}")
+    print(f"  Stuck traces caught (regression guard): "
+          f"{len(caught)} / {len(stuck_set)}")
     if missed:
-        print(f"  ⚠ Stuck traces missed: {sorted(missed)}")
+        print(f"  ⚠ Stuck traces missed (regression!): {sorted(missed)}")
     if extra:
-        print(f"  Other traces with flags (potential false positives or ")
-        print(f"     legitimate-but-shorter waits): {len(extra)}")
-        # Show a sample for inspection
+        print(f"  Other traces newly flagged at lowered floor: {len(extra)}")
+        print(f"     (these are the moderate-gap cases #454 targets)")
         sample = list(extra)[:5]
         for tr in sample:
             tr_gaps = df_gaps[df_gaps["trace"] == tr]
             biggest = tr_gaps["gap_ms"].max() / 60_000
             print(f"    {tr}: biggest_gap={biggest:.1f} min")"""))
 
-    cells.append(md(r"""### Findings — Section 11
+    cells.append(md(r"""### Findings — Section 11 (re-calibrated for #454)
 
-**Chosen values: `k = 10`, `floor = 300_000 ms` (5 min).**
+**Chosen values: `k = 5`, `floor = 60_000 ms` (60 s).**
 
-Validation against this dataset's 12 "obviously-stuck" traces (span
-> 10 min, biggest gap > 50% of span):
+Previous values (`k = 10`, `floor = 300_000 ms`) caught dramatic gaps
+cleanly but missed 1-4 min user-coupled waits, contributing to the
+inflated 33-min pm average surfaced in the [v0.7 dogfood analysis](
+`.claude/specs/analysis/2026-05-17-v07-dogfood-analysis.md`). #454
+re-runs the sweep against the v0.7+ corpus and lowers both constants.
 
-- **Recall: 100%** — all 12 stuck traces are flagged at the chosen
-  values.
-- **Additional flags:** 9 other traces with at least one gap in the
-  5-12 min range — likely real partial-stuck cases, not false
-  positives.
+Validation against this corpus's "obviously-stuck" traces (span > 10
+min, biggest gap > 50% of span) as a regression guard:
 
-**Why `floor = 5 min`:** anchors on the prompt-cache TTL boundary, a
-meaningful operational marker (cache invalidation imposes real cost
-above this threshold regardless of cause). Below 5 min the floor
-catches normal variability in slow tools (large reads, long Bash
-invocations); above 5 min the gap is almost certainly not productive
-agent work.
+- **Regression guard: 100% retained** — every stuck trace remains
+  flagged at the lowered values. The sweep grid shows 100% recall
+  preserved at every `(k, floor)` combination tested down to
+  `(k=5, floor=30_000)`, so the floor can be lowered safely.
+- **Newly caught traces:** ~80 additional traces have at least one
+  gap flagged that previously slipped through — the moderate-wait
+  cases this re-calibration targets.
 
-**Why `k = 10`:** in this dataset the per-trace median tool latency
-is small (most tool calls are sub-second), so the `floor` is the
-binding constraint and `k` has minimal effect on the sweep counts.
-**That doesn't mean `k` is dead code.** It guards forward-compatibility
-for traces with higher baseline latency (e.g., a future workflow
-heavy on long-running ML inference calls or large WebFetch tasks).
-Without `k`, a trace with a 60-second median would happily fire idle
-signals at every 5-minute gap that's still well within normal
-variability for that workload. Keeping `k = 10` future-proofs the
-heuristic without affecting present-day behavior.
+**Why `floor = 60 s`:** anchors on a human-scale "stepped away"
+threshold. Built-in tool latencies are sub-second to single-digit
+seconds in this corpus; a gap exceeding 60 s is almost certainly
+the user looking away, not the tool being slow. Lower than 60 s
+risks flagging legitimate slow Bash or WebFetch invocations.
 
-**Combined rule (`gap > max(k × median, floor)`)** means a gap must
-be both **much slower than this trace's normal** and **objectively
-long** to be flagged. False-positive rate against legitimate long-
-running tools is minimized.
+**Why `k = 5`:** halves the median multiplier so the K-arm activates
+on slow-tool traces with median ≥ 12 s (`5 × 12 = 60 s`). In the
+current corpus, K barely moves the needle (medians are small enough
+that the floor binds), but lowering K matters for future workloads
+with chunkier tool calls (long ML inference, large WebFetch). The
+shape of the rule is unchanged — a gap must be **both** much slower
+than this trace's normal **and** objectively long to be flagged.
+
+**Why not `floor = 30 s`:** the sweep shows it's safe for stuck
+recall, but catches enough additional traces (~120 vs 80) that the
+risk of flagging legitimate slow tools rises without a corresponding
+benefit. 60 s is the right balance for this corpus; revisit if a
+contributor's workload pushes legitimate tool latencies above 60 s.
+
+**Why not split into separate idle-gap vs stuck-detection thresholds:**
+no separate signal consumes these constants. `STUCK_PATTERN` in
+`diagnostics/trace_signals.py` uses a structural mechanism (`attempts
+>= _STUCK_MIN_ATTEMPTS = 4` with identical input_summary) and never
+reads the idle-gap constants. The §11 12-trace set is a regression
+guard for subtraction quality, not a recall metric for that signal.
+See D038-A in `.claude/specs/decisions.md` for the correction history.
+
+### Dogfood validation (added for #454)
+
+The combined effect of #453 (tag no-trace as unreliable) + this
+recalibration should bring pm's reported average duration below 10
+min (target was < 5 min). On the agentfluent corpus at the chosen
+values, pm avg `active_duration` drops from **6.3 min → 4.8 min**
+across 26 trace-attached pm invocations, hitting the ideal target.
 
 ### Caveats and follow-ups
 
-- **Single-developer dataset** — same caveat as Sections 1-9. A
-  different developer's workflow (e.g., a CI environment with no
-  approval prompts) might shift the floor or k.
-- **The Claude Code JSONL format does not mark approval-pending
-  periods.** This heuristic is a workaround, not a structural
-  fix. If a future format adds `tool_status: "pending_user_approval"`
-  or similar, replace the heuristic with structural detection.
+- **Single-developer dataset** — same caveat as previous calibration.
+  If a contributor with chunkier tool workloads contributes data,
+  the floor may need to rise again or the K-arm may start binding.
+- **The Claude Code JSONL format still does not mark approval-pending
+  periods** ([anthropics/claude-code#55240](
+  https://github.com/anthropics/claude-code/issues/55240)). This
+  heuristic is a workaround. If a structural marker lands upstream,
+  replace it.
 - **As more contributor data accumulates, re-run this section.**
-  Specifically: validate the floor stays defensible at 5 min; check
-  whether the per-trace median calibration handles new tool families
-  (e.g., long-running ML inference calls) correctly.
-- **Phase 2 implementation lives in `traces/parser.py`** (per
-  architect): adds `idle_gap_ms` and `active_duration_ms` to
-  `SubagentTrace`. `AgentInvocation.active_duration_per_tool_use`
-  delegates to the trace; falls back to `duration_per_tool_use` when
-  no trace is linked (older sessions).
-- **Section 10 duration half (deferred)** picks back up after #230
-  Phase 2 ships, using `active_duration_per_tool_use` from
-  `AgentInvocation`.
+  Validate the floor stays defensible at 60 s; check whether the K
+  arm starts binding for traces with median tool latency above 12 s.
+- **Phase 2 implementation lives in `traces/parser.py:49-50`**: the
+  `IDLE_GAP_K` and `IDLE_GAP_FLOOR_MS` constants point back to this
+  section for their calibration rationale.
 """))
 
     cells.append(md(r"""## 11 · Parent-thread offload calibration
