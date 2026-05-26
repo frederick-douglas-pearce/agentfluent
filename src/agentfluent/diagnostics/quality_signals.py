@@ -265,6 +265,20 @@ _SUBSTANTIVE_RESPONSE_MIN_CHARS = 500
 # scope avoids cross-session persistence (analyze-time architecture).
 MIN_REVIEWER_CAUGHT_RATE = 0.5
 
+# Healthy parent_acted band for REVIEWER_CAUGHT (#396). The signal
+# reports parent_acted per finding; the rate across an agent's findings
+# in a session falls into three buckets:
+#   - rate < LOW  → "below" band: reviewer findings may be going unread
+#     (WARNING severity, surfaces as an actionable recommendation)
+#   - LOW <= rate <= HIGH → "within" band: healthy review-and-reject
+#     collaboration pattern (INFO, no action item)
+#   - rate > HIGH → "above" band: high follow-through, reviewer is
+#     well-tuned (INFO, no action item)
+# Defaults from v0.7 dogfood (architect at 31% acted + ~50% legitimately
+# rejected by Fred's domain knowledge — see #396). Re-validate post-v0.8.
+PARENT_ACTED_HEALTHY_BAND_LOW = 0.25
+PARENT_ACTED_HEALTHY_BAND_HIGH = 0.75
+
 # Source-file extensions a review subagent is plausibly referencing.
 # The list is conservative — including version strings (``v1.0``) and
 # domain names (``github.com``) as "files" would inflate ``parent_acted``
@@ -556,8 +570,29 @@ def _extract_reviewer_caught_signals(
     signals: list[DiagnosticSignal] = []
     for agent_type, candidates in candidates_by_agent.items():
         rate = len(candidates) / invocations_by_agent[agent_type]
-        if rate >= MIN_REVIEWER_CAUGHT_RATE:
-            signals.extend(candidates)
+        if rate < MIN_REVIEWER_CAUGHT_RATE:
+            continue
+        parent_acted_count = sum(
+            1 for c in candidates if c.detail.get("parent_acted") is True
+        )
+        total_findings = len(candidates)
+        parent_acted_rate = parent_acted_count / total_findings
+        if parent_acted_rate < PARENT_ACTED_HEALTHY_BAND_LOW:
+            band = "below"
+            severity = Severity.WARNING
+        elif parent_acted_rate > PARENT_ACTED_HEALTHY_BAND_HIGH:
+            band = "above"
+            severity = Severity.INFO
+        else:
+            band = "within"
+            severity = Severity.INFO
+        for sig in candidates:
+            sig.detail["parent_acted_rate"] = parent_acted_rate
+            sig.detail["parent_acted_count"] = parent_acted_count
+            sig.detail["total_findings"] = total_findings
+            sig.detail["parent_acted_band"] = band
+            sig.severity = severity
+        signals.extend(candidates)
     return signals
 
 

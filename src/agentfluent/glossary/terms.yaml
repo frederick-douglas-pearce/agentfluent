@@ -440,12 +440,14 @@
     `fix`, `change needed`).
 
     The signal `detail` includes `finding_keywords` (the matched
-    keywords, sorted), `parent_acted` (boolean), `response_length`
-    (chars), `files_mentioned` (paths the review prose pointed at,
-    extracted via a strict regex that excludes version strings and
-    domain names), and `files_acted_on` (the subset of mentioned
-    files the parent edited within the next
-    `_PARENT_ACTED_WINDOW=15` assistant messages).
+    keywords, sorted), `parent_acted` (boolean for this single
+    review), `response_length` (chars), `files_mentioned` (paths
+    the review prose pointed at, extracted via a strict regex that
+    excludes version strings and domain names), `files_acted_on`
+    (the subset of mentioned files the parent edited within the
+    next `_PARENT_ACTED_WINDOW=15` assistant messages), and (#396)
+    the per-agent rate fields `parent_acted_count`, `total_findings`,
+    `parent_acted_rate`, and `parent_acted_band`.
 
     `parent_acted` semantics (#322): review prose carries relative
     or bare paths (`src/foo.py` / `quality_signals.py`); `Edit` tool
@@ -455,16 +457,31 @@
     bridge the relative-vs-absolute mismatch. Pre-fix this
     attribution was 0/51 on dogfood; post-fix 16/53 (30.2%).
 
+    `parent_acted_band` semantics (#396): the per-(session,
+    agent_type) `parent_acted_rate` (parent_acted_count /
+    total_findings) is bucketed into a band:
+    `below` (rate < `PARENT_ACTED_HEALTHY_BAND_LOW = 0.25`) --
+    reviewer findings may be going unread; severity escalates to
+    WARNING and the recommendation is actionable.
+    `within` (0.25 <= rate <= `PARENT_ACTED_HEALTHY_BAND_HIGH = 0.75`)
+    -- healthy review-and-reject collaboration; severity stays at
+    INFO with no action item ("rejection of some findings is
+    intentional, not a defect").
+    `above` (rate > 0.75) -- high follow-through, reviewer is
+    well-tuned; INFO with a "route more sessions" suggestion.
+
     A per-(session, agent_type) rate gate
     (`MIN_REVIEWER_CAUGHT_RATE = 0.5`) suppresses noisy reviewers --
     review agents whose substantive-finding fraction within a
     session falls below the gate don't surface their findings as
     signals.
   example: "`architect` review surfaced 3 finding-keyword(s)."
-  severity_range: info
+  severity_range: info-warning
   threshold: |
     Response >= 500 chars AND >= 1 finding keyword AND
-    per-(session, agent_type) substantive rate >= MIN_REVIEWER_CAUGHT_RATE
+    per-(session, agent_type) substantive rate >= MIN_REVIEWER_CAUGHT_RATE.
+    Severity escalates from INFO to WARNING when parent_acted_rate
+    falls below PARENT_ACTED_HEALTHY_BAND_LOW (0.25).
   recommendation_target: subagent
   related: [user_correction, file_rework, primary_axis]
 
