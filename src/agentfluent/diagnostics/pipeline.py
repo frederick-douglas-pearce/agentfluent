@@ -23,6 +23,7 @@ from agentfluent.agents.models import AgentInvocation
 
 if TYPE_CHECKING:
     from agentfluent.analytics.pipeline import SessionAnalysis
+    from agentfluent.github.models import GitHubRepo
 from agentfluent.config.mcp_discovery import discover_mcp_servers
 from agentfluent.config.models import AgentConfig
 from agentfluent.config.scanner import scan_agents
@@ -183,6 +184,8 @@ def run_diagnostics(
     session_count: int | None = None,
     sessions: list[SessionAnalysis] | None = None,
     git_repo: Path | None = None,
+    github_repo: GitHubRepo | None = None,
+    github_no_cache: bool = False,
 ) -> DiagnosticsResult:
     """Run the full diagnostics pipeline on agent invocations.
 
@@ -301,6 +304,20 @@ def run_diagnostics(
         logger.debug(
             "git signals skipped: git_repo=%s sessions=%s",
             git_repo is not None, sessions is not None,
+        )
+
+    # Tier 3 GitHub-API quality signals (#399 infrastructure; #400, #401
+    # signal extractors). When `github_repo` is None the caller did not
+    # pass `--github` (or repo inference failed and the CLI exited
+    # before reaching here). Signal extraction itself lands in #400/#401;
+    # the infrastructure story just threads the parameters through.
+    # `github_no_cache` is forwarded so extractors can pass it to
+    # :func:`agentfluent.github.gh_api` per request.
+    if github_repo is not None:
+        logger.debug(
+            "tier 3 github_repo received: %s/%s (no_cache=%s) — "
+            "extractors land in #400, #401",
+            github_repo.owner, github_repo.repo, github_no_cache,
         )
 
     correlated_pairs = correlate(signals, configs_by_name)

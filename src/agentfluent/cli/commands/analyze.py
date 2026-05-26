@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -26,6 +27,16 @@ from agentfluent.diagnostics.delegation import (
     DEFAULT_MIN_CLUSTER_SIZE,
     DEFAULT_MIN_SIMILARITY,
     SKLEARN_AVAILABLE,
+)
+from agentfluent.github import (
+    GhNotAuthenticatedError,
+    GhNotInstalledError,
+    GitHubRepo,
+    RepoInferenceError,
+    detect_gh,
+    infer_repo,
+    parse_repo_override,
+    prompt_and_record_if_needed,
 )
 
 
@@ -69,6 +80,73 @@ def _apply_time_window(
             f"{window.session_count_before_filter} sessions)[/dim]",
         )
     return filtered, window
+
+
+def _resolve_github_repo(
+    *,
+    repo_override: str | None,
+    project_disk_path: Path | None,
+    err_console: Console,
+) -> GitHubRepo | None:
+    """Resolve the Tier 3 repo, performing detection + consent in order.
+
+    Returns the :class:`GitHubRepo` on success, or raises ``typer.Exit``
+    with ``EXIT_USER_ERROR`` on any setup failure (malformed ``--repo``
+    override, gh missing, gh not authenticated, declined consent, repo
+    inference failure). The explicit-exit-on-failure shape is
+    deliberate: when a user passes ``--github`` they are opting into
+    Tier 3, so silent fallback to a Tier 1+2-only run would mask the
+    problem.
+
+    Order matters: the ``--repo`` override is validated *before* the
+    consent prompt fires, so a malformed override in CI (where
+    non-TTY auto-consent would persist a consent record) does not
+    leave a half-opted-in state on disk for a run that's about to
+    exit with USER_ERROR.
+    """
+    # 1. Validate the override first — purely local, no side effects.
+    #    Reject malformed inputs before any consent persistence.
+    parsed_override: GitHubRepo | None = None
+    if repo_override is not None:
+        try:
+            parsed_override = parse_repo_override(repo_override)
+        except ValueError as e:
+            err_console.print(f"[red]Error:[/red] {e}")
+            raise typer.Exit(code=EXIT_USER_ERROR) from e
+
+    # 2. Detect gh + auth. detect_gh() is lru_cached at module level,
+    #    so calling it here is the right precondition site even
+    #    though gh_api() will also call it on every request.
+    try:
+        detect_gh()
+    except GhNotInstalledError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=EXIT_USER_ERROR) from e
+    except GhNotAuthenticatedError as e:
+        err_console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=EXIT_USER_ERROR) from e
+
+    # 3. Consent. In non-TTY this records silently — only reached if
+    #    detection succeeded AND the override (if any) parsed.
+    if not prompt_and_record_if_needed(is_tty=sys.stdin.isatty()):
+        err_console.print(
+            "[yellow]Tier 3 GitHub enrichment declined; "
+            "re-run without --github or accept the prompt to proceed.[/yellow]",
+        )
+        raise typer.Exit(code=EXIT_USER_ERROR)
+
+    # 4. Use the validated override if present; otherwise infer.
+    if parsed_override is not None:
+        return parsed_override
+
+    try:
+        return infer_repo(project_disk_path)
+    except RepoInferenceError as e:
+        err_console.print(
+            f"[red]Error:[/red] could not infer GitHub repository: {e}.\n"
+            "Use [bold]--repo OWNER/NAME[/bold] to specify it explicitly.",
+        )
+        raise typer.Exit(code=EXIT_USER_ERROR) from e
 
 
 def _apply_min_severity(result: AnalysisResult, min_severity: Severity) -> None:
@@ -285,6 +363,38 @@ def analyze(
             "must be a git repo; non-repo dirs silently skip."
         ),
     ),
+    github: bool = typer.Option(
+        False,
+        "--github",
+        help=(
+            "Enable Tier 3 GitHub-API quality signals. Off by default "
+            "— AgentFluent does not call GitHub unless explicitly "
+            "opted in. Requires --diagnostics. Implies --git. "
+            "Requires the `gh` CLI to be installed and authenticated; "
+            "a first-run prompt records consent under "
+            "~/.config/agentfluent/."
+        ),
+    ),
+    repo: str | None = typer.Option(
+        None,
+        "--repo",
+        help=(
+            "Explicit GitHub repository override for Tier 3 (OWNER/NAME). "
+            "Used when the project's git remote does not point at GitHub "
+            "or when --github is run against a directory that is not "
+            "itself a git working tree."
+        ),
+    ),
+    github_no_cache: bool = typer.Option(
+        False,
+        "--github-no-cache",
+        help=(
+            "Bypass the Tier 3 response cache for this run. Fresh data "
+            "is fetched from GitHub and written back to the cache "
+            "(next run sees the updated entries). No effect without "
+            "--github."
+        ),
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output."),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Show summary only."),
 ) -> None:
@@ -305,6 +415,18 @@ def analyze(
             "(which already selects a single session).",
         )
         raise typer.Exit(code=EXIT_USER_ERROR)
+
+    # --github is a diagnostics-only opt-in (Tier 3 signals feed the
+    # diagnostics pipeline) and implies --git (Tier 2 supplies the
+    # session→commit mapping that Tier 3 builds on top of).
+    if github and not diagnostics:
+        err_console.print(
+            "[red]Error:[/red] --github requires --diagnostics "
+            "(Tier 3 signals feed the diagnostics pipeline).",
+        )
+        raise typer.Exit(code=EXIT_USER_ERROR)
+    if github:
+        git = True
 
     parsed_since, parsed_until = parse_time_window(
         since, until, err_console=err_console,
@@ -362,14 +484,31 @@ def analyze(
     all_mcp_calls = [c for s in result.sessions for c in s.mcp_tool_calls]
     all_messages = [m for s in result.sessions for m in s.messages]
 
-    if all_invocations and diagnostics:
-        # `project_info.path` is the ~/.claude/projects/<slug>/ dir, not
-        # the original project source path. MCP discovery needs the
-        # real path (for .mcp.json and ~/.claude.json:projects[<abs>]
-        # lookups); resolve it via the slug.
-        project_disk_path = resolve_project_disk_path(
-            project_info.slug, claude_config_dir=config_dir,
+    # `project_info.path` is the ~/.claude/projects/<slug>/ dir, not the
+    # original project source path. MCP discovery needs the real path
+    # (for .mcp.json and ~/.claude.json:projects[<abs>] lookups); resolve
+    # it via the slug. Resolved up-front because both diagnostics and
+    # Tier 3 setup consume it.
+    project_disk_path = resolve_project_disk_path(
+        project_info.slug, claude_config_dir=config_dir,
+    )
+
+    # Tier 3 setup runs whenever the user passed --github (which requires
+    # --diagnostics, enforced earlier). Lifted out of the
+    # `if all_invocations` gate so a zero-invocations project still
+    # reports a clear error rather than silently skipping detection /
+    # consent / repo inference. On any failure the CLI exits — we do not
+    # silently fall through to a Tier 1+2-only run after the user
+    # explicitly asked for Tier 3.
+    github_repo: GitHubRepo | None = None
+    if github:
+        github_repo = _resolve_github_repo(
+            repo_override=repo,
+            project_disk_path=project_disk_path,
+            err_console=err_console,
         )
+
+    if all_invocations and diagnostics:
         # When --git is set, the project's source directory becomes
         # the git_repo we hand to diagnostics. project_disk_path is
         # the ~/.claude/projects mapping resolution; it may or may not
@@ -391,6 +530,8 @@ def analyze(
             session_count=result.session_count,
             sessions=result.sessions if git else None,
             git_repo=project_disk_path if git else None,
+            github_repo=github_repo,
+            github_no_cache=github_no_cache,
         )
     elif result.agent_metrics.total_invocations == 0 and diagnostics:
         err_console.print(

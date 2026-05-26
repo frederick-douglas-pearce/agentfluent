@@ -585,3 +585,19 @@ class DiagnosticsResult(BaseModel):
     """Parent-thread offload candidates surfaced by the burst-clustering
     pipeline (#189). Empty list when sklearn isn't installed or no
     cluster met ``min_cluster_size``."""
+
+    # v0.8: added tier3_degraded (#399 infrastructure). Reserved for
+    # Tier 3 signal extractors (#400, #401) to flip when a `gh api`
+    # call returns 403/429 with a rate-limit signature. The
+    # infrastructure story (#399) ships the field, the
+    # ``RateLimitedError`` exception in :mod:`agentfluent.github`, and
+    # the wiring through :func:`run_diagnostics`; the actual
+    # producer/consumer pairing lands with the signal extractors.
+    # Additive default keeps pre-v0.8 envelopes loadable.
+    tier3_degraded: bool = False
+    """``True`` when at least one Tier 3 extractor was skipped due to
+    a GitHub API rate-limit response. ``False`` when Tier 3 ran cleanly
+    OR Tier 3 was not requested. Producer lands with #400/#401 signal
+    extractors; the infrastructure PR (#399) ships only the field and
+    the typed exception ``agentfluent.github.RateLimitedError`` that
+    extractors will catch to flip the flag."""
