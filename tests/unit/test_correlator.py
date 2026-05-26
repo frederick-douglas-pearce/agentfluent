@@ -835,6 +835,63 @@ class TestReviewerCaughtRule:
         assert "code-reviewer" in recs[0].action
 
 
+class TestCIFailureFirstPushRule:
+    """CI_FAILURE_FIRST_PUSH -> cross-cutting ``target='subagent'``
+    recommendation that names the PR and the failing context."""
+
+    @staticmethod
+    def _signal(
+        pr_number: int = 42,
+        pr_title: str = "Add window filter",
+        primary_context: str = "ci/pytest",
+        primary_state: str = "failure",
+    ) -> DiagnosticSignal:
+        return DiagnosticSignal(
+            signal_type=SignalType.CI_FAILURE_FIRST_PUSH,
+            severity=Severity.WARNING,
+            agent_type=None,
+            invocation_id=None,
+            message=(
+                f"PR #{pr_number} ({pr_title!r}) first push failed CI: "
+                f"{primary_context} {primary_state}"
+            ),
+            detail={
+                "pr_number": pr_number,
+                "pr_title": pr_title,
+                "pr_url": f"https://github.com/o/r/pull/{pr_number}",
+                "first_commit_sha": "abc1234",
+                "failing_contexts": [
+                    {"context": primary_context, "state": primary_state},
+                ],
+                "primary_context": primary_context,
+                "primary_state": primary_state,
+            },
+        )
+
+    def test_emits_subagent_target(self) -> None:
+        recs = correlate([self._signal()])
+        assert len(recs) == 1
+        rec = recs[0]
+        assert rec.target == "subagent"
+        assert rec.signal_types == [SignalType.CI_FAILURE_FIRST_PUSH]
+
+    def test_pr_number_appears_in_observation(self) -> None:
+        recs = correlate([self._signal(pr_number=42)])
+        # The observation lands in the message text; correlator wraps
+        # it as ``[quality] <observation>`` so the PR ref is searchable
+        # from the rendered recommendation.
+        assert "#42" in recs[0].message
+
+    def test_failing_context_appears_in_observation(self) -> None:
+        recs = correlate([self._signal(primary_context="ci/lint")])
+        assert "ci/lint" in recs[0].message
+
+    def test_action_mentions_pre_commit_validation(self) -> None:
+        recs = correlate([self._signal()])
+        action = recs[0].action.lower()
+        assert "pre-commit" in action or "validation" in action
+
+
 class TestRelpath:
     """``_relpath`` rewrites ``$HOME`` to ``~`` in message text (#340)."""
 

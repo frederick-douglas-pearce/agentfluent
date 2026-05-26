@@ -39,6 +39,9 @@ from agentfluent.diagnostics.delegation import (
     suggest_delegations,
 )
 from agentfluent.diagnostics.git_signals import extract_git_quality_signals
+from agentfluent.diagnostics.github_signals import (
+    extract_ci_failure_first_push_signals,
+)
 from agentfluent.diagnostics.mcp_assessment import (
     McpToolCall,
     audit_mcp_servers,
@@ -306,18 +309,33 @@ def run_diagnostics(
             git_repo is not None, sessions is not None,
         )
 
-    # Tier 3 GitHub-API quality signals (#399 infrastructure; #400, #401
-    # signal extractors). When `github_repo` is None the caller did not
-    # pass `--github` (or repo inference failed and the CLI exited
-    # before reaching here). Signal extraction itself lands in #400/#401;
-    # the infrastructure story just threads the parameters through.
-    # `github_no_cache` is forwarded so extractors can pass it to
-    # :func:`agentfluent.github.gh_api` per request.
-    if github_repo is not None:
+    # Tier 3 GitHub-API quality signals (#399 infrastructure; #400
+    # CI_FAILURE_FIRST_PUSH; #401 PR_REVIEW_COMMENT_DENSITY pending).
+    # Off unless the caller passes ``github_repo`` (set when the CLI's
+    # ``--github`` flag survived detection/consent/repo-resolution) AND
+    # ``git_repo`` (because we need local commit history to attribute
+    # commits to sessions). Each extractor returns
+    # ``(signals, degraded)``; we OR the degraded flag so a single
+    # rate-limit anywhere in Tier 3 surfaces on the result.
+    tier3_degraded = False
+    if (
+        github_repo is not None
+        and sessions is not None
+        and git_repo is not None
+    ):
+        ci_signals, ci_degraded = extract_ci_failure_first_push_signals(
+            sessions,
+            github_repo=github_repo,
+            repo_dir=git_repo,
+            no_cache=github_no_cache,
+        )
+        signals.extend(ci_signals)
+        tier3_degraded = tier3_degraded or ci_degraded
+    elif github_repo is not None:
         logger.debug(
-            "tier 3 github_repo received: %s/%s (no_cache=%s) — "
-            "extractors land in #400, #401",
-            github_repo.owner, github_repo.repo, github_no_cache,
+            "tier 3 signals skipped: github_repo=%s sessions=%s git_repo=%s",
+            github_repo is not None, sessions is not None,
+            git_repo is not None,
         )
 
     correlated_pairs = correlate(signals, configs_by_name)
@@ -364,4 +382,5 @@ def run_diagnostics(
         delegation_suggestions=delegation_suggestions,
         delegation_suggestions_skipped_reason=delegation_skipped_reason,
         offload_candidates=offload_candidates,
+        tier3_degraded=tier3_degraded,
     )

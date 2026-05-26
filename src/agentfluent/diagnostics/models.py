@@ -69,6 +69,10 @@ class SignalType(StrEnum):
     Local-git quality signals (extracted from `git log` history,
     opt-in via `--git`):
     - `FEAT_FIX_PROXIMITY`
+
+    Tier 3 GitHub quality signals (extracted via `gh api`, opt-in
+    via `--github`):
+    - `CI_FAILURE_FIRST_PUSH`
     """
 
     ERROR_PATTERN = "error_pattern"
@@ -86,6 +90,7 @@ class SignalType(StrEnum):
     FILE_REWORK = "file_rework"
     REVIEWER_CAUGHT = "reviewer_caught"
     FEAT_FIX_PROXIMITY = "feat_fix_proximity"
+    CI_FAILURE_FIRST_PUSH = "ci_failure_first_push"
 
 
 # Signal types emitted by the trace-level extractor. Used by the dedup

@@ -519,6 +519,43 @@
   recommendation_target: subagent
   related: [user_correction, file_rework, reviewer_caught, primary_axis]
 
+- name: ci_failure_first_push
+  category: signal_type
+  short: |
+    A PR's first commit failed CI -- the agent shipped code that did
+    not pass automated checks on first attempt, a direct quality miss.
+  long: |
+    Tier 3 GitHub quality-axis signal (v0.8). Off by default; runs
+    only when the CLI passes `--github` (which also requires
+    `--diagnostics` and implies `--git`). For each commit authored
+    within an analyzed session window, AgentFluent fetches the PRs
+    touching that commit via `gh api`, then for each unique PR
+    fetches the first commit and its combined CI status. When the
+    first commit's combined status is `failure` or `error`, one
+    `CI_FAILURE_FIRST_PUSH` signal fires per PR.
+
+    Cross-cutting (`agent_type=None`). Severity is always `warning`:
+    a first-push CI failure is a definite quality miss, but signal
+    strength varies with project conventions (some teams treat CI
+    as the first-class check rather than a pre-commit gate).
+
+    The signal is only emitted when the PR's first commit can be
+    attributed to a session in the analysis window -- a first commit
+    authored outside any analyzed session has no actionable
+    attribution. Force-push caveat: `pulls/{N}/commits` returns the
+    CURRENT first commit, so a PR that was force-pushed loses its
+    historical first-push failure. Detecting the original first push
+    would require the PR events API; deferred to v0.8.1+.
+
+    Rate-limit handling: if any `gh api` call returns 403/429 with a
+    rate-limit signature, that PR is skipped and
+    `DiagnosticsResult.tier3_degraded` is set to True. Other PRs
+    still produce signals; the run still exits 0.
+  example: "PR #42 ('Add session window filter') first push failed CI: pytest failure"
+  severity_range: warning
+  recommendation_target: subagent
+  related: [feat_fix_proximity, primary_axis]
+
 # =============================================================================
 # Severity
 # =============================================================================
