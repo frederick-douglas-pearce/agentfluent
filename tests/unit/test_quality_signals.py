@@ -1108,6 +1108,126 @@ class TestReviewerCaughtRateGate:
         assert rev[0].agent_type == "architect"
 
 
+class TestReviewerCaughtParentActedBand:
+    """#396: per-agent parent_acted rate categorized into a healthy band.
+    Within band → INFO; below band → WARNING (reviewer findings going
+    unread); above band → INFO (high follow-through). Each signal
+    carries the computed rate/count/band on its detail."""
+
+    @staticmethod
+    def _multi_review_messages(
+        invocations: list[AgentInvocation], acted_count: int,
+    ) -> list[SessionMessage]:
+        """Build a message sequence where the first ``acted_count`` of
+        ``invocations`` have a follow-up Edit to src/foo.py (which is
+        mentioned in _SUBSTANTIVE_REVIEW). The rest are reviews-only.
+        """
+        messages: list[SessionMessage] = []
+        for i, inv in enumerate(invocations):
+            messages.append(_user_with_tool_result(inv.tool_use_id))
+            if i < acted_count:
+                messages.append(_assistant_with_edits("src/foo.py"))
+        return messages
+
+    def test_below_band_emits_warning_severity(self) -> None:
+        # 0 of 4 substantive reviews acted on → rate 0.0 < 0.25.
+        invocations = [
+            _review_invocation(
+                output_text=_SUBSTANTIVE_REVIEW, tool_use_id=f"toolu_r{i}",
+            )
+            for i in range(4)
+        ]
+        messages = self._multi_review_messages(invocations, acted_count=0)
+        signals = extract_quality_signals(messages, invocations)
+        rev = [s for s in signals if s.signal_type == SignalType.REVIEWER_CAUGHT]
+        assert len(rev) == 4
+        for sig in rev:
+            assert sig.severity == Severity.WARNING
+            assert sig.detail["parent_acted_band"] == "below"
+            assert sig.detail["parent_acted_rate"] == 0.0
+            assert sig.detail["parent_acted_count"] == 0
+            assert sig.detail["total_findings"] == 4
+
+    def test_within_band_stays_info_severity(self) -> None:
+        # 2 of 4 acted on → rate 0.5, within [0.25, 0.75].
+        invocations = [
+            _review_invocation(
+                output_text=_SUBSTANTIVE_REVIEW, tool_use_id=f"toolu_r{i}",
+            )
+            for i in range(4)
+        ]
+        messages = self._multi_review_messages(invocations, acted_count=2)
+        signals = extract_quality_signals(messages, invocations)
+        rev = [s for s in signals if s.signal_type == SignalType.REVIEWER_CAUGHT]
+        assert len(rev) == 4
+        for sig in rev:
+            assert sig.severity == Severity.INFO
+            assert sig.detail["parent_acted_band"] == "within"
+            assert sig.detail["parent_acted_rate"] == 0.5
+            assert sig.detail["parent_acted_count"] == 2
+
+    def test_above_band_stays_info_severity(self) -> None:
+        # 4 of 4 acted on → rate 1.0 > 0.75.
+        invocations = [
+            _review_invocation(
+                output_text=_SUBSTANTIVE_REVIEW, tool_use_id=f"toolu_r{i}",
+            )
+            for i in range(4)
+        ]
+        messages = self._multi_review_messages(invocations, acted_count=4)
+        signals = extract_quality_signals(messages, invocations)
+        rev = [s for s in signals if s.signal_type == SignalType.REVIEWER_CAUGHT]
+        assert len(rev) == 4
+        for sig in rev:
+            assert sig.severity == Severity.INFO
+            assert sig.detail["parent_acted_band"] == "above"
+            assert sig.detail["parent_acted_rate"] == 1.0
+            assert sig.detail["parent_acted_count"] == 4
+
+    def test_band_computed_per_agent_type(self) -> None:
+        # architect: 2 of 2 acted on → above band, INFO.
+        # tester: 0 of 2 acted on → below band, WARNING.
+        invocations = [
+            _review_invocation(
+                agent_type="architect",
+                output_text=_SUBSTANTIVE_REVIEW,
+                tool_use_id="toolu_arch1",
+            ),
+            _review_invocation(
+                agent_type="architect",
+                output_text=_SUBSTANTIVE_REVIEW,
+                tool_use_id="toolu_arch2",
+            ),
+            _review_invocation(
+                agent_type="tester",
+                output_text=_SUBSTANTIVE_REVIEW,
+                tool_use_id="toolu_test1",
+            ),
+            _review_invocation(
+                agent_type="tester",
+                output_text=_SUBSTANTIVE_REVIEW,
+                tool_use_id="toolu_test2",
+            ),
+        ]
+        messages = [
+            _user_with_tool_result(invocations[0].tool_use_id),
+            _assistant_with_edits("src/foo.py"),
+            _user_with_tool_result(invocations[1].tool_use_id),
+            _assistant_with_edits("src/foo.py"),
+            _user_with_tool_result(invocations[2].tool_use_id),
+            _user_with_tool_result(invocations[3].tool_use_id),
+        ]
+        signals = extract_quality_signals(messages, invocations)
+        arch = [s for s in signals if s.agent_type == "architect"]
+        tester = [s for s in signals if s.agent_type == "tester"]
+        assert len(arch) == 2
+        assert len(tester) == 2
+        assert all(s.severity == Severity.INFO for s in arch)
+        assert all(s.detail["parent_acted_band"] == "above" for s in arch)
+        assert all(s.severity == Severity.WARNING for s in tester)
+        assert all(s.detail["parent_acted_band"] == "below" for s in tester)
+
+
 class TestMinFindingKeywords:
     """``MIN_FINDING_KEYWORDS`` defaults to 1 — preserves existing
     behavior. Exposed as a module constant so #274 calibration can

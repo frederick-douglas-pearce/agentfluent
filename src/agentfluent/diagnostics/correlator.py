@@ -23,6 +23,10 @@ from agentfluent.diagnostics.models import (
     DiagnosticSignal,
     SignalType,
 )
+from agentfluent.diagnostics.quality_signals import (
+    PARENT_ACTED_HEALTHY_BAND_HIGH,
+    PARENT_ACTED_HEALTHY_BAND_LOW,
+)
 
 
 def _relpath(path: Path) -> str:
@@ -798,12 +802,52 @@ class ReviewerCaughtRule(_QualityRule):
         agent_type = signal.agent_type or "review-style subagent"
         keywords = signal.detail.get("finding_keywords", [])
         finding_count = len(keywords) if isinstance(keywords, list) else 0
-        parent_acted = signal.detail.get("parent_acted", False)
+        # #396: band derived from the per-agent parent_acted rate across
+        # the session, stashed onto every signal in the group by the
+        # emitter. Pre-#396 signals (no band key) fall back to the old
+        # per-signal parent_acted boolean.
+        band = signal.detail.get("parent_acted_band")
+        rate = signal.detail.get("parent_acted_rate")
+        acted_count = signal.detail.get("parent_acted_count")
+        total = signal.detail.get("total_findings")
         observation = (
             f"`{agent_type}` produced {finding_count} substantive "
             "review finding(s) in this session"
         )
-        if parent_acted:
+        if band == "within" and isinstance(rate, float):
+            reason = (
+                f"and the parent followed up on {acted_count} of "
+                f"{total} ({rate:.0%}) — a healthy review-and-reject "
+                "collaboration pattern."
+            )
+            action = (
+                "No action needed: this rate sits in the healthy band "
+                f"({PARENT_ACTED_HEALTHY_BAND_LOW:.0%}-"
+                f"{PARENT_ACTED_HEALTHY_BAND_HIGH:.0%}). Investigate "
+                "only if it falls below that band."
+            )
+        elif band == "above" and isinstance(rate, float):
+            reason = (
+                f"and the parent acted on {acted_count} of {total} "
+                f"({rate:.0%}) — high follow-through, reviewer is "
+                "well-tuned."
+            )
+            action = (
+                f"Consider routing more sessions through `{agent_type}` "
+                "for consistent design / quality review."
+            )
+        elif band == "below" and isinstance(rate, float):
+            reason = (
+                f"but the parent followed up on only {acted_count} of "
+                f"{total} ({rate:.0%}) — reviewer findings may be "
+                "going unread."
+            )
+            action = (
+                f"Investigate whether `{agent_type}`'s findings are "
+                "actionable, or whether the parent prompt should "
+                "require follow-through on review feedback."
+            )
+        elif signal.detail.get("parent_acted", False):
             reason = (
                 "and the parent acted on them — direct evidence the "
                 "review caught real issues."
