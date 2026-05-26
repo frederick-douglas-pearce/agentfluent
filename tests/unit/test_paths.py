@@ -9,6 +9,10 @@ import pytest
 from agentfluent.core.paths import (
     CLAUDE_CONFIG_DIR_ENV_VAR,
     DEFAULT_CLAUDE_CONFIG_DIR,
+    XDG_CACHE_HOME_ENV_VAR,
+    XDG_CONFIG_HOME_ENV_VAR,
+    agentfluent_cache_dir,
+    agentfluent_config_dir,
     validate_claude_config_dir,
 )
 
@@ -39,3 +43,31 @@ class TestValidateClaudeConfigDir:
         f.write_text("")
         with pytest.raises(NotADirectoryError, match="not a directory"):
             validate_claude_config_dir(f)
+
+
+class TestAgentfluentConfigDir:
+    def test_default_under_home_config(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv(XDG_CONFIG_HOME_ENV_VAR, raising=False)
+        assert agentfluent_config_dir() == Path.home() / ".config" / "agentfluent"
+
+    def test_honors_xdg_config_home(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv(XDG_CONFIG_HOME_ENV_VAR, str(tmp_path))
+        assert agentfluent_config_dir() == tmp_path / "agentfluent"
+
+
+class TestAgentfluentCacheDir:
+    def test_default_under_home_cache(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv(XDG_CACHE_HOME_ENV_VAR, raising=False)
+        assert agentfluent_cache_dir() == Path.home() / ".cache" / "agentfluent"
+
+    def test_honors_xdg_cache_home(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv(XDG_CACHE_HOME_ENV_VAR, str(tmp_path))
+        assert agentfluent_cache_dir() == tmp_path / "agentfluent"

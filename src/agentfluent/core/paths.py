@@ -8,6 +8,7 @@ so an override replaces the root once and every subdirectory follows.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 DEFAULT_CLAUDE_CONFIG_DIR = Path.home() / ".claude"
@@ -19,6 +20,10 @@ AGENTS_SUBDIR = "agents"
 SUBAGENTS_SUBDIR = "subagents"
 """The per-session directory that holds subagent trace JSONL files:
 ``<project>/<session-uuid>/subagents/agent-<agentId>.jsonl``."""
+
+AGENTFLUENT_SUBDIR = "agentfluent"
+XDG_CONFIG_HOME_ENV_VAR = "XDG_CONFIG_HOME"
+XDG_CACHE_HOME_ENV_VAR = "XDG_CACHE_HOME"
 
 
 def projects_dir_for(config_root: Path | None) -> Path | None:
@@ -88,3 +93,33 @@ def validate_claude_config_dir(override: Path | None) -> Path | None:
         raise NotADirectoryError(msg)
 
     return override.resolve()
+
+
+def agentfluent_config_dir() -> Path:
+    """Canonical AgentFluent config root.
+
+    Honors ``$XDG_CONFIG_HOME`` when set, else falls back to
+    ``~/.config/agentfluent``. This is AgentFluent's own config tree —
+    distinct from Claude Code's ``~/.claude/`` — and is where persistent
+    user state (consent records, future tool config) lives. Established
+    as the canonical config root in v0.8 with the Tier 3 consent file;
+    additional consent surfaces and future config files (if any) live
+    here.
+    """
+    xdg = os.environ.get(XDG_CONFIG_HOME_ENV_VAR)
+    base = Path(xdg) if xdg else Path.home() / ".config"
+    return base / AGENTFLUENT_SUBDIR
+
+
+def agentfluent_cache_dir() -> Path:
+    """Canonical AgentFluent cache root.
+
+    Honors ``$XDG_CACHE_HOME`` when set, else falls back to
+    ``~/.cache/agentfluent``. Used for the Tier 3 GitHub response cache
+    (``<root>/github/<sha256>.json``); other ephemeral state can live
+    in sibling subdirectories. Distinct from ``agentfluent_config_dir``
+    because XDG separates ephemeral (cache) from persistent (config).
+    """
+    xdg = os.environ.get(XDG_CACHE_HOME_ENV_VAR)
+    base = Path(xdg) if xdg else Path.home() / ".cache"
+    return base / AGENTFLUENT_SUBDIR

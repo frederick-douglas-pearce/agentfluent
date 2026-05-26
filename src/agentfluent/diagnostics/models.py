@@ -585,3 +585,16 @@ class DiagnosticsResult(BaseModel):
     """Parent-thread offload candidates surfaced by the burst-clustering
     pipeline (#189). Empty list when sklearn isn't installed or no
     cluster met ``min_cluster_size``."""
+
+    # v0.8: added tier3_degraded (#399). Set to True by Tier 3 signal
+    # extractors when at least one `gh api` call returned a 403/429
+    # rate-limit response. False when Tier 3 ran cleanly OR Tier 3 was
+    # not requested (`--github` not passed). Per-extractor degradation;
+    # partial Tier 3 output is preferred over hard failure, so the run
+    # still exits 0 — this field exists so JSON consumers can see that
+    # the analysis was incomplete and surface it appropriately.
+    tier3_degraded: bool = False
+    """True when at least one Tier 3 extractor was skipped due to a
+    GitHub API rate-limit response. False when Tier 3 ran cleanly OR
+    Tier 3 was not requested. The field is additive — pre-v0.8 envelopes
+    load as False via the default."""
