@@ -41,6 +41,15 @@ TTL_REPO_METADATA = 24 * 3600  # 24 hours
 _CACHE_SUBDIR = "github"
 _TIMESTAMP_KEY = "_cached_at"
 
+# Sentinel returned by :func:`get` to distinguish "no cached entry / miss /
+# expired / corrupt" from a legitimate hit whose payload happens to be
+# ``None``. The wrapper layer (``client.gh_api``) must check
+# ``cached is not MISS`` rather than ``cached is not None`` — otherwise a
+# cached null payload (empty stdout from ``gh api``, or a ``--jq`` filter
+# that legitimately yields nothing) would be repeatedly re-fetched
+# instead of served from cache, defeating the rate-limit defense.
+MISS: object = object()
+
 
 def cache_key(
     *,
@@ -84,40 +93,57 @@ def get(
     cache_dir: Path | None = None,
     now: datetime | None = None,
 ) -> Any:
-    """Read a cache entry. Returns the cached payload or ``None``.
+    """Read a cache entry. Returns the cached payload, or :data:`MISS`.
 
-    Returns ``None`` on cache miss, expiry, or any read/parse error.
-    A corrupted entry is treated as a miss (logged at DEBUG) rather
-    than raising — Tier 3 should never crash because of a stale cache
-    file on disk.
+    Returns the sentinel :data:`MISS` on cache miss, expiry, or any
+    read/parse error. A corrupted entry is treated as a miss (logged
+    at DEBUG) rather than raising — Tier 3 should never crash because
+    of a stale cache file on disk.
+
+    The sentinel return (rather than ``None``) is load-bearing:
+    legitimately-cached ``None`` payloads (empty ``gh api`` stdout,
+    null ``--jq`` projection) must serve from cache, not trigger
+    re-fetch. Callers check ``result is MISS`` to distinguish.
 
     ``now`` defaults to ``datetime.now(UTC)``; tests pass an explicit
     value to exercise the expiry boundary deterministically.
     """
     path = _entry_path(key, cache_dir=cache_dir)
     if not path.exists():
-        return None
+        return MISS
     try:
         with path.open("r", encoding="utf-8") as f:
             payload = json.load(f)
     except (OSError, json.JSONDecodeError):
         logger.debug("cache entry unreadable: %s", path, exc_info=True)
-        return None
+        return MISS
 
     cached_at_raw = payload.get(_TIMESTAMP_KEY)
     if not isinstance(cached_at_raw, str):
-        return None
+        return MISS
     try:
         cached_at = datetime.fromisoformat(cached_at_raw)
     except ValueError:
-        return None
+        return MISS
+    # Naive timestamps (no tzinfo) would crash the subtraction below
+    # ("can't subtract offset-naive and offset-aware datetimes") and
+    # break the documented "returns MISS on any read/parse error"
+    # contract. Treat as corrupt and miss; the entry will be
+    # overwritten by the next successful fetch.
+    if cached_at.tzinfo is None:
+        return MISS
 
     current = now if now is not None else datetime.now(UTC)
     age_sec = (current - cached_at).total_seconds()
     if age_sec >= ttl:
-        return None
+        return MISS
 
-    return payload.get("data")
+    # The payload object must carry a "data" key (set() always writes
+    # one). Use the sentinel to distinguish "explicit null data" from
+    # "key absent (malformed file)".
+    if "data" not in payload:
+        return MISS
+    return payload["data"]
 
 
 def set(  # noqa: A001 — name parallels `get`

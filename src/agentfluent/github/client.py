@@ -7,9 +7,9 @@ call to fetch a GitHub resource. Responsibilities:
   and ``-f`` query params).
 - Cache lookup / write keyed on the request inputs (see
   :mod:`agentfluent.github.cache`).
-- Rate-limit detection (HTTP 403 / 429 with a parseable reset time)
-  raising :class:`RateLimitedError`, which downstream extractors
-  catch to set ``DiagnosticsResult.tier3_degraded = True`` and skip.
+- Rate-limit detection (HTTP 403 / 429) raising
+  :class:`RateLimitedError`, which downstream extractors catch to set
+  ``DiagnosticsResult.tier3_degraded = True`` and skip.
 
 The wrapper is intentionally small. Per-endpoint logic (which jq
 filter, which TTL, how to interpret the response) lives in the
@@ -29,28 +29,34 @@ import json
 import logging
 import re
 import subprocess
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from agentfluent.github import cache
-from agentfluent.github.detection import gh_auth_login
+from agentfluent.github.detection import detect_gh, gh_auth_login
 from agentfluent.github.models import RateLimitedError
 
 logger = logging.getLogger(__name__)
 
 _GH_API_TIMEOUT_SEC = 60
 
-# `gh api` surfaces rate-limit responses as "HTTP 403:" or
-# "HTTP 429:" on stderr. The reset epoch lands in
-# "X-RateLimit-Reset: <unix-seconds>" when `gh api -i` would have
-# returned headers — but `gh api` without `-i` swallows headers, so
-# we extract the reset time from the body when present (the API
-# returns a human-readable message that includes the reset time on
-# secondary limits) and fall back to "now + 60 seconds" otherwise.
-_RATE_LIMIT_RE = re.compile(r"HTTP\s+(?P<code>403|429)\b")
-_RATE_LIMIT_RESET_HEADER = re.compile(r"X-RateLimit-Reset:\s*(?P<epoch>\d+)", re.IGNORECASE)
+# `gh api` surfaces rate-limit responses as "HTTP 403:" or "HTTP 429:" on
+# stderr. Case-insensitive because ``gh``'s formatting isn't a
+# contractual API — a future release that writes lowercase "http 429"
+# must still trigger the soft-failure path. Without the IGNORECASE
+# the keyword check below (which lower-cases) would accept the body
+# while the code check would reject the prefix, and the rate-limit
+# response would crash the analyze run.
+_RATE_LIMIT_RE = re.compile(r"HTTP\s+(?P<code>403|429)\b", re.IGNORECASE)
 _RATE_LIMIT_KEYWORDS = ("rate limit", "secondary rate limit", "abuse detection")
+
+# ``gh api`` without ``-i`` does not surface response headers, so the
+# precise reset time isn't available to us. The fallback used by
+# :func:`_rate_limit_reset_fallback` is a 60-second skew — enough for
+# extractors to log a meaningful WARNING; the value is informational
+# rather than load-bearing for any current control-flow decision.
+_RATE_LIMIT_FALLBACK_SEC = 60
 
 
 def gh_api(
@@ -79,10 +85,12 @@ def gh_api(
             :func:`agentfluent_cache_dir`).
 
     Returns:
-        Parsed JSON response (dict or list, depending on the endpoint
-        and any ``--jq`` projection).
+        Parsed JSON response (dict, list, or ``None`` for empty / null
+        projections — cached the same way, served from cache on hit).
 
     Raises:
+        GhNotInstalledError: ``gh`` binary not on PATH.
+        GhNotAuthenticatedError: ``gh auth status`` non-zero.
         RateLimitedError: ``gh`` returned 403/429 with a rate-limit
             signature. Signal extractors catch this to flag Tier 3 as
             degraded and skip cleanly.
@@ -90,6 +98,14 @@ def gh_api(
             Bubbles up so misconfiguration is loud, not silent.
         ValueError: Response was not valid JSON.
     """
+    # Precondition: gh installed and authenticated. detect_gh is
+    # lru_cached, so this is a no-op subprocess-cost after the first
+    # successful call in a process — but it ensures programmatic
+    # callers that skipped CLI-side detection get the right typed
+    # exception (GhNotInstalledError) rather than a FileNotFoundError
+    # mis-classified as auth failure inside gh_auth_login.
+    detect_gh()
+
     user_login = gh_auth_login()
     key = cache.cache_key(
         endpoint=endpoint,
@@ -99,7 +115,11 @@ def gh_api(
     )
     if not no_cache:
         cached = cache.get(key, ttl=cache_ttl, cache_dir=cache_dir)
-        if cached is not None:
+        # Sentinel comparison — NOT ``is not None`` — so a legitimately
+        # cached ``None`` payload (empty stdout from gh, null --jq
+        # projection) serves from cache instead of triggering a refetch
+        # on every call.
+        if cached is not cache.MISS:
             return cached
 
     cmd = ["gh", "api", endpoint]
@@ -162,29 +182,12 @@ def _maybe_raise_rate_limit(endpoint: str, stderr: str) -> None:
     403s (e.g. permission denied on a private repo) fall through to
     the generic RuntimeError path so misconfiguration stays loud.
     """
-    code_match = _RATE_LIMIT_RE.search(stderr)
-    if code_match is None:
+    if _RATE_LIMIT_RE.search(stderr) is None:
         return
     lowered = stderr.lower()
     if not any(kw in lowered for kw in _RATE_LIMIT_KEYWORDS):
         # 403 without rate-limit keywords is likely a permissions error
         # (private repo, missing scope) — propagate as generic failure.
         return
-    reset_at = _parse_reset_time(stderr)
+    reset_at = datetime.now(UTC) + timedelta(seconds=_RATE_LIMIT_FALLBACK_SEC)
     raise RateLimitedError(reset_at=reset_at, endpoint=endpoint)
-
-
-def _parse_reset_time(stderr: str) -> datetime:
-    """Best-effort extraction of the rate-limit reset epoch.
-
-    Falls back to ``now + 60s`` when no header is parseable — better
-    a slightly-wrong reset time than crashing on header absence.
-    """
-    header_match = _RATE_LIMIT_RESET_HEADER.search(stderr)
-    if header_match is not None:
-        try:
-            return datetime.fromtimestamp(int(header_match["epoch"]), tz=UTC)
-        except (ValueError, OverflowError):
-            pass
-    from datetime import timedelta
-    return datetime.now(UTC) + timedelta(seconds=60)

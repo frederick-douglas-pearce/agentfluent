@@ -185,6 +185,7 @@ def run_diagnostics(
     sessions: list[SessionAnalysis] | None = None,
     git_repo: Path | None = None,
     github_repo: GitHubRepo | None = None,
+    github_no_cache: bool = False,
 ) -> DiagnosticsResult:
     """Run the full diagnostics pipeline on agent invocations.
 
@@ -309,11 +310,14 @@ def run_diagnostics(
     # signal extractors). When `github_repo` is None the caller did not
     # pass `--github` (or repo inference failed and the CLI exited
     # before reaching here). Signal extraction itself lands in #400/#401;
-    # the infrastructure story just threads the parameter through.
+    # the infrastructure story just threads the parameters through.
+    # `github_no_cache` is forwarded so extractors can pass it to
+    # :func:`agentfluent.github.gh_api` per request.
     if github_repo is not None:
         logger.debug(
-            "tier 3 github_repo received: %s/%s — extractors land in #400, #401",
-            github_repo.owner, github_repo.repo,
+            "tier 3 github_repo received: %s/%s (no_cache=%s) — "
+            "extractors land in #400, #401",
+            github_repo.owner, github_repo.repo, github_no_cache,
         )
 
     correlated_pairs = correlate(signals, configs_by_name)

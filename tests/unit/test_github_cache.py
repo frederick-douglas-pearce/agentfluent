@@ -1,6 +1,6 @@
 """Tests for the Tier 3 file-backed TTL cache.
 
-Verifies the four cache invariants:
+Verifies the cache invariants:
 
 1. **Key uniqueness** — endpoint, query params, jq filter, and auth
    user login each contribute to the SHA-256, so distinct projections
@@ -9,8 +9,11 @@ Verifies the four cache invariants:
    the window miss.
 3. **Schema** — files store ``_cached_at`` + ``endpoint`` + ``jq_filter``
    + ``data`` so the cache directory is human-debuggable.
-4. **Soft failure** — corrupted or unreadable entries return ``None``
-   instead of raising.
+4. **Soft failure** — corrupted, unreadable, or naive-timestamp
+   entries return the :data:`MISS` sentinel instead of raising.
+5. **Sentinel return** — :func:`get` returns :data:`MISS` on miss
+   and the cached value (which may be ``None``) on hit, so a
+   legitimately-cached ``None`` payload doesn't trigger a refetch.
 """
 
 from __future__ import annotations
@@ -92,17 +95,31 @@ class TestGetSet:
         result = cache.get(_key(), ttl=60, cache_dir=tmp_path)
         assert result == {"hello": "world"}
 
-    def test_missing_entry_returns_none(self, tmp_path: Path) -> None:
-        assert cache.get(_key(), ttl=60, cache_dir=tmp_path) is None
+    def test_missing_entry_returns_miss(self, tmp_path: Path) -> None:
+        assert cache.get(_key(), ttl=60, cache_dir=tmp_path) is cache.MISS
 
-    def test_expired_entry_returns_none(self, tmp_path: Path) -> None:
+    def test_expired_entry_returns_miss(self, tmp_path: Path) -> None:
         past = datetime.now(UTC) - timedelta(seconds=120)
         cache.set(
             _key(), {"v": 1},
             endpoint="x", jq_filter=None,
             cache_dir=tmp_path, now=past,
         )
-        assert cache.get(_key(), ttl=60, cache_dir=tmp_path) is None
+        assert cache.get(_key(), ttl=60, cache_dir=tmp_path) is cache.MISS
+
+    def test_cached_null_is_hit_not_miss(self, tmp_path: Path) -> None:
+        # The whole point of the MISS sentinel: a legitimately cached
+        # ``None`` (empty stdout from gh, or a --jq filter that yields
+        # null) must serve from the cache, not trigger re-fetch every
+        # call. cache.get must distinguish "cached None" from "no entry".
+        cache.set(
+            _key(), None,
+            endpoint="x", jq_filter=".missing_field",
+            cache_dir=tmp_path,
+        )
+        result = cache.get(_key(), ttl=60, cache_dir=tmp_path)
+        assert result is None
+        assert result is not cache.MISS
 
     def test_unexpired_entry_returns_value(self, tmp_path: Path) -> None:
         recent = datetime.now(UTC) - timedelta(seconds=10)
@@ -153,11 +170,43 @@ class TestSchema:
 
 
 class TestSoftFailure:
-    def test_corrupted_entry_returns_none(self, tmp_path: Path) -> None:
+    def test_corrupted_entry_returns_miss(self, tmp_path: Path) -> None:
         github_dir = tmp_path / "github"
         github_dir.mkdir()
         (github_dir / f"{_key()}.json").write_text("not-json")
-        assert cache.get(_key(), ttl=60, cache_dir=tmp_path) is None
+        assert cache.get(_key(), ttl=60, cache_dir=tmp_path) is cache.MISS
+
+    def test_naive_timestamp_returns_miss(self, tmp_path: Path) -> None:
+        # A hand-edited or downgrade-corrupted file with a naive ISO
+        # timestamp would crash the cached-at - now subtraction
+        # ("can't subtract offset-naive and offset-aware datetimes").
+        # The wrapper must treat it as MISS, not raise.
+        github_dir = tmp_path / "github"
+        github_dir.mkdir()
+        (github_dir / f"{_key()}.json").write_text(
+            json.dumps({
+                "_cached_at": "2026-01-01T00:00:00",  # naive — no tz
+                "endpoint": "x",
+                "jq_filter": None,
+                "data": {"v": 1},
+            }),
+        )
+        assert cache.get(_key(), ttl=60, cache_dir=tmp_path) is cache.MISS
+
+    def test_missing_data_key_returns_miss(self, tmp_path: Path) -> None:
+        # A file with everything but the "data" key (malformed write)
+        # should fall through to MISS rather than return None implicitly.
+        github_dir = tmp_path / "github"
+        github_dir.mkdir()
+        (github_dir / f"{_key()}.json").write_text(
+            json.dumps({
+                "_cached_at": datetime.now(UTC).isoformat(),
+                "endpoint": "x",
+                "jq_filter": None,
+                # no "data" key
+            }),
+        )
+        assert cache.get(_key(), ttl=60, cache_dir=tmp_path) is cache.MISS
 
     def test_clear_all_removes_entries(self, tmp_path: Path) -> None:
         cache.set(

@@ -91,12 +91,32 @@ def _resolve_github_repo(
     """Resolve the Tier 3 repo, performing detection + consent in order.
 
     Returns the :class:`GitHubRepo` on success, or raises ``typer.Exit``
-    with ``EXIT_USER_ERROR`` on any setup failure (gh missing, gh not
-    authenticated, declined consent, repo inference failure). The
-    explicit-exit-on-failure shape is deliberate: when a user passes
-    ``--github`` they are opting into Tier 3, so silent fallback to a
-    Tier 1+2-only run would mask the problem.
+    with ``EXIT_USER_ERROR`` on any setup failure (malformed ``--repo``
+    override, gh missing, gh not authenticated, declined consent, repo
+    inference failure). The explicit-exit-on-failure shape is
+    deliberate: when a user passes ``--github`` they are opting into
+    Tier 3, so silent fallback to a Tier 1+2-only run would mask the
+    problem.
+
+    Order matters: the ``--repo`` override is validated *before* the
+    consent prompt fires, so a malformed override in CI (where
+    non-TTY auto-consent would persist a consent record) does not
+    leave a half-opted-in state on disk for a run that's about to
+    exit with USER_ERROR.
     """
+    # 1. Validate the override first — purely local, no side effects.
+    #    Reject malformed inputs before any consent persistence.
+    parsed_override: GitHubRepo | None = None
+    if repo_override is not None:
+        try:
+            parsed_override = parse_repo_override(repo_override)
+        except ValueError as e:
+            err_console.print(f"[red]Error:[/red] {e}")
+            raise typer.Exit(code=EXIT_USER_ERROR) from e
+
+    # 2. Detect gh + auth. detect_gh() is lru_cached at module level,
+    #    so calling it here is the right precondition site even
+    #    though gh_api() will also call it on every request.
     try:
         detect_gh()
     except GhNotInstalledError as e:
@@ -106,6 +126,8 @@ def _resolve_github_repo(
         err_console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(code=EXIT_USER_ERROR) from e
 
+    # 3. Consent. In non-TTY this records silently — only reached if
+    #    detection succeeded AND the override (if any) parsed.
     if not prompt_and_record_if_needed(is_tty=sys.stdin.isatty()):
         err_console.print(
             "[yellow]Tier 3 GitHub enrichment declined; "
@@ -113,18 +135,15 @@ def _resolve_github_repo(
         )
         raise typer.Exit(code=EXIT_USER_ERROR)
 
-    if repo_override is not None:
-        try:
-            return parse_repo_override(repo_override)
-        except ValueError as e:
-            err_console.print(f"[red]Error:[/red] {e}")
-            raise typer.Exit(code=EXIT_USER_ERROR) from e
+    # 4. Use the validated override if present; otherwise infer.
+    if parsed_override is not None:
+        return parsed_override
 
     try:
         return infer_repo(project_disk_path)
     except RepoInferenceError as e:
         err_console.print(
-            f"[red]Error:[/red] Could not infer GitHub repository: {e}\n"
+            f"[red]Error:[/red] could not infer GitHub repository: {e}.\n"
             "Use [bold]--repo OWNER/NAME[/bold] to specify it explicitly.",
         )
         raise typer.Exit(code=EXIT_USER_ERROR) from e
@@ -465,25 +484,31 @@ def analyze(
     all_mcp_calls = [c for s in result.sessions for c in s.mcp_tool_calls]
     all_messages = [m for s in result.sessions for m in s.messages]
 
-    if all_invocations and diagnostics:
-        # `project_info.path` is the ~/.claude/projects/<slug>/ dir, not
-        # the original project source path. MCP discovery needs the
-        # real path (for .mcp.json and ~/.claude.json:projects[<abs>]
-        # lookups); resolve it via the slug.
-        project_disk_path = resolve_project_disk_path(
-            project_info.slug, claude_config_dir=config_dir,
+    # `project_info.path` is the ~/.claude/projects/<slug>/ dir, not the
+    # original project source path. MCP discovery needs the real path
+    # (for .mcp.json and ~/.claude.json:projects[<abs>] lookups); resolve
+    # it via the slug. Resolved up-front because both diagnostics and
+    # Tier 3 setup consume it.
+    project_disk_path = resolve_project_disk_path(
+        project_info.slug, claude_config_dir=config_dir,
+    )
+
+    # Tier 3 setup runs whenever the user passed --github (which requires
+    # --diagnostics, enforced earlier). Lifted out of the
+    # `if all_invocations` gate so a zero-invocations project still
+    # reports a clear error rather than silently skipping detection /
+    # consent / repo inference. On any failure the CLI exits — we do not
+    # silently fall through to a Tier 1+2-only run after the user
+    # explicitly asked for Tier 3.
+    github_repo: GitHubRepo | None = None
+    if github:
+        github_repo = _resolve_github_repo(
+            repo_override=repo,
+            project_disk_path=project_disk_path,
+            err_console=err_console,
         )
-        # Tier 3 setup runs only when the user passed --github (already
-        # checked to require --diagnostics above). On any failure the
-        # CLI exits — we do not silently fall through to a Tier 1+2-only
-        # run after the user explicitly asked for Tier 3.
-        github_repo: GitHubRepo | None = None
-        if github:
-            github_repo = _resolve_github_repo(
-                repo_override=repo,
-                project_disk_path=project_disk_path,
-                err_console=err_console,
-            )
+
+    if all_invocations and diagnostics:
         # When --git is set, the project's source directory becomes
         # the git_repo we hand to diagnostics. project_disk_path is
         # the ~/.claude/projects mapping resolution; it may or may not
@@ -506,6 +531,7 @@ def analyze(
             sessions=result.sessions if git else None,
             git_repo=project_disk_path if git else None,
             github_repo=github_repo,
+            github_no_cache=github_no_cache,
         )
     elif result.agent_metrics.total_invocations == 0 and diagnostics:
         err_console.print(

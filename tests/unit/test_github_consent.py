@@ -16,6 +16,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from agentfluent.github import consent
 
 
@@ -66,22 +68,32 @@ class TestPrompt:
         assert result is False
 
     def test_repeat_call_skips_prompt(self, tmp_path: Path) -> None:
+        # A user with prior consent must NOT see the disclosure or
+        # the prompt again — check both input_fn and output_fn are
+        # untouched, not just one. (Prior version of this test only
+        # asserted input_fn was untouched, so a regression that
+        # re-printed the disclosure on every run would have passed.)
         consent.record_consent(config_dir=tmp_path)
-        called = {"count": 0}
+        input_calls = {"count": 0}
+        output_calls = {"count": 0}
 
         def fake_input(_prompt: str) -> str:
-            called["count"] += 1
+            input_calls["count"] += 1
             return "y"
+
+        def fake_output(_msg: str) -> None:
+            output_calls["count"] += 1
 
         result = consent.prompt_and_record_if_needed(
             is_tty=True,
             config_dir=tmp_path,
             cache_dir_display=tmp_path / "fake-cache",
             input_fn=fake_input,
-            output_fn=lambda _msg: None,
+            output_fn=fake_output,
         )
         assert result is True
-        assert called["count"] == 0
+        assert input_calls["count"] == 0
+        assert output_calls["count"] == 0
 
 
 class TestNonTty:
@@ -93,6 +105,27 @@ class TestNonTty:
         )
         assert result is True
         assert consent.has_consent(config_dir=tmp_path)
+
+
+class TestDisclosureOutput:
+    def test_default_disclosure_writes_to_stderr_not_stdout(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # The default output target is stderr so JSON piped from
+        # stdout (e.g. `agentfluent analyze --github --json | jq`)
+        # is not corrupted by the disclosure text.
+        consent.prompt_and_record_if_needed(
+            is_tty=True,
+            config_dir=tmp_path,
+            cache_dir_display=tmp_path / "fake-cache",
+            input_fn=lambda _prompt: "y",
+            # output_fn not supplied → default = stderr writer
+        )
+        captured = capsys.readouterr()
+        assert "AgentFluent's --github" in captured.err
+        assert "AgentFluent's --github" not in captured.out
 
 
 class TestSchema:

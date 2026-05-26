@@ -10,6 +10,34 @@ import pytest
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
+@pytest.fixture(autouse=True)
+def _isolate_agentfluent_xdg_dirs(
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Redirect ``XDG_CONFIG_HOME`` and ``XDG_CACHE_HOME`` per test.
+
+    Both :func:`agentfluent.core.paths.agentfluent_config_dir` and
+    :func:`agentfluent.core.paths.agentfluent_cache_dir` honor these
+    env vars; CliRunner's mocked stdin reports ``isatty() == False``,
+    which triggers the consent module's non-TTY auto-record branch.
+    Without this fixture, any CLI test that exercises ``--github`` —
+    or any test that calls ``record_consent`` / ``cache.set`` without
+    a ``config_dir`` / ``cache_dir`` override — would silently write
+    to the contributor's real ``~/.config/agentfluent/`` and
+    ``~/.cache/agentfluent/``.
+
+    Autouse + function-scoped so the redirect applies to every test
+    automatically. Tests that explicitly ``monkeypatch.delenv`` or
+    ``setenv`` these vars to assert default-path behavior (e.g.
+    ``tests/unit/test_paths.py``) override this fixture's setenv
+    naturally — monkeypatch unwinds LIFO at test teardown.
+    """
+    base = tmp_path_factory.mktemp("agentfluent-xdg")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(base / "config"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(base / "cache"))
+
+
 @pytest.fixture()
 def write_jsonl(tmp_path: Path) -> Callable[[str, list[dict[str, Any]]], Path]:
     """Return a helper that writes a list of dicts as a JSONL file under tmp_path.

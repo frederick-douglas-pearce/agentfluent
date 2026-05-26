@@ -123,6 +123,22 @@ def record_consent(
         logger.warning("could not persist consent record to %s", path, exc_info=True)
 
 
+def _default_disclosure_output(message: str) -> None:
+    """Write the disclosure to stderr, not stdout.
+
+    Default ``output_fn`` for :func:`prompt_and_record_if_needed`.
+    Writing to stderr keeps the disclosure out of any JSON or
+    machine-readable payload the user is piping from stdout (e.g.
+    ``agentfluent analyze --github --json | jq .``) — a TTY prompt
+    can still fire because ``sys.stdin.isatty()`` is unaffected by
+    stdout redirection.
+    """
+    sys.stderr.write(message)
+    if not message.endswith("\n"):
+        sys.stderr.write("\n")
+    sys.stderr.flush()
+
+
 def prompt_and_record_if_needed(
     *,
     is_tty: bool,
@@ -137,9 +153,11 @@ def prompt_and_record_if_needed(
     granted, freshly accepted, or non-TTY auto-consented), ``False``
     when the user declined the interactive prompt.
 
-    - **TTY, no prior consent:** print the disclosure, ask ``[y/N]``;
-      record consent on Y, return False on N or empty.
-    - **TTY, prior consent:** return ``True`` immediately, no prompt.
+    - **TTY, no prior consent:** write the disclosure to stderr, ask
+      ``[y/N]`` on stdin; record consent on Y, return False on N or
+      empty.
+    - **TTY, prior consent:** return ``True`` immediately — disclosure
+      is *not* re-shown, prompt is *not* re-issued.
     - **Non-TTY:** treat ``--github`` itself as consent; record
       silently and return ``True``. This matches the spike's privacy
       model — the CLI flag is explicit per-invocation opt-in.
@@ -149,7 +167,8 @@ def prompt_and_record_if_needed(
     inject this to keep output stable.
 
     ``input_fn`` and ``output_fn`` are injected for test isolation;
-    production uses ``input`` and ``print``.
+    production uses ``input`` for the prompt and a stderr writer for
+    the disclosure (so JSON piped from stdout stays clean).
     """
     if has_consent(config_dir=config_dir):
         return True
@@ -158,7 +177,7 @@ def prompt_and_record_if_needed(
         record_consent(config_dir=config_dir)
         return True
 
-    out = output_fn if output_fn is not None else print
+    out = output_fn if output_fn is not None else _default_disclosure_output
     if cache_dir_display is None:
         from agentfluent.core.paths import agentfluent_cache_dir
         cache_dir_display = agentfluent_cache_dir() / "github"
