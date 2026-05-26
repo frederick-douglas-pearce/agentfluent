@@ -461,6 +461,82 @@ class TestPriorityScore:
         assert aggregated[0].severity == Severity.CRITICAL
 
 
+class TestBuiltinRetryDownweight:
+    """#395: RETRY_LOOP groups composed of read-only built-in tool
+    retries (Read, Grep, Glob) get a priority multiplier so the noise
+    doesn't crowd out actionable retries (Bash, Edit, MCP) in Top-N."""
+
+    def test_all_noise_tool_retries_downweighted_below_actionable(self) -> None:
+        # 100 Read retries on one agent vs 5 Bash retries on another.
+        # Both groups end up at WARNING severity, trace evidence on,
+        # similar shape — but the noise-only row drops below the
+        # actionable singleton.
+        noise_pairs = [_retry_loop_pair("pm", "Read", 3) for _ in range(100)]
+        bash_pairs = [_retry_loop_pair("explore", "Bash", 3) for _ in range(5)]
+        aggregated = aggregate_recommendations([*noise_pairs, *bash_pairs])
+        bash_row = next(a for a in aggregated if a.agent_type == "explore")
+        read_row = next(a for a in aggregated if a.agent_type == "pm")
+        assert read_row.count == 100
+        assert bash_row.count == 5
+        # Bash row outranks Read row despite lower count.
+        assert bash_row.priority_score > read_row.priority_score
+
+    def test_mixed_tool_group_partial_downweight(self) -> None:
+        # A group that's 50% Read + 50% Edit should sit between a
+        # pure-Read group and a pure-Edit group at matching count.
+        pure_noise = [_retry_loop_pair("a", "Read", 3) for _ in range(10)]
+        mixed = [
+            *(_retry_loop_pair("b", "Read", 3) for _ in range(5)),
+            *(_retry_loop_pair("b", "Edit", 3) for _ in range(5)),
+        ]
+        pure_actionable = [_retry_loop_pair("c", "Edit", 3) for _ in range(10)]
+        aggregated = aggregate_recommendations([*pure_noise, *mixed, *pure_actionable])
+        rows = {a.agent_type: a for a in aggregated}
+        assert (
+            rows["c"].priority_score
+            > rows["b"].priority_score
+            > rows["a"].priority_score
+        )
+
+    def test_non_retry_loop_groups_unaffected(self) -> None:
+        # The downweight only applies to RETRY_LOOP-only groups. A
+        # TOKEN_OUTLIER row's tool-name irrelevant, no multiplier.
+        baseline_outlier = _token_outlier_pair("a", 2.0)
+        retry_noise = _retry_loop_pair("b", "Read", 3)
+        aggregated = aggregate_recommendations([baseline_outlier, retry_noise])
+        outlier_row = next(a for a in aggregated if a.agent_type == "a")
+        # If the multiplier accidentally applied to TOKEN_OUTLIER rows,
+        # the priority would be reduced by 30-70%. Spot-check that the
+        # baseline lands in the expected range (~211 for WARNING+count=1).
+        assert outlier_row.priority_score > 200
+
+    def test_bash_not_in_noise_set_even_though_builtin(self) -> None:
+        # Bash is built-in but actionable: a Bash-only retry group must
+        # NOT get the multiplier applied.
+        bash_pairs = [_retry_loop_pair("a", "Bash", 3) for _ in range(5)]
+        glob_pairs = [_retry_loop_pair("b", "Glob", 3) for _ in range(5)]
+        aggregated = aggregate_recommendations([*bash_pairs, *glob_pairs])
+        bash_row = next(a for a in aggregated if a.agent_type == "a")
+        glob_row = next(a for a in aggregated if a.agent_type == "b")
+        # Bash full weight, Glob downweighted — Bash wins at equal count.
+        assert bash_row.priority_score > glob_row.priority_score
+
+    def test_critical_severity_exempt_from_downweight(self) -> None:
+        # The "severity dominates" invariant must hold: a CRITICAL
+        # RETRY_LOOP on a noise tool must not be down-weighted, or it
+        # could sink below WARNING rows on actionable tools.
+        critical_noise = _retry_loop_pair(
+            "a", "Read", 7, severity=Severity.CRITICAL,
+        )
+        warning_actionable = _retry_loop_pair("b", "Bash", 3)
+        aggregated = aggregate_recommendations(
+            [critical_noise, warning_actionable],
+        )
+        # CRITICAL on Read still outranks WARNING on Bash.
+        assert aggregated[0].agent_type == "a"
+        assert aggregated[0].severity == Severity.CRITICAL
+
+
 def _quality_pair(
     signal_type: SignalType,
     agent_type: str,

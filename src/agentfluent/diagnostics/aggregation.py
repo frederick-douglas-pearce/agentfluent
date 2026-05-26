@@ -24,6 +24,17 @@ volume of WARNINGs. ``log1p(count)`` damps repeats. Trace evidence
 ``TOOL_ERROR_SEQUENCE``) gets a modest boost over metadata-only
 signals.
 
+**Built-in retry noise down-weight (#395).** Groups composed entirely
+of ``RETRY_LOOP`` signals get an additional multiplier in
+``[_BUILTIN_RETRY_DOWNWEIGHT, 1.0]`` applied to the final score,
+proportional to the share of signals on read-only built-in tools
+(``Read``, ``Grep``, ``Glob``). Retries on those tools are mostly
+inherent to the tool's nature and don't have a config-level fix, so
+noise crowds out actionable retries (Bash, Edit, custom MCP tools)
+in the Top-N without this gate. Bash stays at full weight (built-in
+but actionable). Tuning of ``_BUILTIN_RETRY_DOWNWEIGHT`` is deferred
+per the issue's "Out of scope" section — re-validate post-v0.8.
+
 The ``quality_evidence_factor`` (D021) is ``1.0`` when any
 contributing signal maps to ``Axis.QUALITY``, else ``0.0``. The
 annotations approach preserves backward compatibility: recommendations
@@ -96,6 +107,19 @@ _PRIORITY_WEIGHT_COUNT = 10.0
 _PRIORITY_WEIGHT_COST = 1.0
 _PRIORITY_WEIGHT_TRACE = 5.0
 _PRIORITY_WEIGHT_QUALITY = 5.0
+
+# Built-in read-only tools whose retries are mostly inherent to the
+# tool's nature (speculative file reads after grep misses, re-reading
+# the same file across analysis steps) and don't have a config-level
+# fix. #395: down-weight RETRY_LOOP priority in proportion to the
+# share of signals on these tools, so noise doesn't crowd out
+# actionable retries (Bash, Edit, custom MCP tools) in the Top-N.
+# Bash is built-in but actionable — kept at full weight. The 0.3
+# default is informed by v0.7 dogfood (104/152 retries were on Read)
+# but not yet calibrated against multi-contributor data; #459 tracks
+# the post-v0.8 re-validation.
+_BUILTIN_RETRY_NOISE_TOOLS: frozenset[str] = frozenset({"Read", "Grep", "Glob"})
+_BUILTIN_RETRY_DOWNWEIGHT = 0.3
 
 # D027: deterministic tiebreaker for ``primary_axis`` when two or more
 # axes carry equal ``axis_scores``. Quality wins ties so the v0.6
@@ -210,6 +234,34 @@ def _compute_priority_score(
     )
 
 
+def _retry_noise_multiplier(
+    signals: list[DiagnosticSignal], severity: Severity,
+) -> float:
+    """Return a priority multiplier in `[_BUILTIN_RETRY_DOWNWEIGHT, 1.0]`.
+
+    Returns `1.0` (no down-weight) unless every signal in the group is
+    `RETRY_LOOP` and the aggregated severity is not `CRITICAL`. For
+    qualifying groups, the multiplier linearly scales from `1.0` (no
+    signals on noise tools) to `_BUILTIN_RETRY_DOWNWEIGHT` (all signals
+    on noise tools), proportional to the noise share. This drops
+    Read/Grep/Glob-dominated retry rows below actionable retries (Bash,
+    Edit, MCP) in the Top-N priority without suppressing the signal
+    itself (#395). `CRITICAL` rows are exempt so the "severity
+    dominates" invariant in the priority model is preserved.
+    """
+    if severity == Severity.CRITICAL:
+        return 1.0
+    if not signals or not all(s.signal_type == SignalType.RETRY_LOOP for s in signals):
+        return 1.0
+    noise = sum(
+        1 for s in signals if s.detail.get("tool_name") in _BUILTIN_RETRY_NOISE_TOOLS
+    )
+    if noise == 0:
+        return 1.0
+    noise_share = noise / len(signals)
+    return 1.0 - noise_share * (1.0 - _BUILTIN_RETRY_DOWNWEIGHT)
+
+
 def _signal_axis_contribution(signal: DiagnosticSignal) -> float:
     """Per-signal contribution to its axis bucket — Tier 1 = severity rank.
 
@@ -275,6 +327,7 @@ def aggregate_recommendations(
             has_trace_evidence,
             quality_evidence_factor=quality_evidence_factor,
         )
+        priority_score *= _retry_noise_multiplier(signals, severity)
 
         aggregated.append(
             AggregatedRecommendation(
