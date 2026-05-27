@@ -26,28 +26,60 @@ from __future__ import annotations
 
 import logging
 import re
-import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agentfluent.config.models import Severity
+from agentfluent.diagnostics._git_helpers import (
+    _GIT_LOG_COMMIT_SEPARATOR,
+    _GIT_LOG_FIELD_SEPARATOR,
+    _GIT_LOG_FORMAT,
+    _GIT_TIMEOUT_SEC,
+    DEFAULT_LOOKBACK_DAYS,
+    _GitCommit,
+    _parse_commits,
+    _run_git_log,
+)
 from agentfluent.diagnostics.models import DiagnosticSignal, SignalType
 from agentfluent.diagnostics.quality_signals import REVIEW_AGENT_TYPES
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from agentfluent.analytics.pipeline import SessionAnalysis
 
 logger = logging.getLogger(__name__)
 
-# Default lookback window for `git log --since`. A pair only counts as
-# "proximity" when feat and fix are within this many days of each other,
-# but we also need to cap how far back the initial scan reaches — pulling
-# the entire repo history on every run is wasteful and the signal value
-# decays fast with age.
+# Re-exports for back-compat — :mod:`agentfluent.diagnostics._git_helpers`
+# is the canonical home for the moved git-log primitives. Tests that
+# imported these private symbols from this module continue to work;
+# new callers should import them from ``_git_helpers`` directly. Also
+# includes locally-defined private symbols (``_FeatFixPair``,
+# ``_find_feat_fix_pairs``, ``_FEAT_PATTERN``, ``_FIX_PATTERN``) that
+# tests import directly from this module.
+__all__ = [
+    "DEFAULT_LOOKBACK_DAYS",
+    "DEFAULT_PROXIMITY_DAYS",
+    "_FEAT_PATTERN",
+    "_FIX_PATTERN",
+    "_GIT_LOG_COMMIT_SEPARATOR",
+    "_GIT_LOG_FIELD_SEPARATOR",
+    "_GIT_LOG_FORMAT",
+    "_GIT_TIMEOUT_SEC",
+    "_FeatFixPair",
+    "_GitCommit",
+    "_find_feat_fix_pairs",
+    "_parse_commits",
+    "_run_git_log",
+    "extract_git_quality_signals",
+]
+
+# Default proximity window for feat-fix pairing. A pair only counts
+# when feat and fix are within this many days of each other. The
+# lookback window (how far back the initial scan reaches) is shared
+# with Tier 3 via :data:`agentfluent.diagnostics._git_helpers.DEFAULT_LOOKBACK_DAYS`.
 DEFAULT_PROXIMITY_DAYS = 7
-DEFAULT_LOOKBACK_DAYS = 90
 
 # Match the ``feat:`` / ``fix:`` Conventional Commits prefix on the
 # commit subject. ``feat(scope):`` and ``feat!:`` both count. Other
@@ -56,29 +88,6 @@ DEFAULT_LOOKBACK_DAYS = 90
 # quality misses.
 _FEAT_PATTERN = re.compile(r"^feat(\([^)]*\))?!?:", re.IGNORECASE)
 _FIX_PATTERN = re.compile(r"^fix(\([^)]*\))?!?:", re.IGNORECASE)
-
-# ASCII record separators chosen because they don't appear in commit
-# subjects, paths, or ISO timestamps. The same format is parsed inline
-# by :func:`_parse_commits`. ``%x1e`` separates fields within a commit;
-# ``%x1f`` separates commits.
-_GIT_LOG_FORMAT = "%H%x1e%cI%x1e%s"
-_GIT_LOG_COMMIT_SEPARATOR = "\x1f"
-_GIT_LOG_FIELD_SEPARATOR = "\x1e"
-
-# Subprocess timeout. A real `git log --name-only` over 90 days finishes
-# in well under a second on healthy repos; 30s is generous headroom for
-# slow filesystems / huge repos without making an honest hang invisible.
-_GIT_TIMEOUT_SEC = 30
-
-
-@dataclass(frozen=True)
-class _GitCommit:
-    """One parsed entry from ``git log --format=...``."""
-
-    sha: str
-    timestamp: datetime
-    subject: str
-    files: frozenset[str] = field(default_factory=frozenset)
 
 
 @dataclass(frozen=True)
@@ -127,86 +136,6 @@ def extract_git_quality_signals(
         return []
 
     return [_signal_for_pair(pair, sessions) for pair in pairs]
-
-
-def _run_git_log(repo_dir: Path, *, since: datetime) -> list[_GitCommit]:
-    """Run ``git log`` and parse the output. Returns ``[]`` on any error.
-
-    The subprocess invocation is bounded by :data:`_GIT_TIMEOUT_SEC`
-    and uses a fixed-shape ``--format`` that pairs cleanly with
-    ``--name-only`` so file paths land below each commit header.
-    """
-    cmd = [
-        "git", "-C", str(repo_dir),
-        "log",
-        f"--since={since.isoformat()}",
-        f"--format={_GIT_LOG_COMMIT_SEPARATOR}{_GIT_LOG_FORMAT}",
-        "--name-only",
-    ]
-    try:
-        result = subprocess.run(  # noqa: S603 — args are constants, not user input
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=_GIT_TIMEOUT_SEC,
-            check=False,
-        )
-    except FileNotFoundError:
-        logger.debug("git binary not found on PATH; skipping git signals")
-        return []
-    except subprocess.TimeoutExpired:
-        logger.warning("git log timed out after %ds; skipping git signals", _GIT_TIMEOUT_SEC)
-        return []
-
-    if result.returncode != 0:
-        # Not a repo, or another git error. Stderr is human-readable
-        # but we don't want to surface it on every run — DEBUG only.
-        logger.debug(
-            "git log returned %d: %s",
-            result.returncode, result.stderr.strip(),
-        )
-        return []
-
-    return _parse_commits(result.stdout)
-
-
-def _parse_commits(stdout: str) -> list[_GitCommit]:
-    """Parse the structured ``git log`` output into ``_GitCommit`` records.
-
-    Output shape (with our separators):
-
-        \\x1f<sha>\\x1e<isoformat-cdate>\\x1e<subject>
-        <file1>
-        <file2>
-        \\x1f<sha>\\x1e<isoformat-cdate>\\x1e<subject>
-        <file1>
-        ...
-
-    The leading ``\\x1f`` makes ``split`` cleanly produce one entry per
-    commit (the first entry is empty and gets filtered).
-    """
-    commits: list[_GitCommit] = []
-    for entry in stdout.split(_GIT_LOG_COMMIT_SEPARATOR):
-        entry = entry.strip()
-        if not entry:
-            continue
-        # First line is the header; subsequent lines are file paths.
-        header, _, file_block = entry.partition("\n")
-        parts = header.split(_GIT_LOG_FIELD_SEPARATOR)
-        if len(parts) != 3:
-            continue
-        sha, timestamp_str, subject = parts
-        try:
-            timestamp = datetime.fromisoformat(timestamp_str)
-        except ValueError:
-            continue
-        files = frozenset(
-            line.strip() for line in file_block.splitlines() if line.strip()
-        )
-        commits.append(_GitCommit(
-            sha=sha, timestamp=timestamp, subject=subject, files=files,
-        ))
-    return commits
 
 
 def _find_feat_fix_pairs(

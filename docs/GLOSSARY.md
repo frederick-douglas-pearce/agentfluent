@@ -685,7 +685,51 @@ feat a1b2c3d followed by 2 fixes on shared file(s) within 3d
 
 **Recommendation target:** `subagent`
 
-**Related:** [`user_correction`](#user_correction), [`file_rework`](#file_rework), [`reviewer_caught`](#reviewer_caught), [`primary_axis`](#primary_axis)
+**Related:** [`user_correction`](#user_correction), [`file_rework`](#file_rework), [`reviewer_caught`](#reviewer_caught), [`ci_failure_first_push`](#ci_failure_first_push), [`primary_axis`](#primary_axis)
+
+### `ci_failure_first_push`
+
+**Short:** A PR's first commit failed CI -- the agent shipped code that did
+not pass automated checks on first attempt, a direct quality miss.
+
+**Detail:** Tier 3 GitHub quality-axis signal (v0.8). Off by default; runs
+only when the CLI passes `--github` (which also requires
+`--diagnostics` and implies `--git`). For each commit authored
+within an analyzed session window, AgentFluent fetches the PRs
+touching that commit via `gh api`, then for each unique PR
+fetches the first commit and its combined CI status. When the
+first commit's combined status is `failure` or `error`, one
+`CI_FAILURE_FIRST_PUSH` signal fires per PR.
+
+Cross-cutting (`agent_type=None`). Severity is always `warning`:
+a first-push CI failure is a definite quality miss, but signal
+strength varies with project conventions (some teams treat CI
+as the first-class check rather than a pre-commit gate).
+
+The signal is only emitted when the PR's first commit can be
+attributed to a session in the analysis window -- a first commit
+authored outside any analyzed session has no actionable
+attribution. Force-push caveat: `pulls/{N}/commits` returns the
+CURRENT first commit, so a PR that was force-pushed loses its
+historical first-push failure. Detecting the original first push
+would require the PR events API; deferred to v0.8.1+.
+
+Rate-limit handling: if any `gh api` call returns 403/429 with a
+rate-limit signature, that PR is skipped and
+`DiagnosticsResult.tier3_degraded` is set to True. Other PRs
+still produce signals; the run still exits 0.
+
+**Example:**
+
+```
+PR #42 ('Add session window filter') first push failed CI: pytest failure
+```
+
+**Severity:** warning
+
+**Recommendation target:** `subagent`
+
+**Related:** [`feat_fix_proximity`](#feat_fix_proximity), [`primary_axis`](#primary_axis)
 
 
 ---

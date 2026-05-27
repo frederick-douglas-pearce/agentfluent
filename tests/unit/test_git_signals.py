@@ -149,28 +149,28 @@ class TestFeatFixPairing:
 class TestSubprocessErrorHandling:
     def test_missing_git_binary_returns_empty(self, tmp_path: Path) -> None:
         with patch(
-            "agentfluent.diagnostics.git_signals.subprocess.run",
+            "agentfluent.diagnostics._git_helpers.subprocess.run",
             side_effect=FileNotFoundError("git not found"),
         ):
             assert extract_git_quality_signals([], repo_dir=tmp_path) == []
 
     def test_non_zero_exit_returns_empty(self, tmp_path: Path) -> None:
         with patch(
-            "agentfluent.diagnostics.git_signals.subprocess.run",
+            "agentfluent.diagnostics._git_helpers.subprocess.run",
             new=_fake_run(stdout="", returncode=128),
         ):
             assert extract_git_quality_signals([], repo_dir=tmp_path) == []
 
     def test_timeout_returns_empty(self, tmp_path: Path) -> None:
         with patch(
-            "agentfluent.diagnostics.git_signals.subprocess.run",
+            "agentfluent.diagnostics._git_helpers.subprocess.run",
             side_effect=subprocess.TimeoutExpired(cmd=["git"], timeout=30),
         ):
             assert extract_git_quality_signals([], repo_dir=tmp_path) == []
 
     def test_empty_log_returns_empty(self, tmp_path: Path) -> None:
         with patch(
-            "agentfluent.diagnostics.git_signals.subprocess.run",
+            "agentfluent.diagnostics._git_helpers.subprocess.run",
             new=_fake_run(stdout="", returncode=0),
         ):
             assert extract_git_quality_signals([], repo_dir=tmp_path) == []
@@ -202,7 +202,7 @@ class TestSessionCorrelation:
             _session(feat_time - timedelta(minutes=1), ["architect", "general-purpose"]),
         ]
         with patch(
-            "agentfluent.diagnostics.git_signals.subprocess.run",
+            "agentfluent.diagnostics._git_helpers.subprocess.run",
             new=_fake_run(stdout=feat_fix_stdout),
         ):
             signals = extract_git_quality_signals(sessions, repo_dir=tmp_path)
@@ -219,7 +219,7 @@ class TestSessionCorrelation:
             _session(feat_time - timedelta(minutes=1), ["pm", "general-purpose"]),
         ]
         with patch(
-            "agentfluent.diagnostics.git_signals.subprocess.run",
+            "agentfluent.diagnostics._git_helpers.subprocess.run",
             new=_fake_run(stdout=feat_fix_stdout),
         ):
             signals = extract_git_quality_signals(sessions, repo_dir=tmp_path)
@@ -234,7 +234,7 @@ class TestSessionCorrelation:
         # All sessions end AFTER the feat commit -> no match.
         sessions = [_session(feat_time + timedelta(days=1), ["pm"])]
         with patch(
-            "agentfluent.diagnostics.git_signals.subprocess.run",
+            "agentfluent.diagnostics._git_helpers.subprocess.run",
             new=_fake_run(stdout=feat_fix_stdout),
         ):
             signals = extract_git_quality_signals(sessions, repo_dir=tmp_path)
@@ -248,7 +248,7 @@ class TestSessionCorrelation:
     ) -> None:
         sessions: list[SessionAnalysis] = []
         with patch(
-            "agentfluent.diagnostics.git_signals.subprocess.run",
+            "agentfluent.diagnostics._git_helpers.subprocess.run",
             new=_fake_run(stdout=feat_fix_stdout),
         ):
             signals = extract_git_quality_signals(sessions, repo_dir=tmp_path)

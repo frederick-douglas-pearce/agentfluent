@@ -854,3 +854,61 @@ class TestQualitySignalsWiring:
         assert SignalType.USER_CORRECTION in kinds
         assert SignalType.FILE_REWORK in kinds
         assert SignalType.REVIEWER_CAUGHT in kinds
+
+
+class TestTier3DegradationWiring:
+    """Tier 3 extractor errors must not crash the diagnostics run;
+    tier3_degraded carries the partial-failure signal forward."""
+
+    def test_extractor_crash_marks_degraded_and_continues(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> None:
+        from agentfluent.github.models import GitHubRepo
+
+        def boom(*_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("simulated extractor bug")
+
+        monkeypatch.setattr(
+            "agentfluent.diagnostics.pipeline."
+            "extract_ci_failure_first_push_signals",
+            boom,
+        )
+
+        # Need sessions + git_repo (alongside github_repo) to enter
+        # the Tier 3 branch.
+        sessions: list = []  # noqa: F841 — imported via run_diagnostics's
+                              # ``sessions`` kwarg below
+        result = run_diagnostics(
+            [_inv()],
+            sessions=[],
+            git_repo=tmp_path,
+            github_repo=GitHubRepo(owner="o", repo="r"),
+        )
+        # Run completes without re-raising the boom; degraded flag is
+        # set so the user sees that Tier 3 was incomplete.
+        assert result.tier3_degraded is True
+
+    def test_missing_prereqs_with_github_repo_marks_degraded(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # When --github was requested but git_repo or sessions is None
+        # (programmatic caller, or resolve_project_disk_path returned
+        # None), Tier 3 silently no-op'd with degraded=False pre-fix.
+        # Post-fix: flips degraded so the consumer can tell something
+        # was dropped.
+        from agentfluent.github.models import GitHubRepo
+
+        result = run_diagnostics(
+            [_inv()],
+            github_repo=GitHubRepo(owner="o", repo="r"),
+            # sessions=None, git_repo=None — the missing prereqs.
+        )
+        assert result.tier3_degraded is True
+
+    def test_no_github_request_keeps_degraded_false(self) -> None:
+        # Without --github, tier3_degraded must remain False (the
+        # baseline "Tier 3 was not requested" case). Regression guard
+        # against accidentally flipping the flag in the no-Tier-3
+        # path.
+        result = run_diagnostics([_inv()])
+        assert result.tier3_degraded is False
