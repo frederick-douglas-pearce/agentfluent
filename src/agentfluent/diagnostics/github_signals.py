@@ -250,6 +250,17 @@ def extract_pr_review_comment_density_signals(
     inline-comment list, plus ``/pulls/{N}`` for size and author.
     Two API calls per PR, matching the spike's budget estimate.
     """
+    # Input validation. The defaults are safe, but a programmatic
+    # caller (or future CLI override) passing degenerate values
+    # would silently break severity tiering — every PR with one
+    # external comment would emit at WARNING. Fail loudly instead.
+    if density_threshold <= 0:
+        raise ValueError(
+            f"density_threshold must be > 0 (got {density_threshold}); "
+            "a non-positive threshold disables severity tiering "
+            "and fires WARNING on every external comment",
+        )
+
     pr_refs, _commit_to_session, degraded = _enumerate_attributed_prs(
         sessions,
         github_repo=github_repo,
@@ -263,53 +274,216 @@ def extract_pr_review_comment_density_signals(
         return [], degraded
 
     signals: list[DiagnosticSignal] = []
+    # Skip-reason counters for end-of-extractor observability. CI's
+    # extractor logs ``skipped_unattributable``; the density signal
+    # has more failure modes (gate / no-author / no-external /
+    # below-threshold) and operators tuning the threshold need to
+    # see how many PRs each gate dropped to interpret a zero-signal
+    # run. Without these counters, debugging a "why didn't this PR
+    # fire?" question requires bisecting the gates by inspection.
+    skipped_no_detail = 0
+    skipped_below_gate = 0
+    skipped_no_author = 0
+    skipped_no_external = 0
+    skipped_below_threshold = 0
     for ref in pr_refs.values():
-        detail, hit_limit_or_error = _fetch_pr_detail(
-            github_repo, ref.number, no_cache=no_cache,
-        )
-        if hit_limit_or_error:
+        # Per-PR try/except: a malformed payload (KeyError /
+        # ValueError / AttributeError post-gh_api) on one PR must not
+        # destroy the signals computed for prior PRs in the loop.
+        # The outer pipeline's broad except still catches anything
+        # we miss, but isolating per-PR limits blast radius to one
+        # signal instead of the whole extractor.
+        try:
+            sig = _build_density_signal_for_pr(
+                ref,
+                github_repo=github_repo,
+                no_cache=no_cache,
+                density_threshold=density_threshold,
+                warning_multiplier=warning_multiplier,
+                min_lines_changed=min_lines_changed,
+            )
+        except (KeyError, ValueError, AttributeError, TypeError) as e:
+            logger.warning(
+                "PR_REVIEW_COMMENT_DENSITY: malformed payload for PR #%d "
+                "(%s); marking Tier 3 degraded",
+                ref.number, type(e).__name__,
+            )
             degraded = True
             continue
-        if detail is None:
+        if sig is _PR_SKIPPED_DEGRADED:
+            degraded = True
             continue
-        lines_changed = int(detail.get("additions") or 0) + int(
-            detail.get("deletions") or 0,
-        )
-        if lines_changed < min_lines_changed:
+        if sig is _PR_SKIPPED_NO_DETAIL:
+            skipped_no_detail += 1
             continue
-        author = str(((detail.get("user") or {}).get("login")) or "")
+        if sig is _PR_SKIPPED_BELOW_GATE:
+            skipped_below_gate += 1
+            continue
+        if sig is _PR_SKIPPED_NO_AUTHOR:
+            skipped_no_author += 1
+            continue
+        if sig is _PR_SKIPPED_NO_EXTERNAL:
+            skipped_no_external += 1
+            continue
+        if sig is _PR_SKIPPED_BELOW_THRESHOLD:
+            skipped_below_threshold += 1
+            continue
+        if isinstance(sig, DiagnosticSignal):
+            signals.append(sig)
 
-        external_count, hit_limit_or_error = _fetch_external_comment_count(
-            github_repo, ref.number, author=author, no_cache=no_cache,
+    if any((
+        skipped_no_detail, skipped_below_gate, skipped_no_author,
+        skipped_no_external, skipped_below_threshold,
+    )):
+        logger.info(
+            "PR_REVIEW_COMMENT_DENSITY: skipped PRs by reason — "
+            "no_detail=%d, below_lines_gate=%d, no_author=%d, "
+            "no_external_comments=%d, below_density_threshold=%d",
+            skipped_no_detail, skipped_below_gate, skipped_no_author,
+            skipped_no_external, skipped_below_threshold,
         )
-        if hit_limit_or_error:
-            degraded = True
-            continue
-        if external_count <= 0:
-            continue
-        density = external_count / max(lines_changed, 1)
-        if density < density_threshold:
-            continue
-        # Prefer the freshly-fetched title (the PR-detail call gives
-        # us the current title, while the helper's _PRRef.title may
-        # be stale due to setdefault first-write-wins across multiple
-        # commit/{sha}/pulls responses).
-        title = str(detail.get("title") or ref.title)
-        url = str(detail.get("html_url") or ref.url)
-        signals.append(_build_density_signal(
-            pr_number=ref.number,
-            pr_title=title,
-            pr_url=url,
-            author=author,
-            additions=int(detail.get("additions") or 0),
-            deletions=int(detail.get("deletions") or 0),
-            external_count=external_count,
-            density=density,
-            density_threshold=density_threshold,
-            warning_multiplier=warning_multiplier,
-        ))
 
     return signals, degraded
+
+
+# Sentinel return values from :func:`_build_density_signal_for_pr`
+# distinguishing skip reasons from a real signal. Using object()
+# sentinels keeps the per-PR function's return type compact (no
+# tuple gymnastics) while letting the caller increment the right
+# counter. ``_PR_SKIPPED_DEGRADED`` is distinct so the caller flips
+# tier3_degraded; the others are clean skips.
+_PR_SKIPPED_DEGRADED = object()
+_PR_SKIPPED_NO_DETAIL = object()
+_PR_SKIPPED_BELOW_GATE = object()
+_PR_SKIPPED_NO_AUTHOR = object()
+_PR_SKIPPED_NO_EXTERNAL = object()
+_PR_SKIPPED_BELOW_THRESHOLD = object()
+
+
+def _build_density_signal_for_pr(
+    ref: _PRRef,
+    *,
+    github_repo: GitHubRepo,
+    no_cache: bool,
+    density_threshold: float,
+    warning_multiplier: float,
+    min_lines_changed: int,
+) -> DiagnosticSignal | object:
+    """Evaluate one PR for the density signal; return either a
+    :class:`DiagnosticSignal` or one of the ``_PR_SKIPPED_*`` /
+    ``_PR_SKIPPED_DEGRADED`` sentinels so the caller can attribute
+    skip reasons for the end-of-extractor observability log.
+
+    Extracted from :func:`extract_pr_review_comment_density_signals`
+    so the per-PR try/except (which catches KeyError /
+    AttributeError / TypeError / ValueError) wraps a single
+    function call rather than the entire per-PR body — keeps the
+    error-isolation point obvious and the counter accumulation
+    branching shallow.
+    """
+    detail, hit_limit_or_error = _fetch_pr_detail(
+        github_repo, ref.number, no_cache=no_cache,
+    )
+    if hit_limit_or_error:
+        return _PR_SKIPPED_DEGRADED
+    if not isinstance(detail, dict):
+        return _PR_SKIPPED_NO_DETAIL
+
+    lines_changed = _safe_int(detail.get("additions")) + _safe_int(
+        detail.get("deletions"),
+    )
+    # Two-step gate. ``min_lines_changed`` is the user-configurable
+    # noise floor; ``lines_changed == 0`` is an absolute math guard
+    # (avoids the misleading ``count / max(0, 1) = count`` result for
+    # pure-merge / pure-revert PRs when a caller sets
+    # ``min_lines_changed=0``).
+    if lines_changed == 0:
+        return _PR_SKIPPED_BELOW_GATE
+    if lines_changed < min_lines_changed:
+        return _PR_SKIPPED_BELOW_GATE
+
+    user_obj = detail.get("user")
+    author = ""
+    if isinstance(user_obj, dict):
+        login = user_obj.get("login")
+        if isinstance(login, str):
+            author = login
+    if not author:
+        # We need the PR author to filter self-reviews; without it
+        # the signal would either silently count the author's own
+        # comments as external (over-firing) or be unable to
+        # distinguish at all. Skip is the right call — the docstring
+        # promises the signal measures EXTERNAL reviewer effort.
+        return _PR_SKIPPED_NO_AUTHOR
+
+    external_count, hit_limit_or_error = _fetch_external_comment_count(
+        github_repo, ref.number, author=author, no_cache=no_cache,
+    )
+    if hit_limit_or_error:
+        return _PR_SKIPPED_DEGRADED
+    if external_count <= 0:
+        return _PR_SKIPPED_NO_EXTERNAL
+
+    density = external_count / lines_changed
+    if density < density_threshold:
+        return _PR_SKIPPED_BELOW_THRESHOLD
+
+    # Title refresh: use the freshly-fetched title when the PR-detail
+    # call actually returned one (use explicit key+truthiness check
+    # rather than ``or`` so a genuinely empty detail title doesn't
+    # silently fall through to the stale ``ref.title``).
+    raw_title = detail.get("title")
+    if isinstance(raw_title, str) and raw_title:
+        title = raw_title
+    else:
+        title = ref.title
+    raw_url = detail.get("html_url")
+    if isinstance(raw_url, str) and raw_url:
+        url = raw_url
+    else:
+        url = ref.url
+    return _build_density_signal(
+        pr_number=ref.number,
+        pr_title=title,
+        pr_url=url,
+        author=author,
+        additions=_safe_int(detail.get("additions")),
+        deletions=_safe_int(detail.get("deletions")),
+        external_count=external_count,
+        density=density,
+        density_threshold=density_threshold,
+        warning_multiplier=warning_multiplier,
+    )
+
+
+def _safe_int(value: Any) -> int:
+    """Coerce a JSON-derived value to int, returning 0 on anything
+    that can't be coerced cleanly. Tolerates int, float, str (digit),
+    bool, and None; rejects exotic shapes (list, dict, non-digit
+    string) by returning 0 rather than raising. The bool case maps
+    True→1 / False→0, matching ``int()`` semantics, which is safe
+    because GitHub never returns bool for these numeric fields.
+    """
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        # Must come before ``isinstance(value, int)`` because
+        # bool subclasses int in Python.
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            try:
+                # "42.5" → 42 (truncate; matches int(float(...)))
+                return int(float(value))
+            except ValueError:
+                return 0
+    return 0
 
 
 def _build_session_windows(
@@ -400,7 +574,20 @@ def _enumerate_attributed_prs(
     signal's call path.
     """
     since = datetime.now().astimezone() - timedelta(days=lookback_days)
-    commits = _run_git_log(repo_dir, since=since)
+    commits, git_ok = _run_git_log(repo_dir, since=since)
+    if not git_ok:
+        # git subprocess failed (missing binary, timeout, non-repo
+        # dir). Pre-fix this returned ({}, {}, False) and the
+        # extractor reported a clean run with zero signals; users
+        # had no way to tell their Tier 3 setup was misconfigured.
+        # Flip degraded so the table-formatter banner and JSON
+        # envelope surface the failure.
+        logger.warning(
+            "%s: git log failed in %s; marking Tier 3 degraded "
+            "(install git, check repo, or use --repo OWNER/NAME)",
+            signal_name, repo_dir,
+        )
+        return {}, {}, True
     if not commits:
         return {}, {}, False
 
@@ -486,9 +673,20 @@ def _fetch_prs_for_commit(
         )
         return [], True
     if not isinstance(payload, list):
-        return [], False
+        # Malformed response — gh succeeded but the shape isn't a
+        # list when we expected one. Treat as degraded so the user
+        # sees that data was lost, rather than silently dropping
+        # this SHA's PRs.
+        logger.warning(
+            "%s: commits/%s/pulls returned non-list payload; "
+            "marking Tier 3 degraded",
+            signal_name, sha,
+        )
+        return [], True
     refs: list[_PRRef] = []
     for item in payload:
+        if not isinstance(item, dict):
+            continue
         try:
             refs.append(_PRRef(
                 number=int(item["number"]),
@@ -539,12 +737,41 @@ def _fetch_pr_first_commit_sha(
             pr_number, type(e).__name__,
         )
         return None, True
-    if not isinstance(commits_payload, list) or not commits_payload:
-        return None, False
-    try:
-        return str(commits_payload[0]["sha"]), False
-    except (KeyError, TypeError):
-        return None, False
+    if not isinstance(commits_payload, list):
+        logger.warning(
+            "CI_FAILURE_FIRST_PUSH: pulls/%d/commits returned non-list "
+            "payload; marking Tier 3 degraded",
+            pr_number,
+        )
+        return None, True
+    if not commits_payload:
+        # An empty commit list for a real PR is structurally
+        # malformed (every PR has at least one commit by definition).
+        # Treat as degraded — the alternative is silently dropping
+        # the PR with no signal to the user that something is off.
+        logger.warning(
+            "CI_FAILURE_FIRST_PUSH: pulls/%d/commits returned empty; "
+            "marking Tier 3 degraded",
+            pr_number,
+        )
+        return None, True
+    first = commits_payload[0]
+    if not isinstance(first, dict):
+        logger.warning(
+            "CI_FAILURE_FIRST_PUSH: pulls/%d/commits[0] is not a dict; "
+            "marking Tier 3 degraded",
+            pr_number,
+        )
+        return None, True
+    sha = first.get("sha")
+    if not isinstance(sha, str) or not sha:
+        logger.warning(
+            "CI_FAILURE_FIRST_PUSH: pulls/%d/commits[0].sha missing; "
+            "marking Tier 3 degraded",
+            pr_number,
+        )
+        return None, True
+    return sha, False
 
 
 def _fetch_failing_contexts(
@@ -597,7 +824,8 @@ def _fetch_failing_contexts(
 
     if isinstance(status_payload, dict):
         combined = status_payload.get("state")
-        statuses = status_payload.get("statuses") or []
+        statuses_raw = status_payload.get("statuses") or []
+        statuses = [s for s in statuses_raw if isinstance(s, dict)]
         if combined in _CI_FAILURE_STATES:
             failing = [
                 {"context": str(s.get("context") or ""),
@@ -747,8 +975,28 @@ def _fetch_pr_detail(
         )
         return None, True
     if not isinstance(payload, dict):
-        return None, False
+        logger.warning(
+            "PR_REVIEW_COMMENT_DENSITY: pulls/%d returned non-dict "
+            "payload; marking Tier 3 degraded",
+            pr_number,
+        )
+        return None, True
     return payload, False
+
+
+# Max page size accepted by GitHub for list endpoints. Bumping from
+# the default 30 to 100 covers the vast majority of PRs in a single
+# call; the explicit page-cursor loop below handles the remainder.
+_GH_PER_PAGE_MAX = 100
+
+# Pagination ceiling per PR. Each page is one cached API call; even
+# 100 pages × 100 comments = 10,000 inline comments per PR is far
+# beyond any realistic review effort. The cap prevents a degenerate
+# response (server keeps returning a non-empty page indefinitely)
+# from spinning forever and exhausting the rate-limit budget. A PR
+# that legitimately exceeds it would have its tail truncated; the
+# WARNING surfaces the truncation to the operator.
+_COMMENT_PAGE_CAP = 100
 
 
 def _fetch_external_comment_count(
@@ -761,52 +1009,107 @@ def _fetch_external_comment_count(
     """Count inline review comments on a PR, excluding self-reviews.
 
     The ``author`` parameter is the PR author's GitHub login;
-    comments whose ``user.login`` equals it are filtered out so the
-    density signal measures *external* review effort rather than the
-    author's own self-annotation.
+    comments whose ``user.login`` matches (case-insensitive — GitHub
+    logins are case-insensitive in practice, so a payload returning
+    ``"Bob"`` and a comment by ``"bob"`` refer to the same person)
+    are filtered out so the density signal measures *external*
+    review effort rather than the author's own self-annotation.
 
-    Empty / unrecognized author (None / empty string) disables the
-    filter — better to count everyone than to silently exclude
-    nobody when we couldn't resolve the author.
+    Pre-fix the helper had three correctness gaps the
+    code-review pass surfaced:
 
-    Returns ``(count, hit_limit_or_error)``. The boolean covers both
-    rate-limit and recoverable-error paths.
+    1. **No pagination** — gh's default 30-per-page cap silently
+       truncated heavily-reviewed PRs (the signal's primary
+       targets). Fixed by looping pages with ``per_page=100`` until
+       a partial page is returned.
+    2. **Case-sensitive comparison** — ``"alice" == "Alice"`` was
+       False, letting self-reviews escape. Fixed by ``casefold()``.
+    3. **Non-dict ``item['user']`` raised AttributeError** that
+       escaped ``_GH_RECOVERABLE`` and crashed the whole extractor.
+       Fixed by explicit ``isinstance(user_obj, dict)`` guard.
+
+    Returns ``(count, hit_limit_or_error)``. The boolean covers
+    rate-limit, recoverable gh error, and malformed-payload paths
+    so the caller flips ``tier3_degraded`` instead of silently
+    dropping data.
     """
     endpoint = (
         f"repos/{github_repo.owner}/{github_repo.repo}"
         f"/pulls/{pr_number}/comments"
     )
     jq = "[.[] | {user: {login}}]"
-    try:
-        payload = gh_api(
-            endpoint,
-            jq_filter=jq,
-            cache_ttl=TTL_OPEN_PR_OR_CI,
-            no_cache=no_cache,
-        )
-    except RateLimitedError as e:
-        _log_rate_limit(e, signal_name="PR_REVIEW_COMMENT_DENSITY")
-        return 0, True
-    except _GH_RECOVERABLE as e:
-        logger.warning(
-            "PR_REVIEW_COMMENT_DENSITY: pulls/%d/comments failed (%s); "
-            "marking Tier 3 degraded",
-            pr_number, type(e).__name__,
-        )
-        return 0, True
-    if not isinstance(payload, list):
-        return 0, False
+    # Normalize author once for case-insensitive comparison.
+    author_cf = author.casefold() if author else ""
     count = 0
-    for item in payload:
-        if not isinstance(item, dict):
-            continue
-        login = str(((item.get("user") or {}).get("login")) or "")
-        if author and login == author:
-            # Self-review: the PR author commenting on their own
-            # diff. The density signal measures EXTERNAL reviewer
-            # effort, so skip.
-            continue
-        count += 1
+    for page in range(1, _COMMENT_PAGE_CAP + 1):
+        try:
+            payload = gh_api(
+                endpoint,
+                jq_filter=jq,
+                cache_ttl=TTL_OPEN_PR_OR_CI,
+                no_cache=no_cache,
+                query_params={
+                    "per_page": str(_GH_PER_PAGE_MAX),
+                    "page": str(page),
+                },
+            )
+        except RateLimitedError as e:
+            _log_rate_limit(e, signal_name="PR_REVIEW_COMMENT_DENSITY")
+            return count, True
+        except _GH_RECOVERABLE as e:
+            logger.warning(
+                "PR_REVIEW_COMMENT_DENSITY: pulls/%d/comments "
+                "page=%d failed (%s); marking Tier 3 degraded",
+                pr_number, page, type(e).__name__,
+            )
+            return count, True
+        if not isinstance(payload, list):
+            logger.warning(
+                "PR_REVIEW_COMMENT_DENSITY: pulls/%d/comments "
+                "page=%d returned non-list payload; marking "
+                "Tier 3 degraded",
+                pr_number, page,
+            )
+            return count, True
+        if not payload:
+            break
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            # ``user`` can be a dict, None, or (in pathological
+            # responses) a non-dict scalar. The explicit isinstance
+            # guard prevents AttributeError when a string slipped
+            # through; that error would otherwise escape
+            # ``_GH_RECOVERABLE`` and crash the whole extractor
+            # (losing all later PRs' signals).
+            user_obj = item.get("user")
+            if not isinstance(user_obj, dict):
+                # Malformed-comment shape. Count as external — the
+                # alternative (skip) would systematically under-count
+                # when GitHub anonymizes deleted users.
+                count += 1
+                continue
+            login_raw = user_obj.get("login")
+            login = (
+                login_raw.casefold()
+                if isinstance(login_raw, str)
+                else ""
+            )
+            if author_cf and login == author_cf:
+                # Self-review: the PR author commenting on their own
+                # diff (case-insensitive). The density signal
+                # measures EXTERNAL reviewer effort, so skip.
+                continue
+            count += 1
+        # Partial page = no more results to fetch.
+        if len(payload) < _GH_PER_PAGE_MAX:
+            break
+    else:
+        logger.warning(
+            "PR_REVIEW_COMMENT_DENSITY: pulls/%d/comments hit "
+            "pagination cap (%d pages × %d items); truncating",
+            pr_number, _COMMENT_PAGE_CAP, _GH_PER_PAGE_MAX,
+        )
     return count, False
 
 

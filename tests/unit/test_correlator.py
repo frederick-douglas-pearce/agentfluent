@@ -1022,6 +1022,32 @@ class TestPRReviewCommentDensityRule:
         assert len(recs) == 1
         assert "density: ?" in recs[0].message
 
+    def test_missing_comments_and_lines_render_unknown_sentinels(self) -> None:
+        # Defensive guards must cover comments AND lines too —
+        # pre-fix only density and pr_number had sentinels, so a
+        # signal missing both rendered 'received None review
+        # comment(s) across None line(s) changed' (literal None
+        # in the observation text).
+        sig = DiagnosticSignal(
+            signal_type=SignalType.PR_REVIEW_COMMENT_DENSITY,
+            severity=Severity.INFO,
+            agent_type=None,
+            invocation_id=None,
+            message="malformed",
+            detail={
+                "pr_number": 1,
+                "pr_title": "x",
+                # No external_comment_count, no lines_changed.
+                "density": 0.15,
+            },
+        )
+        recs = correlate([sig])
+        assert len(recs) == 1
+        msg = recs[0].message
+        assert "None" not in msg
+        assert "(unknown) review comment(s)" in msg
+        assert "(unknown) line(s) changed" in msg
+
 
 class TestRelpath:
     """``_relpath`` rewrites ``$HOME`` to ``~`` in message text (#340)."""

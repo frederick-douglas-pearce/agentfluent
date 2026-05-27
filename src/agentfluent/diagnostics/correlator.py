@@ -983,14 +983,20 @@ class PRReviewCommentDensityRule(_QualityRule):
         )
         pr_title = d.get("pr_title") or "(no title)"
         comments = d.get("external_comment_count")
+        comments_disp = (
+            f"{comments}" if isinstance(comments, int) else "(unknown)"
+        )
         lines = d.get("lines_changed")
+        lines_disp = (
+            f"{lines}" if isinstance(lines, int) else "(unknown)"
+        )
         density = d.get("density")
         density_disp = (
             f"{density:.2f}" if isinstance(density, (int, float)) else "?"
         )
         observation = (
-            f"PR {pr_number_disp} ({pr_title!r}) received {comments} review "
-            f"comment(s) across {lines} line(s) changed "
+            f"PR {pr_number_disp} ({pr_title!r}) received {comments_disp} "
+            f"review comment(s) across {lines_disp} line(s) changed "
             f"(density: {density_disp})."
         )
         reason = (

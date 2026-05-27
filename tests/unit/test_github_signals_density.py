@@ -83,20 +83,41 @@ def _completed(stdout: str = "", returncode: int = 0) -> Any:
 
 
 class _GhApiStub:
-    """Same prefix-match-with-AssertionError-on-unknown stub as #400's
-    test file. Longest-prefix wins so a specific PR endpoint shadows
-    a shorter catch-all (intentionally we use no catch-alls)."""
+    """Prefix-match endpoint stub with paging support.
+
+    - ``responses[prefix]``: single canned response returned for every
+      call matching ``prefix``.
+    - ``paged_responses[prefix]``: list of per-page payloads consumed
+      in order; the stub inspects the ``query_params['page']`` kwarg
+      to disambiguate. After all pages are returned, subsequent
+      calls return ``[]`` (signals end-of-pagination).
+    - ``rate_limit_after[prefix]``: raise ``RateLimitedError`` after
+      this many calls have matched ``prefix``.
+    - ``calls`` / ``call_kwargs``: per-call audit log so tests can
+      assert pagination/query params reached ``gh_api``.
+
+    Longest-prefix wins for both response tables (a more specific
+    endpoint shadows a less specific one).
+    """
 
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.call_kwargs: list[dict[str, Any]] = []
         self.responses: dict[str, Any] = {}
+        self.paged_responses: dict[str, list[Any]] = {}
         self.rate_limit_after: dict[str, int] = {}
         self._counts: dict[str, int] = {}
+        self._page_indices: dict[str, int] = {}
 
-    def __call__(self, endpoint: str, **_kwargs: Any) -> Any:
+    def __call__(self, endpoint: str, **kwargs: Any) -> Any:
         self.calls.append(endpoint)
+        self.call_kwargs.append(kwargs)
+        # Longest-prefix match across both response tables, so a
+        # paged_responses key that exactly matches an endpoint
+        # shadows a more general responses entry.
+        all_prefixes = set(self.responses) | set(self.paged_responses)
         matches = sorted(
-            (p for p in self.responses if endpoint.startswith(p)),
+            (p for p in all_prefixes if endpoint.startswith(p)),
             key=len,
             reverse=True,
         )
@@ -111,6 +132,15 @@ class _GhApiStub:
                 reset_at=datetime.now(UTC) + timedelta(seconds=60),
                 endpoint=endpoint,
             )
+        if prefix in self.paged_responses:
+            idx = self._page_indices.get(prefix, 0)
+            pages = self.paged_responses[prefix]
+            self._page_indices[prefix] = idx + 1
+            if idx >= len(pages):
+                # Pagination exhausted — return empty list so the
+                # caller's loop terminates.
+                return []
+            return pages[idx]
         return self.responses[prefix]
 
 
@@ -494,3 +524,581 @@ class TestEarlyExits:
         assert signals == []
         assert degraded is False
         assert stub.calls == []
+
+
+class TestPagination:
+    """The /pulls/{N}/comments endpoint must be paginated; pre-fix
+    the extractor used gh's default 30-per-page cap and silently
+    truncated PRs with >30 inline review comments — exactly the
+    PRs the signal is designed to surface."""
+
+    def test_pagination_loops_until_partial_page(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        repo_dir: Path,
+        github_repo: GitHubRepo,
+    ) -> None:
+        # 250 inline comments across 100 lines: pre-fix capped at
+        # 30 (density 0.30 → INFO). Post-fix counts all 250 across
+        # 3 pages (density 2.50 → WARNING).
+        sha = "shaPAG1"
+        session = _wire_session_with_commit(monkeypatch, sha=sha)
+        stub = _GhApiStub()
+        stub.responses = {
+            f"repos/o/r/commits/{sha}/pulls":
+                [{"number": 1, "title": "x", "html_url": "url"}],
+            "repos/o/r/pulls/1": {
+                "additions": 60, "deletions": 40,
+                "user": {"login": "bob"},
+                "title": "x", "html_url": "url",
+            },
+        }
+        stub.paged_responses = {
+            "repos/o/r/pulls/1/comments": [
+                # Page 1: 100 comments (max page size).
+                [{"user": {"login": "alice"}}] * 100,
+                # Page 2: 100 comments (still max).
+                [{"user": {"login": "alice"}}] * 100,
+                # Page 3: 50 comments (partial → break).
+                [{"user": {"login": "alice"}}] * 50,
+            ],
+        }
+        monkeypatch.setattr(
+            "agentfluent.diagnostics.github_signals.gh_api", stub,
+        )
+        signals, degraded = extract_pr_review_comment_density_signals(
+            [session], github_repo=github_repo, repo_dir=repo_dir,
+        )
+        assert degraded is False
+        assert len(signals) == 1
+        assert signals[0].detail["external_comment_count"] == 250
+        assert signals[0].detail["density"] == pytest.approx(2.5)
+        assert signals[0].severity == Severity.WARNING
+
+        # Verify gh_api received per_page=100 + sequential page=
+        # values, not just one call with defaults.
+        comment_kwargs = [
+            kw for c, kw in zip(stub.calls, stub.call_kwargs)
+            if c == "repos/o/r/pulls/1/comments"
+        ]
+        assert len(comment_kwargs) == 3
+        pages_requested = [
+            kw.get("query_params", {}).get("page") for kw in comment_kwargs
+        ]
+        assert pages_requested == ["1", "2", "3"]
+        per_page_values = {
+            kw.get("query_params", {}).get("per_page") for kw in comment_kwargs
+        }
+        assert per_page_values == {"100"}
+
+    def test_pagination_stops_at_partial_page(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        repo_dir: Path,
+        github_repo: GitHubRepo,
+    ) -> None:
+        # A 50-comment PR fits in one partial page (< per_page=100),
+        # so the helper stops after the first call.
+        sha = "shaPAG2"
+        session = _wire_session_with_commit(monkeypatch, sha=sha)
+        stub = _GhApiStub()
+        stub.responses = {
+            f"repos/o/r/commits/{sha}/pulls":
+                [{"number": 1, "title": "x", "html_url": "url"}],
+            "repos/o/r/pulls/1": {
+                "additions": 60, "deletions": 40,
+                "user": {"login": "bob"},
+                "title": "x", "html_url": "url",
+            },
+        }
+        stub.paged_responses = {
+            "repos/o/r/pulls/1/comments": [
+                [{"user": {"login": "alice"}}] * 50,
+            ],
+        }
+        monkeypatch.setattr(
+            "agentfluent.diagnostics.github_signals.gh_api", stub,
+        )
+        signals, degraded = extract_pr_review_comment_density_signals(
+            [session], github_repo=github_repo, repo_dir=repo_dir,
+        )
+        assert degraded is False
+        assert len(signals) == 1
+        assert signals[0].detail["external_comment_count"] == 50
+        # Only one /comments call — the partial-page early-exit
+        # avoids the wasted second-page roundtrip.
+        comment_calls = [c for c in stub.calls if "/comments" in c]
+        assert len(comment_calls) == 1
+
+
+class TestMalformedPayloads:
+    """Wrapper helpers must flip degraded (not silently return)
+    when gh succeeds but the payload shape is unexpected."""
+
+    def test_non_dict_user_in_comments_does_not_crash(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        repo_dir: Path,
+        github_repo: GitHubRepo,
+    ) -> None:
+        # `(item.get('user') or {}).get('login')` pre-fix raised
+        # AttributeError when user was a non-dict value (e.g.,
+        # string). The exception was NOT in _GH_RECOVERABLE, so it
+        # crashed the extractor mid-loop. Post-fix: isinstance
+        # guards, malformed entries counted as external (the
+        # liberal-count design choice).
+        sha = "shaMAL"
+        session = _wire_session_with_commit(monkeypatch, sha=sha)
+        stub = _GhApiStub()
+        stub.responses = {
+            f"repos/o/r/commits/{sha}/pulls":
+                [{"number": 1, "title": "x", "html_url": "url"}],
+            "repos/o/r/pulls/1": {
+                "additions": 60, "deletions": 40,
+                "user": {"login": "bob"},
+                "title": "x", "html_url": "url",
+            },
+            # Mixed shapes: dict, string (the trap), null, missing
+            # user, valid external dict.
+            "repos/o/r/pulls/1/comments": [
+                {"user": {"login": "bob"}},      # self-review → skip
+                {"user": "stringly-typed"},      # would crash pre-fix
+                {"user": None},                  # null user
+                {},                              # missing user key
+                {"user": {"login": "alice"}},    # external
+                {"user": {"login": "carol"}},    # external
+            ],
+        }
+        monkeypatch.setattr(
+            "agentfluent.diagnostics.github_signals.gh_api", stub,
+        )
+        signals, degraded = extract_pr_review_comment_density_signals(
+            [session], github_repo=github_repo, repo_dir=repo_dir,
+        )
+        assert degraded is False
+        # Self-review (bob): 1 skip. Stringly-typed, None-user,
+        # missing-user: 3 counted as external (liberal count to
+        # avoid systematic under-count when GitHub anonymizes
+        # deleted users). Plus alice and carol: 2 real external.
+        # Total external = 5; density = 5/100 = 0.05 < 0.1 → no signal.
+        assert signals == []
+
+    def test_non_dict_user_in_pr_detail_does_not_crash(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        repo_dir: Path,
+        github_repo: GitHubRepo,
+    ) -> None:
+        # Same trap on the PR-detail call site. detail.get("user")
+        # is a non-dict scalar — pre-fix: AttributeError, crash;
+        # post-fix: author resolves to empty string → skip the PR
+        # with NO_AUTHOR (no signal emitted for that PR).
+        sha = "shaMAL2"
+        session = _wire_session_with_commit(monkeypatch, sha=sha)
+        stub = _GhApiStub()
+        stub.responses = {
+            f"repos/o/r/commits/{sha}/pulls":
+                [{"number": 1, "title": "x", "html_url": "url"}],
+            "repos/o/r/pulls/1": {
+                "additions": 60, "deletions": 40,
+                "user": "ghost-string",  # the trap
+                "title": "x", "html_url": "url",
+            },
+        }
+        # No /comments stub — the PR should be skipped at the
+        # no-author gate before the comments fetch.
+        monkeypatch.setattr(
+            "agentfluent.diagnostics.github_signals.gh_api", stub,
+        )
+        signals, degraded = extract_pr_review_comment_density_signals(
+            [session], github_repo=github_repo, repo_dir=repo_dir,
+        )
+        assert signals == []
+        assert degraded is False
+        # The comments endpoint must NOT have been called — the
+        # no-author skip short-circuits before it.
+        assert not any("/comments" in c for c in stub.calls)
+
+    def test_non_dict_pr_detail_marks_degraded(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        repo_dir: Path,
+        github_repo: GitHubRepo,
+    ) -> None:
+        # gh_api succeeded but returned a non-dict (jq quirk, API
+        # surface change). Pre-fix returned (None, False) — silent
+        # drop with no degraded flag. Post-fix: degraded=True so
+        # the user sees data was lost.
+        sha = "shaMAL3"
+        session = _wire_session_with_commit(monkeypatch, sha=sha)
+        stub = _GhApiStub()
+        stub.responses = {
+            f"repos/o/r/commits/{sha}/pulls":
+                [{"number": 1, "title": "x", "html_url": "url"}],
+            "repos/o/r/pulls/1": "not-a-dict",  # malformed response
+        }
+        monkeypatch.setattr(
+            "agentfluent.diagnostics.github_signals.gh_api", stub,
+        )
+        signals, degraded = extract_pr_review_comment_density_signals(
+            [session], github_repo=github_repo, repo_dir=repo_dir,
+        )
+        assert signals == []
+        assert degraded is True
+
+
+class TestCaseInsensitiveSelfReview:
+    """GitHub logins are logically case-insensitive; mixed-case
+    self-reviews must NOT escape the filter."""
+
+    def test_mixed_case_author_and_commenter_treated_as_self(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        repo_dir: Path,
+        github_repo: GitHubRepo,
+    ) -> None:
+        # PR author 'Alice' (canonical), 12 comments from 'alice'
+        # (lowercased). Pre-fix: case-sensitive == treats them as
+        # different users → all 12 count as external → density 0.12
+        # INFO. Post-fix: casefold compare → all 12 self-reviews
+        # filtered → no signal.
+        sha = "shaCAS"
+        session = _wire_session_with_commit(monkeypatch, sha=sha)
+        stub = _GhApiStub()
+        stub.responses = {
+            f"repos/o/r/commits/{sha}/pulls":
+                [{"number": 1, "title": "x", "html_url": "url"}],
+            "repos/o/r/pulls/1": {
+                "additions": 60, "deletions": 40,
+                "user": {"login": "Alice"},  # canonical case
+                "title": "x", "html_url": "url",
+            },
+            "repos/o/r/pulls/1/comments":
+                [{"user": {"login": "alice"}}] * 12,  # lowercased
+        }
+        monkeypatch.setattr(
+            "agentfluent.diagnostics.github_signals.gh_api", stub,
+        )
+        signals, degraded = extract_pr_review_comment_density_signals(
+            [session], github_repo=github_repo, repo_dir=repo_dir,
+        )
+        assert signals == []
+        assert degraded is False
+
+
+class TestNoAuthorSkip:
+    """When PR author can't be resolved, the signal must skip the
+    PR (not silently disable the filter and count author comments
+    as external)."""
+
+    def test_null_user_skips_pr(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        repo_dir: Path,
+        github_repo: GitHubRepo,
+    ) -> None:
+        sha = "shaAUTH"
+        session = _wire_session_with_commit(monkeypatch, sha=sha)
+        stub = _GhApiStub()
+        stub.responses = {
+            f"repos/o/r/commits/{sha}/pulls":
+                [{"number": 1, "title": "x", "html_url": "url"}],
+            "repos/o/r/pulls/1": {
+                "additions": 60, "deletions": 40,
+                "user": None,  # deleted account / ghost
+                "title": "x", "html_url": "url",
+            },
+        }
+        # No /comments stub — the no-author skip is before the
+        # comments fetch; if the skip is broken the stub's
+        # AssertionError safety net would trigger.
+        monkeypatch.setattr(
+            "agentfluent.diagnostics.github_signals.gh_api", stub,
+        )
+        signals, degraded = extract_pr_review_comment_density_signals(
+            [session], github_repo=github_repo, repo_dir=repo_dir,
+        )
+        assert signals == []
+        assert degraded is False
+        assert not any("/comments" in c for c in stub.calls)
+
+
+class TestGitFailureDegrades:
+    """When git itself fails (binary missing, timeout, non-repo
+    dir), the helper must flip degraded so the user sees that
+    Tier 3 was incomplete, not a clean zero-signal run."""
+
+    def test_git_log_failure_marks_degraded(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        repo_dir: Path,
+        github_repo: GitHubRepo,
+    ) -> None:
+        session_end = datetime.now(UTC) - timedelta(hours=1)
+        session = _session(end=session_end)
+
+        # Simulate git not on PATH: subprocess.run raises FileNotFoundError.
+        def fake_run(*_a: Any, **_kw: Any) -> Any:
+            raise FileNotFoundError("no git")
+
+        monkeypatch.setattr(
+            "agentfluent.diagnostics._git_helpers.subprocess.run", fake_run,
+        )
+        stub = _GhApiStub()
+        monkeypatch.setattr(
+            "agentfluent.diagnostics.github_signals.gh_api", stub,
+        )
+        signals, degraded = extract_pr_review_comment_density_signals(
+            [session], github_repo=github_repo, repo_dir=repo_dir,
+        )
+        assert signals == []
+        assert degraded is True
+        # No API calls — git failure short-circuits before any
+        # commits-to-PRs fetch.
+        assert stub.calls == []
+
+
+class TestThresholdValidation:
+    """Non-positive density_threshold disables severity tiering;
+    the extractor must reject it loudly rather than silently
+    flooding the user with WARNINGs."""
+
+    def test_zero_threshold_raises(
+        self,
+        repo_dir: Path,
+        github_repo: GitHubRepo,
+    ) -> None:
+        with pytest.raises(ValueError, match="must be > 0"):
+            extract_pr_review_comment_density_signals(
+                [], github_repo=github_repo, repo_dir=repo_dir,
+                density_threshold=0.0,
+            )
+
+    def test_negative_threshold_raises(
+        self,
+        repo_dir: Path,
+        github_repo: GitHubRepo,
+    ) -> None:
+        with pytest.raises(ValueError, match="must be > 0"):
+            extract_pr_review_comment_density_signals(
+                [], github_repo=github_repo, repo_dir=repo_dir,
+                density_threshold=-0.1,
+            )
+
+
+class TestZeroLinesGate:
+    """An explicit ``lines_changed == 0`` gate must short-circuit
+    even when the user-configurable ``min_lines_changed`` is 0 —
+    otherwise the divisor's ``max(0, 1) = 1`` defensive guard
+    produces a nonsense density of N comments per 0 lines."""
+
+    def test_pure_merge_pr_with_zero_lines_is_gated_even_with_min_zero(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        repo_dir: Path,
+        github_repo: GitHubRepo,
+    ) -> None:
+        sha = "shaZ"
+        session = _wire_session_with_commit(monkeypatch, sha=sha)
+        stub = _GhApiStub()
+        stub.responses = {
+            f"repos/o/r/commits/{sha}/pulls":
+                [{"number": 1, "title": "x", "html_url": "url"}],
+            "repos/o/r/pulls/1": {
+                "additions": 0, "deletions": 0,
+                "user": {"login": "bob"},
+                "title": "x", "html_url": "url",
+            },
+        }
+        # No /comments stub: the zero-lines gate must short-circuit
+        # before fetching comments. If broken, the AssertionError
+        # safety net catches the unexpected call.
+        monkeypatch.setattr(
+            "agentfluent.diagnostics.github_signals.gh_api", stub,
+        )
+        signals, degraded = extract_pr_review_comment_density_signals(
+            [session], github_repo=github_repo, repo_dir=repo_dir,
+            min_lines_changed=0,  # user lowers the gate
+        )
+        assert signals == []
+        assert degraded is False
+
+
+class TestPerPRErrorIsolation:
+    """A malformed payload on one PR must not destroy signals
+    computed for OTHER PRs in the same run."""
+
+    def test_one_pr_raises_others_still_emit(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        repo_dir: Path,
+        github_repo: GitHubRepo,
+    ) -> None:
+        session_end = datetime.now(UTC) - timedelta(hours=1)
+        session = _session(end=session_end)
+        sha = "shaERR"
+        commit_time = session_end - timedelta(minutes=5)
+        monkeypatch.setattr(
+            "agentfluent.diagnostics._git_helpers.subprocess.run",
+            _completed(_git_log_stdout([(sha, commit_time, "feat")])),
+        )
+        # Two PRs touched by the same commit.
+        stub = _GhApiStub()
+        stub.responses = {
+            f"repos/o/r/commits/{sha}/pulls": [
+                {"number": 1, "title": "bad", "html_url": "url1"},
+                {"number": 2, "title": "good", "html_url": "url2"},
+            ],
+            # PR #1: detail.additions is a list (jq quirk).
+            # `_safe_int` returns 0 for non-coercible values, so
+            # lines_changed = 0 + 0 = 0 → gated, NO signal. Per-PR
+            # try/except guards the iteration regardless.
+            "repos/o/r/pulls/1": {
+                "additions": ["broken"],  # genuinely bad shape
+                "deletions": ["broken"],
+                "user": {"login": "bob"},
+                "title": "bad", "html_url": "url1",
+            },
+            # PR #2: well-formed.
+            "repos/o/r/pulls/2": {
+                "additions": 60, "deletions": 40,
+                "user": {"login": "bob"},
+                "title": "good", "html_url": "url2",
+            },
+            "repos/o/r/pulls/2/comments":
+                [{"user": {"login": "alice"}}] * 15,  # 15/100 = 0.15
+        }
+        monkeypatch.setattr(
+            "agentfluent.diagnostics.github_signals.gh_api", stub,
+        )
+        signals, degraded = extract_pr_review_comment_density_signals(
+            [session], github_repo=github_repo, repo_dir=repo_dir,
+        )
+        # PR #2 still emits its signal (15 comments / 100 lines = 0.15).
+        assert len(signals) == 1
+        assert signals[0].detail["pr_number"] == 2
+
+
+class TestTitleRefreshFix:
+    """Title refresh uses explicit `isinstance + truthiness` check
+    rather than `or`, so a PR with genuinely empty title doesn't
+    silently fall through to the stale _PRRef.title."""
+
+    def test_empty_detail_title_falls_back_to_ref_title(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        repo_dir: Path,
+        github_repo: GitHubRepo,
+    ) -> None:
+        # Detail returns empty title; ref.title was set from the
+        # earlier commits/{sha}/pulls call. Behavior: fall back to
+        # ref.title since empty is unhelpful.
+        sha = "shaT"
+        session = _wire_session_with_commit(monkeypatch, sha=sha)
+        stub = _GhApiStub()
+        stub.responses = {
+            f"repos/o/r/commits/{sha}/pulls":
+                [{"number": 1, "title": "Cached title",
+                  "html_url": "https://github.com/o/r/pull/1"}],
+            "repos/o/r/pulls/1": {
+                "additions": 60, "deletions": 40,
+                "user": {"login": "bob"},
+                "title": "",  # detail title is empty
+                "html_url": "https://github.com/o/r/pull/1",
+            },
+            "repos/o/r/pulls/1/comments":
+                [{"user": {"login": "alice"}}] * 15,
+        }
+        monkeypatch.setattr(
+            "agentfluent.diagnostics.github_signals.gh_api", stub,
+        )
+        signals, degraded = extract_pr_review_comment_density_signals(
+            [session], github_repo=github_repo, repo_dir=repo_dir,
+        )
+        assert len(signals) == 1
+        # Falls back to ref.title since detail title was empty.
+        assert signals[0].detail["pr_title"] == "Cached title"
+
+
+class TestObservabilityCounters:
+    """Density extractor emits an INFO log summarizing PR skip
+    reasons. Pre-fix, all skips were silent — operators tuning
+    thresholds had no visibility into why PRs weren't firing."""
+
+    def test_skip_reasons_logged_at_end(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        repo_dir: Path,
+        github_repo: GitHubRepo,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        # Two PRs both below the lines gate.
+        session_end = datetime.now(UTC) - timedelta(hours=1)
+        session = _session(end=session_end)
+        sha = "shaOBS"
+        commit_time = session_end - timedelta(minutes=5)
+        monkeypatch.setattr(
+            "agentfluent.diagnostics._git_helpers.subprocess.run",
+            _completed(_git_log_stdout([(sha, commit_time, "feat")])),
+        )
+        stub = _GhApiStub()
+        stub.responses = {
+            f"repos/o/r/commits/{sha}/pulls": [
+                {"number": 1, "title": "x", "html_url": "url"},
+                {"number": 2, "title": "y", "html_url": "url"},
+            ],
+            "repos/o/r/pulls/1": {
+                "additions": 5, "deletions": 3,  # below 20-line gate
+                "user": {"login": "bob"},
+                "title": "x", "html_url": "url",
+            },
+            "repos/o/r/pulls/2": {
+                "additions": 3, "deletions": 4,  # below 20-line gate
+                "user": {"login": "bob"},
+                "title": "y", "html_url": "url",
+            },
+        }
+        monkeypatch.setattr(
+            "agentfluent.diagnostics.github_signals.gh_api", stub,
+        )
+        with caplog.at_level(
+            logging.INFO,
+            logger="agentfluent.diagnostics.github_signals",
+        ):
+            signals, degraded = extract_pr_review_comment_density_signals(
+                [session], github_repo=github_repo, repo_dir=repo_dir,
+            )
+        assert signals == []
+        assert degraded is False
+        # The summary INFO line must name the below-gate count.
+        log_text = "\n".join(r.message for r in caplog.records)
+        assert "below_lines_gate=2" in log_text
+
+
+class TestSafeInt:
+    """Verify the integer coercion helper doesn't raise on
+    unexpected types (the int(str_or_int or 0) pattern would
+    propagate ValueError to the pipeline's outer except)."""
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (0, 0),
+            (42, 42),
+            (None, 0),
+            (True, 1),
+            (False, 0),
+            ("0", 0),
+            ("42", 42),
+            ("42.7", 42),
+            ("not-a-number", 0),
+            ([], 0),
+            ({}, 0),
+            (42.7, 42),
+        ],
+    )
+    def test_safe_int(self, value: Any, expected: int) -> None:
+        from agentfluent.diagnostics.github_signals import _safe_int
+        assert _safe_int(value) == expected
