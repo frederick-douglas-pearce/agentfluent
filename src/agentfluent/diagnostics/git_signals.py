@@ -36,6 +36,7 @@ from agentfluent.diagnostics._git_helpers import (
     _GIT_LOG_FIELD_SEPARATOR,
     _GIT_LOG_FORMAT,
     _GIT_TIMEOUT_SEC,
+    DEFAULT_LOOKBACK_DAYS,
     _GitCommit,
     _parse_commits,
     _run_git_log,
@@ -51,29 +52,34 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Re-exports for back-compat — :mod:`agentfluent.diagnostics._git_helpers`
-# is the canonical home. Tests that imported these private symbols
-# from this module continue to work; new callers should import them
-# from ``_git_helpers`` directly.
+# is the canonical home for the moved git-log primitives. Tests that
+# imported these private symbols from this module continue to work;
+# new callers should import them from ``_git_helpers`` directly. Also
+# includes locally-defined private symbols (``_FeatFixPair``,
+# ``_find_feat_fix_pairs``, ``_FEAT_PATTERN``, ``_FIX_PATTERN``) that
+# tests import directly from this module.
 __all__ = [
     "DEFAULT_LOOKBACK_DAYS",
     "DEFAULT_PROXIMITY_DAYS",
+    "_FEAT_PATTERN",
+    "_FIX_PATTERN",
     "_GIT_LOG_COMMIT_SEPARATOR",
     "_GIT_LOG_FIELD_SEPARATOR",
     "_GIT_LOG_FORMAT",
     "_GIT_TIMEOUT_SEC",
+    "_FeatFixPair",
     "_GitCommit",
+    "_find_feat_fix_pairs",
     "_parse_commits",
     "_run_git_log",
     "extract_git_quality_signals",
 ]
 
-# Default lookback window for `git log --since`. A pair only counts as
-# "proximity" when feat and fix are within this many days of each other,
-# but we also need to cap how far back the initial scan reaches — pulling
-# the entire repo history on every run is wasteful and the signal value
-# decays fast with age.
+# Default proximity window for feat-fix pairing. A pair only counts
+# when feat and fix are within this many days of each other. The
+# lookback window (how far back the initial scan reaches) is shared
+# with Tier 3 via :data:`agentfluent.diagnostics._git_helpers.DEFAULT_LOOKBACK_DAYS`.
 DEFAULT_PROXIMITY_DAYS = 7
-DEFAULT_LOOKBACK_DAYS = 90
 
 # Match the ``feat:`` / ``fix:`` Conventional Commits prefix on the
 # commit subject. ``feat(scope):`` and ``feat!:`` both count. Other

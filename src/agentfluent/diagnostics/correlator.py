@@ -926,12 +926,19 @@ class CIFailureFirstPushRule(_QualityRule):
         self, signal: DiagnosticSignal,
     ) -> tuple[str, str, str]:
         d = signal.detail
+        # All four detail keys are populated by the extractor, but the
+        # correlator runs against any DiagnosticSignal carrying the
+        # CI_FAILURE_FIRST_PUSH type — including manually-constructed
+        # ones in tests and future emitters. Guard each key so a
+        # malformed signal still renders a coherent message instead of
+        # "PR #None ('(no title)') failed CI on first push (ci: failure)."
         pr_number = d.get("pr_number")
+        pr_number_disp = f"#{pr_number}" if pr_number is not None else "(unknown)"
         pr_title = d.get("pr_title") or "(no title)"
         context = d.get("primary_context") or "ci"
         state = d.get("primary_state") or "failure"
         observation = (
-            f"PR #{pr_number} ({pr_title!r}) failed CI on first push "
+            f"PR {pr_number_disp} ({pr_title!r}) failed CI on first push "
             f"({context}: {state})."
         )
         reason = (

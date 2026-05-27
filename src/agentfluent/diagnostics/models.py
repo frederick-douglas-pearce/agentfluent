@@ -591,18 +591,23 @@ class DiagnosticsResult(BaseModel):
     pipeline (#189). Empty list when sklearn isn't installed or no
     cluster met ``min_cluster_size``."""
 
-    # v0.8: added tier3_degraded (#399 infrastructure). Reserved for
-    # Tier 3 signal extractors (#400, #401) to flip when a `gh api`
-    # call returns 403/429 with a rate-limit signature. The
-    # infrastructure story (#399) ships the field, the
-    # ``RateLimitedError`` exception in :mod:`agentfluent.github`, and
-    # the wiring through :func:`run_diagnostics`; the actual
-    # producer/consumer pairing lands with the signal extractors.
+    # v0.8: added tier3_degraded (#399 infrastructure, #400 first
+    # producer). Tier 3 signal extractors set this to True when a
+    # ``gh api`` call hit a rate limit OR a recoverable error
+    # (transient 5xx, malformed JSON, auth lapse mid-run) OR when a
+    # required prerequisite was missing (e.g., ``git_repo=None``
+    # because the project's source path could not be resolved). The
+    # run still exits 0; the flag lets JSON / table consumers
+    # communicate "Tier 3 was incomplete" without forcing a hard fail.
     # Additive default keeps pre-v0.8 envelopes loadable.
     tier3_degraded: bool = False
-    """``True`` when at least one Tier 3 extractor was skipped due to
-    a GitHub API rate-limit response. ``False`` when Tier 3 ran cleanly
-    OR Tier 3 was not requested. Producer lands with #400/#401 signal
-    extractors; the infrastructure PR (#399) ships only the field and
-    the typed exception ``agentfluent.github.RateLimitedError`` that
-    extractors will catch to flip the flag."""
+    """``True`` when at least one Tier 3 extractor was unable to
+    complete cleanly — rate-limited (403/429), recoverable gh error,
+    or required prerequisite missing. ``False`` when Tier 3 ran
+    cleanly OR Tier 3 was not requested (``--github`` not passed).
+
+    Producers (as of v0.8): #400 ``CI_FAILURE_FIRST_PUSH`` and the
+    pipeline-level fallback in :func:`run_diagnostics` (sets True
+    when ``--github`` was requested but ``sessions`` or ``git_repo``
+    is None). Consumers: JSON envelope (Pydantic ``model_dump``) and
+    the table formatter's diagnostics footer banner."""

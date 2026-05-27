@@ -685,7 +685,7 @@ feat a1b2c3d followed by 2 fixes on shared file(s) within 3d
 
 **Recommendation target:** `subagent`
 
-**Related:** [`user_correction`](#user_correction), [`file_rework`](#file_rework), [`reviewer_caught`](#reviewer_caught), [`primary_axis`](#primary_axis)
+**Related:** [`user_correction`](#user_correction), [`file_rework`](#file_rework), [`reviewer_caught`](#reviewer_caught), [`ci_failure_first_push`](#ci_failure_first_push), [`primary_axis`](#primary_axis)
 
 ### `ci_failure_first_push`
 

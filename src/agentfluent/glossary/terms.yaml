@@ -517,7 +517,7 @@
   example: "feat a1b2c3d followed by 2 fixes on shared file(s) within 3d"
   severity_range: info -> warning
   recommendation_target: subagent
-  related: [user_correction, file_rework, reviewer_caught, primary_axis]
+  related: [user_correction, file_rework, reviewer_caught, ci_failure_first_push, primary_axis]
 
 - name: ci_failure_first_push
   category: signal_type

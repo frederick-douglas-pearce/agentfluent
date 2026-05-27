@@ -891,6 +891,31 @@ class TestCIFailureFirstPushRule:
         action = recs[0].action.lower()
         assert "pre-commit" in action or "validation" in action
 
+    def test_missing_pr_number_renders_unknown_sentinel(self) -> None:
+        # Defensive guard: a manually-constructed signal without
+        # pr_number in detail must not render `PR #None` in the
+        # user's report. The correlator falls back to "(unknown)".
+        sig = DiagnosticSignal(
+            signal_type=SignalType.CI_FAILURE_FIRST_PUSH,
+            severity=Severity.WARNING,
+            agent_type=None,
+            invocation_id=None,
+            message="malformed signal",
+            detail={
+                # No pr_number key.
+                "pr_title": "x",
+                "pr_url": "url",
+                "first_commit_sha": "abc",
+                "failing_contexts": [{"context": "ci", "state": "failure"}],
+                "primary_context": "ci",
+                "primary_state": "failure",
+            },
+        )
+        recs = correlate([sig])
+        assert len(recs) == 1
+        assert "#None" not in recs[0].message
+        assert "(unknown)" in recs[0].message
+
 
 class TestRelpath:
     """``_relpath`` rewrites ``$HOME`` to ``~`` in message text (#340)."""

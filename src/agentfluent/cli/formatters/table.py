@@ -293,6 +293,17 @@ def format_analysis_table(
             )
         else:
             _format_diagnostics_summary(console, diag)
+        # Tier 3 degraded banner. Rendered for both --diagnostics and
+        # summary paths so the user always sees that GitHub data was
+        # incomplete; JSON output carries the flag too via
+        # ``diag.tier3_degraded``.
+        if diag.tier3_degraded:
+            console.print(
+                "\n[yellow]⚠ Tier 3 (GitHub) data is incomplete:[/yellow] "
+                "one or more `gh api` calls failed (rate limit, transient "
+                "error, or missing prerequisite). Re-run later — cached "
+                "responses make subsequent runs cheaper.",
+            )
 
     if result.scope_session is not None:
         console.print(f"\n[bold]Session:[/bold] {result.scope_session}")

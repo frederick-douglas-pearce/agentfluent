@@ -317,26 +317,48 @@ def run_diagnostics(
     # commits to sessions). Each extractor returns
     # ``(signals, degraded)``; we OR the degraded flag so a single
     # rate-limit anywhere in Tier 3 surfaces on the result.
+    #
+    # Each extractor is wrapped in a broad try/except: a Tier 3 bug
+    # must not destroy the Tier 1+Tier 2 signals already computed
+    # above. An unhandled exception flips ``tier3_degraded`` so the
+    # user sees that GitHub data was incomplete, and the analyze run
+    # continues normally.
     tier3_degraded = False
     if (
         github_repo is not None
         and sessions is not None
         and git_repo is not None
     ):
-        ci_signals, ci_degraded = extract_ci_failure_first_push_signals(
-            sessions,
-            github_repo=github_repo,
-            repo_dir=git_repo,
-            no_cache=github_no_cache,
-        )
-        signals.extend(ci_signals)
-        tier3_degraded = tier3_degraded or ci_degraded
+        try:
+            ci_signals, ci_degraded = extract_ci_failure_first_push_signals(
+                sessions,
+                github_repo=github_repo,
+                repo_dir=git_repo,
+                no_cache=github_no_cache,
+            )
+        except Exception:  # noqa: BLE001 — never let a Tier 3 bug crash diagnostics
+            logger.warning(
+                "CI_FAILURE_FIRST_PUSH extractor crashed; "
+                "marking Tier 3 degraded and continuing",
+                exc_info=True,
+            )
+            tier3_degraded = True
+        else:
+            signals.extend(ci_signals)
+            tier3_degraded = tier3_degraded or ci_degraded
     elif github_repo is not None:
-        logger.debug(
-            "tier 3 signals skipped: github_repo=%s sessions=%s git_repo=%s",
-            github_repo is not None, sessions is not None,
-            git_repo is not None,
+        # User passed --github but a prerequisite is missing (e.g.,
+        # ``resolve_project_disk_path`` returned None, or a
+        # programmatic caller forgot to pass sessions / git_repo).
+        # WARNING level — the user explicitly opted into Tier 3 and
+        # silently dropping it would misreport tier3_degraded=False
+        # as "ran cleanly". Flip the flag so JSON consumers can tell.
+        logger.warning(
+            "Tier 3 was requested but skipped because a prerequisite is "
+            "missing (sessions=%s, git_repo=%s). Marking tier3_degraded.",
+            sessions is not None, git_repo is not None,
         )
+        tier3_degraded = True
 
     correlated_pairs = correlate(signals, configs_by_name)
     recommendations = [rec for _, rec in correlated_pairs]

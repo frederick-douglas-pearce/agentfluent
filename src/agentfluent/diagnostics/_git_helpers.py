@@ -41,6 +41,15 @@ _GIT_LOG_FIELD_SEPARATOR = "\x1e"
 # hang invisible.
 _GIT_TIMEOUT_SEC = 30
 
+# Default ``git log --since`` lookback window in days. Shared by all
+# diagnostics extractors that scan local git history (Tier 2
+# ``git_signals.FEAT_FIX_PROXIMITY``, Tier 3
+# ``github_signals.CI_FAILURE_FIRST_PUSH``). Defined here so a single
+# tuning change applies to every tier; per-extractor overrides remain
+# possible via the ``lookback_days`` parameter on each public entry
+# point.
+DEFAULT_LOOKBACK_DAYS = 90
+
 
 @dataclass(frozen=True)
 class _GitCommit:
