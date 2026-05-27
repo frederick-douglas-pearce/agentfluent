@@ -127,7 +127,10 @@ def extract_git_quality_signals(
     empty window, timeout). The caller does not need a try/except.
     """
     since = datetime.now().astimezone() - timedelta(days=lookback_days)
-    commits = _run_git_log(repo_dir, since=since)
+    # _run_git_log now returns (commits, ok); Tier 2 silently skips
+    # on either git failure or empty window — the original behavior
+    # is preserved by collapsing both cases to an empty return.
+    commits, _ok = _run_git_log(repo_dir, since=since)
     if not commits:
         return []
 

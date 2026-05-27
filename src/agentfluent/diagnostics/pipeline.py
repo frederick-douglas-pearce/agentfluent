@@ -41,6 +41,7 @@ from agentfluent.diagnostics.delegation import (
 from agentfluent.diagnostics.git_signals import extract_git_quality_signals
 from agentfluent.diagnostics.github_signals import (
     extract_ci_failure_first_push_signals,
+    extract_pr_review_comment_density_signals,
 )
 from agentfluent.diagnostics.mcp_assessment import (
     McpToolCall,
@@ -346,6 +347,26 @@ def run_diagnostics(
         else:
             signals.extend(ci_signals)
             tier3_degraded = tier3_degraded or ci_degraded
+
+        try:
+            density_signals, density_degraded = (
+                extract_pr_review_comment_density_signals(
+                    sessions,
+                    github_repo=github_repo,
+                    repo_dir=git_repo,
+                    no_cache=github_no_cache,
+                )
+            )
+        except Exception:  # noqa: BLE001 — never let a Tier 3 bug crash diagnostics
+            logger.warning(
+                "PR_REVIEW_COMMENT_DENSITY extractor crashed; "
+                "marking Tier 3 degraded and continuing",
+                exc_info=True,
+            )
+            tier3_degraded = True
+        else:
+            signals.extend(density_signals)
+            tier3_degraded = tier3_degraded or density_degraded
     elif github_repo is not None:
         # User passed --github but a prerequisite is missing (e.g.,
         # ``resolve_project_disk_path`` returned None, or a

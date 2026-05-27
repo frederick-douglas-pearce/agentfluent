@@ -66,12 +66,26 @@ class _GitCommit:
     files: frozenset[str] = field(default_factory=frozenset)
 
 
-def _run_git_log(repo_dir: Path, *, since: datetime) -> list[_GitCommit]:
+def _run_git_log(
+    repo_dir: Path, *, since: datetime,
+) -> tuple[list[_GitCommit], bool]:
     """Run ``git log --since=<since>`` and parse the output.
 
-    Returns ``[]`` on any error: missing git binary, non-repo
-    directory, empty window, timeout, or parse failure. Caller does
-    not need a try/except wrapper.
+    Returns ``(commits, ok)``:
+
+    - ``commits`` is the parsed list (possibly empty when the window
+      is genuinely empty).
+    - ``ok`` is ``True`` when the git subprocess completed
+      successfully (returncode 0), ``False`` on any failure: missing
+      git binary, non-repo directory, timeout, or non-zero exit.
+
+    Pre-fix this returned just the list, conflating "no commits in
+    window" with "git failed entirely" — Tier 3 callers couldn't
+    detect git misconfiguration and reported a clean run with zero
+    signals. The tuple return lets callers (especially
+    :func:`agentfluent.diagnostics.github_signals._enumerate_attributed_prs`)
+    flip ``tier3_degraded`` when git itself is broken vs. when the
+    repo simply has no recent commits.
 
     The subprocess invocation is bounded by :data:`_GIT_TIMEOUT_SEC`
     and uses a fixed-shape ``--format`` that pairs cleanly with
@@ -94,13 +108,13 @@ def _run_git_log(repo_dir: Path, *, since: datetime) -> list[_GitCommit]:
         )
     except FileNotFoundError:
         logger.debug("git binary not found on PATH; returning empty commit list")
-        return []
+        return [], False
     except subprocess.TimeoutExpired:
         logger.warning(
             "git log timed out after %ds; returning empty commit list",
             _GIT_TIMEOUT_SEC,
         )
-        return []
+        return [], False
 
     if result.returncode != 0:
         # Not a repo, or another git error. Stderr is human-readable
@@ -109,9 +123,9 @@ def _run_git_log(repo_dir: Path, *, since: datetime) -> list[_GitCommit]:
             "git log returned %d: %s",
             result.returncode, result.stderr.strip(),
         )
-        return []
+        return [], False
 
-    return _parse_commits(result.stdout)
+    return _parse_commits(result.stdout), True
 
 
 def _parse_commits(stdout: str) -> list[_GitCommit]:
