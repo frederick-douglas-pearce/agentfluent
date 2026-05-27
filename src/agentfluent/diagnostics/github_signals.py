@@ -79,6 +79,19 @@ _GH_RECOVERABLE: tuple[type[Exception], ...] = (
     GhNotAuthenticatedError,
 )
 
+# PR_REVIEW_COMMENT_DENSITY defaults. All configurable via the
+# public extractor's kwargs.
+#
+# ``density_threshold`` is the floor above which we emit an INFO
+# signal. ``warning_multiplier`` doubles the threshold for the WARNING
+# tier (per the issue body: "INFO ... or WARNING if density is 2x
+# threshold"). ``min_lines_changed`` suppresses noisy small-PR signals
+# (a single comment on a 3-line PR gives density 0.33, which would
+# fire spuriously); the issue body explicitly suggests a 20-line gate.
+DEFAULT_DENSITY_THRESHOLD = 0.1
+DEFAULT_WARNING_MULTIPLIER = 2.0
+DEFAULT_MIN_LINES_CHANGED = 20
+
 
 class _PRRef(NamedTuple):
     """Minimal PR identifier — the fields we need for attribution and
@@ -135,32 +148,17 @@ def extract_ci_failure_first_push_signals(
     ``/commits/{sha}/check-runs`` so Actions-only repos still produce
     signals.
     """
-    since = datetime.now().astimezone() - timedelta(days=lookback_days)
-    commits = _run_git_log(repo_dir, since=since)
-    if not commits:
-        return [], False
-
-    session_windows = _build_session_windows(
-        sessions, slack=commit_slack_seconds,
+    pr_refs, commit_to_session, degraded = _enumerate_attributed_prs(
+        sessions,
+        github_repo=github_repo,
+        repo_dir=repo_dir,
+        no_cache=no_cache,
+        lookback_days=lookback_days,
+        commit_slack_seconds=commit_slack_seconds,
+        signal_name="CI_FAILURE_FIRST_PUSH",
     )
-    if not session_windows:
-        return [], False
-
-    commit_to_session = _attribute_commits(commits, session_windows)
-    if not commit_to_session:
-        return [], False
-
-    degraded = False
-    pr_refs: dict[int, _PRRef] = {}
-    for sha in commit_to_session:
-        result, hit_limit = _fetch_prs_for_commit(
-            github_repo, sha, no_cache=no_cache,
-        )
-        if hit_limit:
-            degraded = True
-            continue
-        for ref in result:
-            pr_refs.setdefault(ref.number, ref)
+    if not pr_refs and not commit_to_session:
+        return [], degraded
 
     signals: list[DiagnosticSignal] = []
     skipped_unattributable = 0
@@ -197,7 +195,7 @@ def extract_ci_failure_first_push_signals(
             continue
         if not failing:
             continue
-        signals.append(_build_signal(ref, first_sha, failing))
+        signals.append(_build_ci_failure_signal(ref, first_sha, failing))
 
     if skipped_unattributable:
         logger.info(
@@ -206,6 +204,110 @@ def extract_ci_failure_first_push_signals(
             "without timestamped messages)",
             skipped_unattributable,
         )
+
+    return signals, degraded
+
+
+def extract_pr_review_comment_density_signals(
+    sessions: list[SessionAnalysis],
+    *,
+    github_repo: GitHubRepo,
+    repo_dir: Path,
+    no_cache: bool = False,
+    lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+    commit_slack_seconds: int = DEFAULT_COMMIT_SLACK_SEC,
+    density_threshold: float = DEFAULT_DENSITY_THRESHOLD,
+    warning_multiplier: float = DEFAULT_WARNING_MULTIPLIER,
+    min_lines_changed: int = DEFAULT_MIN_LINES_CHANGED,
+) -> tuple[list[DiagnosticSignal], bool]:
+    """Emit one ``PR_REVIEW_COMMENT_DENSITY`` signal per PR where the
+    external review-comment density crosses the threshold.
+
+    "Density" = external inline comments per line changed, where
+    ``lines_changed = additions + deletions``. "External" excludes
+    self-reviews (comments authored by the same user who opened the
+    PR) — the signal measures the reviewer effort an agent-side
+    review subagent could have shortcut, not the author's own
+    self-annotation.
+
+    Severity is ``INFO`` at and above ``density_threshold``,
+    upgraded to ``WARNING`` at ``density_threshold *
+    warning_multiplier``. Below the threshold (or below the
+    ``min_lines_changed`` gate, or with zero external comments) no
+    signal is emitted.
+
+    Returns ``(signals, degraded)``. ``degraded`` is True when at
+    least one ``gh api`` call hit a rate limit or recoverable error
+    (transient 5xx, malformed JSON, mid-run auth lapse); partial
+    signals are still returned (per-extractor degradation policy
+    from the spike spec section 3).
+
+    Endpoint choice: the issue body suggests "use the ``reviews``
+    endpoint which returns both" inline + body comments, but the
+    GitHub API surface disagrees — ``/pulls/{N}/reviews`` returns
+    review-level objects (state, body, user) without per-review
+    inline counts. We use ``/pulls/{N}/comments`` directly for the
+    inline-comment list, plus ``/pulls/{N}`` for size and author.
+    Two API calls per PR, matching the spike's budget estimate.
+    """
+    pr_refs, _commit_to_session, degraded = _enumerate_attributed_prs(
+        sessions,
+        github_repo=github_repo,
+        repo_dir=repo_dir,
+        no_cache=no_cache,
+        lookback_days=lookback_days,
+        commit_slack_seconds=commit_slack_seconds,
+        signal_name="PR_REVIEW_COMMENT_DENSITY",
+    )
+    if not pr_refs:
+        return [], degraded
+
+    signals: list[DiagnosticSignal] = []
+    for ref in pr_refs.values():
+        detail, hit_limit_or_error = _fetch_pr_detail(
+            github_repo, ref.number, no_cache=no_cache,
+        )
+        if hit_limit_or_error:
+            degraded = True
+            continue
+        if detail is None:
+            continue
+        lines_changed = int(detail.get("additions") or 0) + int(
+            detail.get("deletions") or 0,
+        )
+        if lines_changed < min_lines_changed:
+            continue
+        author = str(((detail.get("user") or {}).get("login")) or "")
+
+        external_count, hit_limit_or_error = _fetch_external_comment_count(
+            github_repo, ref.number, author=author, no_cache=no_cache,
+        )
+        if hit_limit_or_error:
+            degraded = True
+            continue
+        if external_count <= 0:
+            continue
+        density = external_count / max(lines_changed, 1)
+        if density < density_threshold:
+            continue
+        # Prefer the freshly-fetched title (the PR-detail call gives
+        # us the current title, while the helper's _PRRef.title may
+        # be stale due to setdefault first-write-wins across multiple
+        # commit/{sha}/pulls responses).
+        title = str(detail.get("title") or ref.title)
+        url = str(detail.get("html_url") or ref.url)
+        signals.append(_build_density_signal(
+            pr_number=ref.number,
+            pr_title=title,
+            pr_url=url,
+            author=author,
+            additions=int(detail.get("additions") or 0),
+            deletions=int(detail.get("deletions") or 0),
+            external_count=external_count,
+            density=density,
+            density_threshold=density_threshold,
+            warning_multiplier=warning_multiplier,
+        ))
 
     return signals, degraded
 
@@ -256,17 +358,95 @@ def _attribute_commits(
     return attributed
 
 
-def _log_rate_limit(e: RateLimitedError) -> None:
+def _enumerate_attributed_prs(
+    sessions: list[SessionAnalysis],
+    *,
+    github_repo: GitHubRepo,
+    repo_dir: Path,
+    no_cache: bool,
+    lookback_days: int,
+    commit_slack_seconds: int,
+    signal_name: str,
+) -> tuple[dict[int, _PRRef], dict[str, int], bool]:
+    """Enumerate PRs touched by sessions in the analysis window.
+
+    Shared first half of every per-PR Tier 3 extractor:
+
+    1. ``git log --since`` to enumerate commits in the lookback window
+       (local; no API call cost).
+    2. Build per-session ``(start, end + slack)`` windows from each
+       session's timestamped messages.
+    3. Attribute commits to sessions by timestamp containment
+       (first-match wins on overlap).
+    4. For each session-attributed commit, fetch the PRs that
+       include it via ``gh api commits/{sha}/pulls`` and dedup by
+       PR number.
+
+    Returns ``(pr_refs, commit_to_session, degraded)``:
+
+    - ``pr_refs`` maps each unique PR number to a minimal
+      :class:`_PRRef`. Empty when no PRs match.
+    - ``commit_to_session`` maps each session-attributed commit SHA
+      to ``id(session)``. Empty when no commits were attributable.
+    - ``degraded`` is True when at least one ``commits/{sha}/pulls``
+      fetch hit a rate limit or recoverable gh error. The caller
+      forwards this to the per-extractor ``degraded`` accumulator.
+
+    ``signal_name`` is forwarded to the per-call log helpers so
+    warnings name the calling signal honestly. Architect note 1 in
+    the #401 implementation-plan review (PR comment) called this
+    out: pre-fix, the rate-limit log message hardcoded
+    ``CI_FAILURE_FIRST_PUSH`` even when triggered by another
+    signal's call path.
+    """
+    since = datetime.now().astimezone() - timedelta(days=lookback_days)
+    commits = _run_git_log(repo_dir, since=since)
+    if not commits:
+        return {}, {}, False
+
+    session_windows = _build_session_windows(
+        sessions, slack=commit_slack_seconds,
+    )
+    if not session_windows:
+        return {}, {}, False
+
+    commit_to_session = _attribute_commits(commits, session_windows)
+    if not commit_to_session:
+        return {}, {}, False
+
+    degraded = False
+    pr_refs: dict[int, _PRRef] = {}
+    for sha in commit_to_session:
+        result, hit_limit = _fetch_prs_for_commit(
+            github_repo, sha, no_cache=no_cache, signal_name=signal_name,
+        )
+        if hit_limit:
+            degraded = True
+            continue
+        for ref in result:
+            pr_refs.setdefault(ref.number, ref)
+    return pr_refs, commit_to_session, degraded
+
+
+def _log_rate_limit(e: RateLimitedError, *, signal_name: str) -> None:
     """Single-source rate-limit WARNING — keeps message format stable
-    across every gh_api call site in this module."""
+    across every ``gh_api`` call site in this module.
+
+    ``signal_name`` is required so the WARNING attribution is honest
+    when shared helpers (``_fetch_prs_for_commit``,
+    ``_enumerate_attributed_prs``) are called from multiple signal
+    extractors. Pre-fix the helper hardcoded ``CI_FAILURE_FIRST_PUSH``,
+    which would silently misattribute the rate-limit to one signal
+    when triggered by another.
+    """
     logger.warning(
-        "CI_FAILURE_FIRST_PUSH rate-limited at %s; resets at %s",
-        e.endpoint, e.reset_at,
+        "%s rate-limited at %s; resets at %s",
+        signal_name, e.endpoint, e.reset_at,
     )
 
 
 def _fetch_prs_for_commit(
-    github_repo: GitHubRepo, sha: str, *, no_cache: bool,
+    github_repo: GitHubRepo, sha: str, *, no_cache: bool, signal_name: str,
 ) -> tuple[list[_PRRef], bool]:
     """Return the PRs that include the given commit SHA.
 
@@ -276,6 +456,13 @@ def _fetch_prs_for_commit(
     auth lapses mid-run). Treating recoverable errors as degradation
     rather than silent skip lets the caller flip ``tier3_degraded``
     so the user knows their results may be incomplete.
+
+    ``signal_name`` is forwarded to log messages so rate-limit /
+    degraded warnings name the correct signal — this helper is
+    shared by every per-PR extractor (via
+    :func:`_enumerate_attributed_prs`), so hardcoding a name would
+    misattribute warnings when one signal's call path triggers a
+    rate limit that affects another.
     """
     endpoint = f"repos/{github_repo.owner}/{github_repo.repo}/commits/{sha}/pulls"
     # Wrap in `[...]` so a multi-PR result lands as a single JSON
@@ -290,12 +477,12 @@ def _fetch_prs_for_commit(
             no_cache=no_cache,
         )
     except RateLimitedError as e:
-        _log_rate_limit(e)
+        _log_rate_limit(e, signal_name=signal_name)
         return [], True
     except _GH_RECOVERABLE as e:
         logger.warning(
-            "commits/%s/pulls failed (%s); marking Tier 3 degraded",
-            sha, type(e).__name__,
+            "%s: commits/%s/pulls failed (%s); marking Tier 3 degraded",
+            signal_name, sha, type(e).__name__,
         )
         return [], True
     if not isinstance(payload, list):
@@ -344,7 +531,7 @@ def _fetch_pr_first_commit_sha(
             no_cache=no_cache,
         )
     except RateLimitedError as e:
-        _log_rate_limit(e)
+        _log_rate_limit(e, signal_name="CI_FAILURE_FIRST_PUSH")
         return None, True
     except _GH_RECOVERABLE as e:
         logger.warning(
@@ -399,7 +586,7 @@ def _fetch_failing_contexts(
             no_cache=no_cache,
         )
     except RateLimitedError as e:
-        _log_rate_limit(e)
+        _log_rate_limit(e, signal_name="CI_FAILURE_FIRST_PUSH")
         return [], True, False
     except _GH_RECOVERABLE as e:
         logger.warning(
@@ -454,7 +641,7 @@ def _fetch_failing_check_runs(
             no_cache=no_cache,
         )
     except RateLimitedError as e:
-        _log_rate_limit(e)
+        _log_rate_limit(e, signal_name="CI_FAILURE_FIRST_PUSH")
         return [], True, False
     except _GH_RECOVERABLE as e:
         logger.warning(
@@ -484,7 +671,7 @@ def _fetch_failing_check_runs(
     return failing, False, False
 
 
-def _build_signal(
+def _build_ci_failure_signal(
     pr: _PRRef,
     first_commit_sha: str,
     failing_contexts: list[dict[str, Any]],
@@ -523,5 +710,168 @@ def _build_signal(
             ],
             "primary_context": primary_context,
             "primary_state": primary_state,
+        },
+    )
+
+
+def _fetch_pr_detail(
+    github_repo: GitHubRepo, pr_number: int, *, no_cache: bool,
+) -> tuple[dict[str, Any] | None, bool]:
+    """Fetch the PR detail object projected to the fields we need.
+
+    Returns ``(detail, hit_limit_or_error)``. ``detail`` is a dict
+    carrying ``additions``, ``deletions``, ``user.login``, ``title``,
+    ``html_url`` — or ``None`` when the projection failed to parse.
+    The boolean covers both rate-limit and recoverable-error paths
+    (the caller flips ``tier3_degraded`` either way).
+    """
+    endpoint = (
+        f"repos/{github_repo.owner}/{github_repo.repo}/pulls/{pr_number}"
+    )
+    jq = "{additions, deletions, user: {login}, title, html_url}"
+    try:
+        payload = gh_api(
+            endpoint,
+            jq_filter=jq,
+            cache_ttl=TTL_OPEN_PR_OR_CI,
+            no_cache=no_cache,
+        )
+    except RateLimitedError as e:
+        _log_rate_limit(e, signal_name="PR_REVIEW_COMMENT_DENSITY")
+        return None, True
+    except _GH_RECOVERABLE as e:
+        logger.warning(
+            "PR_REVIEW_COMMENT_DENSITY: pulls/%d failed (%s); "
+            "marking Tier 3 degraded",
+            pr_number, type(e).__name__,
+        )
+        return None, True
+    if not isinstance(payload, dict):
+        return None, False
+    return payload, False
+
+
+def _fetch_external_comment_count(
+    github_repo: GitHubRepo,
+    pr_number: int,
+    *,
+    author: str,
+    no_cache: bool,
+) -> tuple[int, bool]:
+    """Count inline review comments on a PR, excluding self-reviews.
+
+    The ``author`` parameter is the PR author's GitHub login;
+    comments whose ``user.login`` equals it are filtered out so the
+    density signal measures *external* review effort rather than the
+    author's own self-annotation.
+
+    Empty / unrecognized author (None / empty string) disables the
+    filter — better to count everyone than to silently exclude
+    nobody when we couldn't resolve the author.
+
+    Returns ``(count, hit_limit_or_error)``. The boolean covers both
+    rate-limit and recoverable-error paths.
+    """
+    endpoint = (
+        f"repos/{github_repo.owner}/{github_repo.repo}"
+        f"/pulls/{pr_number}/comments"
+    )
+    jq = "[.[] | {user: {login}}]"
+    try:
+        payload = gh_api(
+            endpoint,
+            jq_filter=jq,
+            cache_ttl=TTL_OPEN_PR_OR_CI,
+            no_cache=no_cache,
+        )
+    except RateLimitedError as e:
+        _log_rate_limit(e, signal_name="PR_REVIEW_COMMENT_DENSITY")
+        return 0, True
+    except _GH_RECOVERABLE as e:
+        logger.warning(
+            "PR_REVIEW_COMMENT_DENSITY: pulls/%d/comments failed (%s); "
+            "marking Tier 3 degraded",
+            pr_number, type(e).__name__,
+        )
+        return 0, True
+    if not isinstance(payload, list):
+        return 0, False
+    count = 0
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        login = str(((item.get("user") or {}).get("login")) or "")
+        if author and login == author:
+            # Self-review: the PR author commenting on their own
+            # diff. The density signal measures EXTERNAL reviewer
+            # effort, so skip.
+            continue
+        count += 1
+    return count, False
+
+
+def _build_density_signal(
+    *,
+    pr_number: int,
+    pr_title: str,
+    pr_url: str,
+    author: str,
+    additions: int,
+    deletions: int,
+    external_count: int,
+    density: float,
+    density_threshold: float,
+    warning_multiplier: float,
+) -> DiagnosticSignal:
+    """Construct one ``PR_REVIEW_COMMENT_DENSITY`` signal.
+
+    ``agent_type=None`` matches the Tier 2 ``FEAT_FIX_PROXIMITY``
+    and Tier 3 ``CI_FAILURE_FIRST_PUSH`` conventions: the signal is
+    cross-cutting (about a PR's reviewer-effort cost), not
+    attributable to a single subagent type. Per-agent attribution
+    can be revisited in v0.8.1+.
+
+    Severity tiers:
+
+    - ``WARNING`` when ``density >= density_threshold * warning_multiplier``
+      — the PR pulled significant reviewer effort, strongly suggesting
+      an architect / code-review subagent could have caught issues
+      pre-PR.
+    - ``INFO`` at or above ``density_threshold`` — the PR pulled
+      enough reviewer effort to be worth noting, but not so much it
+      demands action.
+    """
+    lines_changed = additions + deletions
+    title_disp = pr_title if pr_title else "(no title)"
+    severity = (
+        Severity.WARNING
+        if density >= density_threshold * warning_multiplier
+        else Severity.INFO
+    )
+    comment_word = "comment" if external_count == 1 else "comments"
+    line_word = "line" if lines_changed == 1 else "lines"
+    message = (
+        f"PR #{pr_number} ({title_disp!r}) received {external_count} "
+        f"external review {comment_word} across {lines_changed} "
+        f"{line_word} changed (density: {density:.2f})"
+    )
+    return DiagnosticSignal(
+        signal_type=SignalType.PR_REVIEW_COMMENT_DENSITY,
+        severity=severity,
+        agent_type=None,
+        invocation_id=None,
+        message=message,
+        detail={
+            "pr_number": pr_number,
+            "pr_title": pr_title,
+            "pr_url": pr_url,
+            "author": author,
+            "additions": additions,
+            "deletions": deletions,
+            "lines_changed": lines_changed,
+            "external_comment_count": external_count,
+            "density": density,
+            "threshold": density_threshold,
+            "warning_multiplier": warning_multiplier,
         },
     )

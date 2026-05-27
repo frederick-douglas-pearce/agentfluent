@@ -954,6 +954,57 @@ class CIFailureFirstPushRule(_QualityRule):
         return observation, reason, action
 
 
+class PRReviewCommentDensityRule(_QualityRule):
+    """PR_REVIEW_COMMENT_DENSITY -> recommend an architect / code-review
+    subagent before opening similar PRs.
+
+    Tier 3 signal (#401). Cross-cutting (``agent_type=None``) because
+    the signal is about a PR's reviewer-effort cost, not a specific
+    subagent's behavior. Recommendation copy nudges the user toward
+    invoking an architect or code-review subagent before opening PRs
+    when this kind of work tends to attract heavy review.
+    """
+
+    SIGNAL_TYPE = SignalType.PR_REVIEW_COMMENT_DENSITY
+
+    def _observation_reason_action(
+        self, signal: DiagnosticSignal,
+    ) -> tuple[str, str, str]:
+        d = signal.detail
+        # All detail keys are populated by the extractor, but the
+        # correlator runs against any DiagnosticSignal carrying this
+        # type — including manually-constructed ones in tests and
+        # future emitters. Guard each access so a malformed signal
+        # still renders a coherent message instead of "PR #None ..."
+        # (parity with CIFailureFirstPushRule's defensive guard).
+        pr_number = d.get("pr_number")
+        pr_number_disp = (
+            f"#{pr_number}" if pr_number is not None else "(unknown)"
+        )
+        pr_title = d.get("pr_title") or "(no title)"
+        comments = d.get("external_comment_count")
+        lines = d.get("lines_changed")
+        density = d.get("density")
+        density_disp = (
+            f"{density:.2f}" if isinstance(density, (int, float)) else "?"
+        )
+        observation = (
+            f"PR {pr_number_disp} ({pr_title!r}) received {comments} review "
+            f"comment(s) across {lines} line(s) changed "
+            f"(density: {density_disp})."
+        )
+        reason = (
+            "High review comment density suggests the code needed "
+            "substantial human review. An architect or code-review "
+            "agent could catch common issues before the PR is opened."
+        )
+        action = (
+            "Consider invoking an architect or code-review agent "
+            "before opening PRs for this type of work."
+        )
+        return observation, reason, action
+
+
 RULES: list[CorrelationRule] = [
     AccessErrorRule(),
     ErrorHandlingRule(),
@@ -971,6 +1022,7 @@ RULES: list[CorrelationRule] = [
     ReviewerCaughtRule(),
     FeatFixProximityRule(),
     CIFailureFirstPushRule(),
+    PRReviewCommentDensityRule(),
 ]
 
 

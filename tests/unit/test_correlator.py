@@ -917,6 +917,112 @@ class TestCIFailureFirstPushRule:
         assert "(unknown)" in recs[0].message
 
 
+class TestPRReviewCommentDensityRule:
+    """PR_REVIEW_COMMENT_DENSITY -> cross-cutting subagent-target
+    recommendation; surfaces density, comment count, line count, and
+    PR number in the observation text."""
+
+    @staticmethod
+    def _signal(
+        pr_number: int = 42,
+        pr_title: str = "Add window filter",
+        external_comment_count: int = 12,
+        lines_changed: int = 80,
+        density: float = 0.15,
+        severity: Severity = Severity.INFO,
+    ) -> DiagnosticSignal:
+        return DiagnosticSignal(
+            signal_type=SignalType.PR_REVIEW_COMMENT_DENSITY,
+            severity=severity,
+            agent_type=None,
+            invocation_id=None,
+            message=(
+                f"PR #{pr_number} ({pr_title!r}) received "
+                f"{external_comment_count} external review comments "
+                f"across {lines_changed} lines changed "
+                f"(density: {density:.2f})"
+            ),
+            detail={
+                "pr_number": pr_number,
+                "pr_title": pr_title,
+                "pr_url": f"https://github.com/o/r/pull/{pr_number}",
+                "author": "bob",
+                "additions": 40,
+                "deletions": 40,
+                "lines_changed": lines_changed,
+                "external_comment_count": external_comment_count,
+                "density": density,
+                "threshold": 0.1,
+                "warning_multiplier": 2.0,
+            },
+        )
+
+    def test_emits_subagent_target(self) -> None:
+        recs = correlate([self._signal()])
+        assert len(recs) == 1
+        rec = recs[0]
+        assert rec.target == "subagent"
+        assert rec.signal_types == [SignalType.PR_REVIEW_COMMENT_DENSITY]
+
+    def test_pr_number_density_and_counts_in_observation(self) -> None:
+        recs = correlate([self._signal(
+            pr_number=99, external_comment_count=18, lines_changed=60,
+            density=0.30,
+        )])
+        msg = recs[0].message
+        assert "#99" in msg
+        assert "18" in msg
+        assert "60" in msg
+        # Density rendered with 2 decimal places.
+        assert "0.30" in msg
+
+    def test_action_mentions_architect_or_code_review(self) -> None:
+        recs = correlate([self._signal()])
+        action = recs[0].action.lower()
+        assert "architect" in action or "code-review" in action
+
+    def test_missing_pr_number_renders_unknown_sentinel(self) -> None:
+        sig = DiagnosticSignal(
+            signal_type=SignalType.PR_REVIEW_COMMENT_DENSITY,
+            severity=Severity.INFO,
+            agent_type=None,
+            invocation_id=None,
+            message="malformed",
+            detail={
+                # No pr_number.
+                "pr_title": "x",
+                "external_comment_count": 5,
+                "lines_changed": 30,
+                "density": 0.17,
+            },
+        )
+        recs = correlate([sig])
+        assert len(recs) == 1
+        assert "#None" not in recs[0].message
+        assert "(unknown)" in recs[0].message
+
+    def test_missing_density_renders_question_sentinel(self) -> None:
+        # If density is missing, the f-string would otherwise crash
+        # with TypeError on `.2f` formatting. Defensive guard.
+        sig = DiagnosticSignal(
+            signal_type=SignalType.PR_REVIEW_COMMENT_DENSITY,
+            severity=Severity.INFO,
+            agent_type=None,
+            invocation_id=None,
+            message="malformed",
+            detail={
+                "pr_number": 1,
+                "pr_title": "x",
+                "external_comment_count": 5,
+                "lines_changed": 30,
+                # No density key.
+            },
+        )
+        recs = correlate([sig])
+        assert len(recs) == 1
+        assert "density: ?" in recs[0].message
+
+
 class TestRelpath:
     """``_relpath`` rewrites ``$HOME`` to ``~`` in message text (#340)."""
 

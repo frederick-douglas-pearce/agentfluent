@@ -644,7 +644,7 @@ falls below PARENT_ACTED_HEALTHY_BAND_LOW (0.25).
 
 **Recommendation target:** `subagent`
 
-**Related:** [`user_correction`](#user_correction), [`file_rework`](#file_rework), [`primary_axis`](#primary_axis)
+**Related:** [`user_correction`](#user_correction), [`file_rework`](#file_rework), [`pr_review_comment_density`](#pr_review_comment_density), [`primary_axis`](#primary_axis)
 
 ### `feat_fix_proximity`
 
@@ -685,7 +685,57 @@ feat a1b2c3d followed by 2 fixes on shared file(s) within 3d
 
 **Recommendation target:** `subagent`
 
-**Related:** [`user_correction`](#user_correction), [`file_rework`](#file_rework), [`reviewer_caught`](#reviewer_caught), [`ci_failure_first_push`](#ci_failure_first_push), [`primary_axis`](#primary_axis)
+**Related:** [`user_correction`](#user_correction), [`file_rework`](#file_rework), [`reviewer_caught`](#reviewer_caught), [`ci_failure_first_push`](#ci_failure_first_push), [`pr_review_comment_density`](#pr_review_comment_density), [`primary_axis`](#primary_axis)
+
+### `pr_review_comment_density`
+
+**Short:** External review comments per line changed exceeded the configured
+threshold — the PR pulled enough human-reviewer effort that an
+agent-side reviewer could plausibly have caught the issues
+pre-PR.
+
+**Detail:** Tier 3 GitHub quality-axis signal (v0.8). Off by default; runs
+only when the CLI passes `--github` (which also requires
+`--diagnostics` and implies `--git`). For each PR touched by an
+analyzed session, AgentFluent fetches the PR detail
+(`/pulls/{N}`) to get `additions + deletions` and the PR author,
+then fetches the inline-review-comment list
+(`/pulls/{N}/comments`). Comments authored by the PR author are
+excluded (self-reviews don't count); the remaining "external"
+inline comments divided by `lines_changed` give the density.
+
+Cross-cutting (`agent_type=None`). Severity branches on density:
+`INFO` at the configured threshold (default 0.1, i.e. 1 comment
+per 10 lines changed), upgraded to `WARNING` at 2x the threshold
+(default 0.2). PRs with fewer than 20 lines changed are
+suppressed regardless of density — a single comment on a 3-line
+PR gives density 0.33, which would fire spuriously without the
+gate.
+
+Endpoint note: `gh api /pulls/{N}/comments` returns the inline
+review-comment list (one entry per file-level comment). The
+related `/pulls/{N}/reviews` endpoint returns review-level
+objects (state, body, user) without per-review inline counts, so
+AgentFluent skips it — counting inline comments directly is the
+cleaner shape for this signal.
+
+Rate-limit handling: if any `gh api` call returns 403/429 with a
+rate-limit signature OR a recoverable gh error (transient 5xx,
+malformed JSON), that PR is skipped and
+`DiagnosticsResult.tier3_degraded` is set to True. Other PRs
+still produce signals; the run still exits 0.
+
+**Example:**
+
+```
+PR #42 ('Add window filter') received 12 external review comments across 80 lines changed (density: 0.15)
+```
+
+**Severity:** info -> warning
+
+**Recommendation target:** `subagent`
+
+**Related:** [`ci_failure_first_push`](#ci_failure_first_push), [`feat_fix_proximity`](#feat_fix_proximity), [`reviewer_caught`](#reviewer_caught), [`primary_axis`](#primary_axis)
 
 ### `ci_failure_first_push`
 
@@ -729,7 +779,7 @@ PR #42 ('Add session window filter') first push failed CI: pytest failure
 
 **Recommendation target:** `subagent`
 
-**Related:** [`feat_fix_proximity`](#feat_fix_proximity), [`primary_axis`](#primary_axis)
+**Related:** [`feat_fix_proximity`](#feat_fix_proximity), [`pr_review_comment_density`](#pr_review_comment_density), [`primary_axis`](#primary_axis)
 
 
 ---
