@@ -1,6 +1,16 @@
 # Changelog
 
-## [0.8.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.7.0...v0.8.0) (2026-05-30)
+## [0.8.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.7.0...v0.8.0) (2026-05-30) — "Quality Axis: Tier 3"
+
+The release theme pairs two streams: **fix the dogfood signals that mislead** and **add the signals that prove quality** by extending the diagnostics pipeline into its first external data source.
+
+Tier 3 GitHub enrichment (#398) is the headline. A new opt-in `--github` flag on `agentfluent analyze` brings the first external data source into the diagnostics pipeline: `CI_FAILURE_FIRST_PUSH` and `PR_REVIEW_COMMENT_DENSITY` quality signals, authenticated through the user's local `gh` CLI (no AgentFluent-managed tokens), backed by a file-backed TTL cache, with a first-run consent prompt recorded under `~/.config/agentfluent/`. The JSON envelope exposes a new `tier3_degraded: bool` field so CI consumers can see when rate limits forced a partial fetch.
+
+Alongside Tier 3, the v0.7 dogfood run flagged three dominant signal patterns that misled users. v0.8 fixes all of them at the source: no-trace invocations are now tagged `duration_unreliable` instead of silently falling back to wall-clock (#453); idle-gap thresholds re-tuned to catch moderate 1–4 min user-coupled waits (#454); built-in tool retries (Read-dominated) down-weighted in priority ranking (#395); `REVIEWER_CAUGHT` now interprets `parent_acted` on a healthy band rather than "higher is always better" (#396); `ERROR_PATTERN` metadata fallback gated per-invocation on trace presence (#333, visible precision 0% → 100% on dogfood); `FEAT_FIX_PROXIMITY` overlap threshold raised to 2 (#402, 58.8% → 76.2% precision).
+
+**No breaking changes.** All additions are additive: `--github` is off by default, Tier 3 signals only fire when explicitly opted in, and the diagnostics fixes tighten existing signals without changing their shape.
+
+See the README v0.8 roadmap entry, [`prd-v0.8.md`](.claude/specs/prd-v0.8.md), and [`prd-tier3-github-enrichment.md`](.claude/specs/prd-tier3-github-enrichment.md) for the full design context. Decisions D035–D039 in [`.claude/specs/decisions.md`](.claude/specs/decisions.md).
 
 
 ### Features
