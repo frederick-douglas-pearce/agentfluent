@@ -25,7 +25,7 @@ Every recommendation lands on one of three axes. CLI output prefixes each findin
 
 The three often trade off — saving cost can hurt quality, chasing speed can hurt cost. AgentFluent surfaces the trade-off rather than collapsing it to a single score.
 
-## How It Compares
+## Positioning
 
 The agent observability space is crowded — several tools capture what agents do. None diagnose *why* they misbehave or *what to change* from locally-persisted session data. In the table below, **"What's missing"** is what the tool *does not do* (not what it provides):
 
@@ -37,30 +37,26 @@ The agent observability space is crowded — several tools capture what agents d
 | [claude-code-otel](https://github.com/ColeMurray/claude-code-otel) | OpenTelemetry export of Claude Code sessions | Analysis itself — it's a bridge to other tools |
 | Anthropic Console | Per-request cost, rate-limit tracking | Session-level diagnostics; agent config recommendations |
 
-**Where AgentFluent fits.** AgentFluent reads the session JSONL your agent already produced, scores each agent's configuration against a best-practice rubric, and correlates observed behavior back to the specific config line that most likely explains it. It complements the tools above rather than replacing them — use Langfuse/Phoenix for production traces, Braintrust for test-set evals, ccusage for usage dashboards, and AgentFluent for *what in the agent's config to change*. The question *"my Agent SDK agent ran 500 sessions last week — were any of them actually good, and how can I update my agent's configuration to make it better?"* has no answer from the tools above. AgentFluent is built to answer it.
+Use Langfuse/Phoenix for production traces, Braintrust for test-set evals, ccusage for usage dashboards, and AgentFluent for *what in the agent's config to change*. The question *"my Agent SDK agent ran 500 sessions last week — were any of them actually good, and how do I update the configuration to make them better?"* has no answer from the tools above. AgentFluent is built to answer it.
 
-## Why This Is Different
+### What makes AgentFluent different
 
-- **Research-grounded.** Every diagnostic maps to a specific gap in the agent's prompt, tool list, or model selection — not vibes. See the [research doc](docs/AGENT_ANALYTICS_RESEARCH.md) for the feasibility and positioning analysis.
-- **Behavior-to-improvement, not just traces.** When the agent retries Bash 40% of the time, AgentFluent tells you *which prompt clause is missing* — not just that the retry happened.
-- **The config is the agent.** In interactive sessions, the human course-corrects. In programmatic agents, the prompt and tool setup *are* the agent — a flaw compounds at scale. AgentFluent scores description, tools (`allowed_tools` / `disallowedTools`), model, and prompt on every agent definition, and audits MCP server configuration (configured-but-unused, observed-but-missing) against real tool usage. Hook coverage and cross-agent pattern detection are on the roadmap.
-- **Local-first and private.** All analysis runs on your machine. Zero outbound network calls. No API key required.
-- **CLI-native.** `agentfluent analyze --format json | jq ...` — fits agent developer workflows (terminal, CI/CD, PR checks) without a web dashboard dependency.
-- **JSON output envelope is a contract.** A stable `{version, command, data}` schema lets you build PR gates, trend dashboards, and regression detectors on top without tracking AgentFluent's internal refactors.
-- **Correct cost accounting.** Distinguishes pay-per-token API rate from subscription plan flat cost, with per-model pricing that AgentFluent actively maintains ([#80](https://github.com/frederick-douglas-pearce/agentfluent/issues/80) will add per-session historical pricing).
-- **CodeFluent sibling.** Shares the JSONL parsing heritage but asks a different question. CodeFluent scores *human* AI fluency in interactive sessions; AgentFluent scores *agent* quality and tells you what configuration to change. Not forked — two products with a common data source.
+- **The config is the agent.** In interactive sessions the human course-corrects mid-flight; in programmatic agents the prompt and tool setup *are* the agent, and a flaw compounds at scale. AgentFluent scores description, `allowed_tools` / `disallowedTools`, model, and prompt on every agent definition, and audits MCP server configuration (configured-but-unused, observed-but-missing) against real tool usage.
+- **Behavior-to-improvement, not just traces.** When the agent retries Bash 40% of the time, AgentFluent tells you *which prompt clause is missing* — not just that the retry happened. Every diagnostic maps to a specific gap; see [`docs/AGENT_ANALYTICS_RESEARCH.md`](docs/AGENT_ANALYTICS_RESEARCH.md) for the feasibility and positioning analysis.
+- **JSON envelope as a contract.** A stable `{version, command, data}` schema lets you build PR gates, trend dashboards, and regression detectors on top without tracking AgentFluent's internal refactors.
+- **CLI-native and local by default.** `agentfluent analyze --format json | jq ...` fits agent developer workflows (terminal, CI/CD, PR checks). No outbound network calls unless you explicitly opt in via `--github` (Tier 3 GitHub enrichment, v0.8+); no cloud services, no API key required.
 
-## AgentFluent vs CodeFluent
+### Sibling: CodeFluent
 
-Both read `~/.claude/projects/` session JSONL. They answer different questions:
+[CodeFluent](https://github.com/frederick-douglas-pearce/codefluent) and AgentFluent both read `~/.claude/projects/` session JSONL but answer different questions:
 
-| | [CodeFluent](https://github.com/frederick-douglas-pearce/codefluent) | AgentFluent |
+| | CodeFluent | AgentFluent |
 |---|---|---|
 | **Unit of analysis** | Conversations in interactive sessions, plus the supporting `.claude/` config (CLAUDE.md, rules, hooks, commands) | Agent definitions + their observed behavior |
 | **Scoring target** | Developer's AI collaboration fluency and project-config maturity | Agent's prompt, tools, model, hooks |
 | **Feedback loop** | Coaches the human to interact with Claude Code better | Tells the developer what config to change |
 | **Delivery** | VS Code extension + web app | CLI-first (dashboard deferred) |
-| **API calls** | Anthropic API for LLM-as-judge scoring | None — fully local |
+| **API calls** | Anthropic API for LLM-as-judge scoring | None by default; `--github` (v0.8+) opts in to GitHub-API quality signals via the local `gh` CLI |
 
 If you write your own prompts each session, use CodeFluent. If your prompts live in `ClaudeAgentOptions`, `AgentDefinition`, or `.claude/agents/*.md` files, use AgentFluent.
 
@@ -470,108 +466,9 @@ Five GitHub Actions workflows run automatically:
 
 ## Roadmap
 
-**v0.2 (shipped):**
-- Parser fix for real Claude Code `toolUseResult` shape ([#84](https://github.com/frederick-douglas-pearce/agentfluent/issues/84))
-- Cost label clarity for subscription-plan users ([#76](https://github.com/frederick-douglas-pearce/agentfluent/issues/76))
-- Pricing data correction + opus-4-7 + synthetic filter ([#75](https://github.com/frederick-douglas-pearce/agentfluent/issues/75))
+Current release: **v0.8.0 — "Quality Axis: Tier 3"** (Tier 3 GitHub enrichment + dogfood-driven diagnostics hardening). Next: **v0.9** — additional GitHub-derived quality signals on top of the v0.8 infrastructure.
 
-**v0.3 (shipped):**
-- Subagent trace parser ([E2](https://github.com/frederick-douglas-pearce/agentfluent/issues/98)) — reconstructs the full internal tool-call sequence per subagent with `is_error` flags and retry detection, linked back to the delegating invocation.
-- Deep diagnostics engine ([E3](https://github.com/frederick-douglas-pearce/agentfluent/issues/99)) — trace-level signals: retry loops, stuck patterns, permission failures, consecutive tool-error sequences, each carrying per-tool-call evidence.
-- Delegation clustering ([#92](https://github.com/frederick-douglas-pearce/agentfluent/issues/92)) — TF-IDF + KMeans over recurring `general-purpose` invocations; proposes complete draft subagent definitions deduped against existing agents.
-- Model-routing diagnostics ([#95](https://github.com/frederick-douglas-pearce/agentfluent/issues/95)) — per-agent-type complexity classification vs. declared model; overspec/underspec flags with cost-savings estimates. Trace-based model inference when frontmatter is absent.
-- MCP server assessment ([#100](https://github.com/frederick-douglas-pearce/agentfluent/issues/100)) — configured-vs-observed audit with `MCP_UNUSED_SERVER` and `MCP_MISSING_SERVER` signals.
-- Recommendation aggregation ([#165](https://github.com/frederick-douglas-pearce/agentfluent/issues/165)) — near-duplicate rows collapse per `(agent, target, signal)` shape with occurrence count and metric range; raw list preserved for `--verbose` and JSON drill-down.
-- Built-in vs custom agent differentiation ([#166](https://github.com/frederick-douglas-pearce/agentfluent/issues/166)) — concern-specific action text (scope / recovery / tools / model) for built-in agents that have no user-editable config; nine of ten correlation rules updated.
-- YAML subagent draft in `--verbose` ([#168](https://github.com/frederick-douglas-pearce/agentfluent/issues/168)) — copy-paste-ready `~/.claude/agents/<name>.md` block for each cluster; exposed as `yaml_draft` field in `--format json` for jq-pipe workflows.
-- Cluster confidence re-calibration ([#167](https://github.com/frederick-douglas-pearce/agentfluent/issues/167)) — thresholds validated against two real datasets; MEDIUM now surfaces actionable candidates instead of everything landing in LOW.
-- Aggregated row signal-type clarity ([#181](https://github.com/frederick-douglas-pearce/agentfluent/issues/181)) — same-(agent, target) rows that fire on different signals now name the trigger in the prefix (e.g., `tool_error_sequence:` vs `retry_loop:`) instead of looking interchangeable.
-- Unknown-agent attribution fix ([#169](https://github.com/frederick-douglas-pearce/agentfluent/issues/169)) — invocations missing `subagent_type` (older skills, certain Claude Code versions) now correctly default to `general-purpose` instead of falling out of clustering as "unknown".
-- `--claude-config-dir` flag and `$CLAUDE_CONFIG_DIR` env var for non-default session paths ([#90](https://github.com/frederick-douglas-pearce/agentfluent/issues/90)).
-- Empirical threshold calibration via a committed Jupyter notebook ([#140](https://github.com/frederick-douglas-pearce/agentfluent/issues/140)).
-
-**v0.4 (shipped):**
-- In-product glossary — Phase 1 markdown reference + Phase 2 `agentfluent explain <term>` CLI subcommand ([#190](https://github.com/frederick-douglas-pearce/agentfluent/issues/190), [#191](https://github.com/frederick-douglas-pearce/agentfluent/issues/191)). Defines every term that appears in CLI output.
-- Wait-time exclusion from duration metrics ([#230](https://github.com/frederick-douglas-pearce/agentfluent/issues/230)) — subtract idle gaps so duration-based outlier detection doesn't false-positive on user-input wait time.
-- IQR-based outlier detection ([#186](https://github.com/frederick-douglas-pearce/agentfluent/issues/186), [#187](https://github.com/frederick-douglas-pearce/agentfluent/issues/187)) — replace naive mean-ratio with distribution-aware Q3+1.5·IQR, with `--verbose` distribution context.
-- Bounded `is_error` regex fallback ([#238](https://github.com/frederick-douglas-pearce/agentfluent/issues/238)) — leading-window match on subagent trace results to suppress mid-text false positives.
-- `PERMISSION_FAILURE` false-positive filter ([#231](https://github.com/frederick-douglas-pearce/agentfluent/issues/231)) — drops signals from hook-induced denials that don't reflect agent misbehavior.
-- `--diagnostics` defaults on, `--json` shortcut, parse warnings to stderr ([#202](https://github.com/frederick-douglas-pearce/agentfluent/issues/202), [#196](https://github.com/frederick-douglas-pearce/agentfluent/issues/196), [#206](https://github.com/frederick-douglas-pearce/agentfluent/issues/206)).
-- Cost surfacing on `by_agent_type` ([#200](https://github.com/frederick-douglas-pearce/agentfluent/issues/200)) — `total_cost_usd` + `avg_cost_per_invocation_usd` per agent.
-
-**v0.5 (shipped — "Trustworthy Diagnostics"):**
-
-The release theme: make diagnostic signals reliable enough that a user who doesn't know the internals can act on them without second-guessing.
-
-- `agentfluent diff` ([#199](https://github.com/frederick-douglas-pearce/agentfluent/issues/199)) — comparison workflow with `--fail-on` for CI gates. The feature that makes AgentFluent habit-forming: re-run, diff, and a regression-check exit code lands the same way a test runner does.
-- Priority ranking + Top-N priority fixes summary ([#172](https://github.com/frederick-douglas-pearce/agentfluent/issues/172)) — composite `priority_score` across severity, count, cost impact, and trace evidence; sorts the Recommendations table and powers the priority-fixes summary block.
-- Parent-thread offload candidates ([#189](https://github.com/frederick-douglas-pearce/agentfluent/issues/189), [#256](https://github.com/frederick-douglas-pearce/agentfluent/issues/256)–[#260](https://github.com/frederick-douglas-pearce/agentfluent/issues/260)) — detect repeating parent-thread tool-bursts and propose subagent / skill drafts that move work onto cheaper-tier models. Dominant cost lever for users running agents at scale, calibrated against real burst distributions.
-- `--min-severity` filter ([#205](https://github.com/frederick-douglas-pearce/agentfluent/issues/205)) — drop recommendations below `info` / `warning` / `critical` without affecting signals.
-- `delegation_suggestions_skipped_reason` JSON field ([#215](https://github.com/frederick-douglas-pearce/agentfluent/issues/215)) — names *why* `delegation_suggestions` is empty (`sklearn_not_installed` / `insufficient_invocations` / `no_clusters_above_min_size`) so JSON consumers can distinguish "feature unavailable" from "ran but found nothing".
-- Cost by Model includes subagent tokens, JSON schema v2 ([#227](https://github.com/frederick-douglas-pearce/agentfluent/issues/227)) — `by_model` becomes a list with an `origin` field per row, top-line `total_cost` is now comprehensive (parent + subagent), `agentfluent diff` reads both v1 and v2 envelopes via a compat shim.
-- MCP `is_error` leading-window FP fix ([#241](https://github.com/frederick-douglas-pearce/agentfluent/issues/241)) — ports the #238 bound to MCP tool results, eliminating ~86% / ~63% false-positive rates measured against real GitHub-MCP-heavy projects.
-- Outlier-detection recalibration + extractor consolidation ([#186](https://github.com/frederick-douglas-pearce/agentfluent/issues/186), [#235](https://github.com/frederick-douglas-pearce/agentfluent/issues/235)).
-- Delegation-draft tools list frequency filter ([#184](https://github.com/frederick-douglas-pearce/agentfluent/issues/184)) — least-privilege tool inclusion so generated drafts don't request the union of every member's tools.
-- Unified complexity classifier across model_routing and delegation ([#185](https://github.com/frederick-douglas-pearce/agentfluent/issues/185)).
-
-**v0.6 (shipped — "Quality Axis: Tier 1"):**
-
-The release theme adds a third diagnostics axis alongside cost and speed: **quality**. Review-style subagents (architect, tester, security-review, code-reviewer) were systematically under-recommended because their primary value is *independent context and quality improvement*, not token offload or wallclock savings — the existing recommendation engine couldn't see that benefit. v0.6 closes the gap. See PRD: [`.claude/specs/prd-quality-axis.md`](.claude/specs/prd-quality-axis.md). Tier-1 epic at [#268](https://github.com/frederick-douglas-pearce/agentfluent/issues/268), with decisions D015–D022 in [`.claude/specs/decisions.md`](.claude/specs/decisions.md).
-
-- Tier-1 quality signals (no new data sources):
-  - User mid-flight corrections ([#269](https://github.com/frederick-douglas-pearce/agentfluent/issues/269)) — frequency of "no, do X instead" / "wait" / "actually" patterns as a parent-quality miss-rate proxy. 3-tier heuristic (strong override / write-tool primary gate / question suppression) keeps the false-positive rate low.
-  - File rework density ([#270](https://github.com/frederick-douglas-pearce/agentfluent/issues/270)) — same file edited at or above the calibrated threshold within a session as a missing-pre-implementation-review signal.
-  - Reviewer-caught rate ([#271](https://github.com/frederick-douglas-pearce/agentfluent/issues/271)) — when architect / security-review / tester subagents do run, measure substantive findings and whether the parent acted on them. Suffix-match between mentioned and edited paths bridges the relative-vs-absolute path mismatch (#322).
-- Multi-axis priority scoring ([#272](https://github.com/frederick-douglas-pearce/agentfluent/issues/272)) — annotations approach per D017 + D021: the existing `priority_score` formula gains a `quality_evidence_factor * W_QUALITY` term, and per-axis `axis_scores: {cost, speed, quality}` plus `primary_axis` are exposed as post-hoc annotations. Schema-additive, preserves `diff` comparison semantics.
-- Single-axis signal classification (D022) — every `SignalType` maps to exactly one axis (no cross-cutting), with the mapping pinned as a module-level `SIGNAL_AXIS_MAP` constant.
-- CLI/JSON axis attribution ([#273](https://github.com/frederick-douglas-pearce/agentfluent/issues/273)) — recommendations name *which axis* triggered them (`[quality] 7 user corrections in 3 sessions — consider an architect agent for design review`). Surfaces in the Recommendations table, JSON envelope, and `agentfluent diff` output.
-- Calibration sweep ([#274](https://github.com/frederick-douglas-pearce/agentfluent/issues/274)) — Tier-1 thresholds tuned against the dogfood corpus and validated post-fix in [#327](https://github.com/frederick-douglas-pearce/agentfluent/issues/327). USER_CORRECTION false-positive rate dropped from ~85% to 0/2 detections after pattern + wrapper-stripping fixes ([#321](https://github.com/frederick-douglas-pearce/agentfluent/issues/321), [#330](https://github.com/frederick-douglas-pearce/agentfluent/issues/330)); REVIEWER_CAUGHT `parent_acted` attribution went from 0/51 (0%) to 16/53 (30.2%) ([#322](https://github.com/frederick-douglas-pearce/agentfluent/issues/322)).
-- Date-range filtering ([#293](https://github.com/frederick-douglas-pearce/agentfluent/issues/293) epic) — `--since`/`--until` on `agentfluent analyze` and `agentfluent list` (half-open interval, ISO 8601 / date-only / relative `7d`/`12h`/`30m` formats); `window: {since, until}` block on `analyze --json` output. Closes the dogfood loop on "did my config fix work?" and enables retroactive baselines for `diff`.
-- Top-N priority fixes redesign ([#285](https://github.com/frederick-douglas-pearce/agentfluent/issues/285)) — the priority-fixes summary block above the Recommendations table now reads as a tight pointer list rather than re-stating the top rows.
-- ERROR_REGEX windowing in two more sites ([#281](https://github.com/frederick-douglas-pearce/agentfluent/issues/281)) — `compute_error_rate` and `_extract_error_signals` now scan only the leading 200 chars of `output_text`, mirroring the #241 bound on MCP tool results. Drops `ERROR_PATTERN` signal volume by 98% on the dogfood corpus by suppressing mid-text matches against code identifiers and architectural prose.
-- Burst-cluster error attribution ([#264](https://github.com/frederick-douglas-pearce/agentfluent/issues/264)) — `ToolBurst` now pairs `tool_use` to `tool_result` via the existing `index_tool_results_by_id` helper. Burst-classified clusters' `error_rate` reflects real paired-error data instead of always being 0.0; on the dogfood corpus 20.2% of bursts now carry at least one paired tool error, which unblocks the `_COMPLEX_MIN_ERROR_RATE` gate in `classify_complexity` for error-prone clusters.
-- Tier-2 stretch ([#275](https://github.com/frederick-douglas-pearce/agentfluent/issues/275)) — deferred to v0.7 per [D028](.claude/specs/decisions.md). The Tier-1 signals close the under-recommendation gap on review subagents; FEAT_FIX_PROXIMITY would add confirming evidence and is the natural co-design with v0.7's Tier-3 GitHub enrichment.
-
-**v0.7 (shipped — "Output Scope + Trust"):**
-
-The release theme makes diagnostic output safe to share, faithful to scope, and trustworthy across runs. Three streams shipped together: shareable Markdown output, single-session post-mortem analysis, and diff hardening for production CI use. See PRD: [`.claude/specs/prd-v0.7.md`](.claude/specs/prd-v0.7.md). Epics: [#349](https://github.com/frederick-douglas-pearce/agentfluent/issues/349), [#350](https://github.com/frederick-douglas-pearce/agentfluent/issues/350), [#351](https://github.com/frederick-douglas-pearce/agentfluent/issues/351). Decisions D029–D034 in [`.claude/specs/decisions.md`](.claude/specs/decisions.md).
-
-- `agentfluent report` ([#198](https://github.com/frederick-douglas-pearce/agentfluent/issues/198) epic, D031) — new subcommand that renders an `analyze --json` snapshot as Markdown (Summary / Token Metrics / Agent Metrics / Diagnostics / Offload / Reproduction). Composable: snapshots round-trip through file storage, PR comments, and CI artifacts without re-running analysis.
-- `--session` auto-scopes diagnostics ([#201](https://github.com/frederick-douglas-pearce/agentfluent/issues/201) epic, D032) — **breaking change from v0.6**. Token/cost metrics already scoped to the named session; now diagnostics do too. The JSON envelope carries a new `scope_session` field so consumers can verify scope at a glance. `--session` + `--latest` and `--session` + `--since`/`--until` now error rather than silently no-op'ing. See [CHANGELOG](CHANGELOG.md) for the full migration note.
-- Diff hardening ([#349](https://github.com/frederick-douglas-pearce/agentfluent/issues/349) epic) — `agentfluent diff` propagates baseline/current `window` metadata into the table + JSON, deduplicates Token-Metrics-by-Model rows where `(model, origin)` pairs collided, and warns (non-fatal, D034) when baseline and current were generated by different AgentFluent versions so signal-count deltas don't conflate behavior changes with detector-sensitivity changes.
-- Diagnostics presentation + config effectiveness ([#350](https://github.com/frederick-douglas-pearce/agentfluent/issues/350) epic) — offload candidates with non-positive savings now filter out of the CLI table (preserved in JSON for the curious); cluster auto-names strip stopword tokens (issue numbers, version refs) so they describe reusable behavior patterns instead; new `UNUSED_AGENT` signal (D033) flags custom agents defined but never delegated to.
-- Tier-2 quality signal: local-git feat→fix proximity ([#275](https://github.com/frederick-douglas-pearce/agentfluent/issues/275)) — new `FEAT_FIX_PROXIMITY` signal pairs `feat:` commits with subsequent `fix:` commits on shared files, correlates back to whether the originating session used a review-style subagent, and emits `WARNING` (no reviewer) or `INFO` (reviewer used) accordingly. Off by default behind `--git`; bounded `subprocess` invocation with graceful degradation on missing binary / non-repo / timeout.
-- Tier-3 GitHub enrichment scoping spike ([#352](https://github.com/frederick-douglas-pearce/agentfluent/issues/352)) — research-only deliverable: [`prd-tier3-github-enrichment.md`](.claude/specs/prd-tier3-github-enrichment.md) resolves the auth, optional-dependency, rate-limit/caching, signal-selection, and privacy questions blocking v0.8 Tier 3 implementation.
-
-**v0.8 (shipped — "Quality Axis: Tier 3"):**
-
-The release theme pairs two streams: **fix the dogfood signals that mislead** and **add the signals that prove quality** by extending the diagnostics pipeline into its first external data source. v0.6 shipped Tier 1 quality signals (JSONL-only), v0.7 shipped Tier 2 (local git); v0.8 closes the planned quality-axis progression with Tier 3 (opt-in GitHub enrichment) and tightens five existing signals against the v0.7 dogfood run. See PRD: [`.claude/specs/prd-v0.8.md`](.claude/specs/prd-v0.8.md) and [`prd-tier3-github-enrichment.md`](.claude/specs/prd-tier3-github-enrichment.md). Epic: [#398](https://github.com/frederick-douglas-pearce/agentfluent/issues/398). Decisions D035–D039 in [`.claude/specs/decisions.md`](.claude/specs/decisions.md).
-
-- **Tier 3 GitHub enrichment** — opt-in GitHub-API quality signals behind a new `--github` flag on `agentfluent analyze`:
-  - Infrastructure ([#399](https://github.com/frederick-douglas-pearce/agentfluent/issues/399)) — `gh` CLI as the auth surface (no AgentFluent token storage), file-backed TTL response cache (three explicit TTL tiers), `--repo OWNER/NAME` override for non-GitHub remotes, `--github-no-cache` bypass, first-run consent prompt recorded under `~/.config/agentfluent/`, and a new `tier3_degraded: bool` field on the JSON envelope so rate-limit-degraded runs are visible to CI consumers. `--github` requires `--diagnostics` and implies `--git`.
-  - `CI_FAILURE_FIRST_PUSH` ([#400](https://github.com/frederick-douglas-pearce/agentfluent/issues/400)) — fires once per PR whose first commit's combined CI status is `failure`/`error`. Attributed back to the session whose work landed in that first push; force-push caveat called out in the [GLOSSARY entry](docs/GLOSSARY.md#ci_failure_first_push).
-  - `PR_REVIEW_COMMENT_DENSITY` ([#401](https://github.com/frederick-douglas-pearce/agentfluent/issues/401)) — fires when external (non-self) inline-review-comment density exceeds the threshold (default 0.1 comments per line changed, `WARNING` at 2×). Nudges users toward an architect / code-review subagent before opening similar PRs. Gated on `min_lines_changed=20` so a single comment on a tiny PR can't fire spuriously. Closes the v0.8 Tier 3 stream of epic [#398](https://github.com/frederick-douglas-pearce/agentfluent/issues/398).
-- **Dogfood-driven diagnostics hardening** — the v0.7 dogfood run flagged three dominant mislead patterns. v0.8 fixes them at the source:
-  - Duration metrics for human-coupled agents ([#453](https://github.com/frederick-douglas-pearce/agentfluent/issues/453), [#454](https://github.com/frederick-douglas-pearce/agentfluent/issues/454); see [D038](.claude/specs/decisions.md), [D038-A](.claude/specs/decisions.md)) — tag no-trace invocations as `duration_unreliable` so wall-clock-fallback durations don't drive `duration_outlier` signals, and re-tune idle-gap thresholds to catch moderate 1–4 min user-coupled waits the previous constants missed.
-  - `RETRY_LOOP` priority on built-in read-only tools ([#395](https://github.com/frederick-douglas-pearce/agentfluent/issues/395)) — Read retries dominated the dogfood corpus (68% of all retry-loop signals) but are built-in-tool behavior with no agent-config fix. Down-weighted via `_BUILTIN_RETRY_DOWNWEIGHT` so actionable Bash/MCP retries surface at the top of priority rankings.
-  - `REVIEWER_CAUGHT` interpretation ([#396](https://github.com/frederick-douglas-pearce/agentfluent/issues/396)) — `parent_acted` rate is now interpreted on a healthy band rather than "higher is always better": deliberate rejection of a reviewer's finding is legitimate, not a quality miss.
-  - `FEAT_FIX_PROXIMITY` calibration ([#402](https://github.com/frederick-douglas-pearce/agentfluent/issues/402)) — per-fix code-overlap minimum raised from 1 to 2, excluding `.md`/`.yaml`/`.yml`. 58.8% → 76.2% precision on the dogfood corpus; methodology in [`.claude/specs/analysis/402-calibration/calibration.md`](.claude/specs/analysis/402-calibration/calibration.md).
-  - `ERROR_PATTERN` metadata fallback ([#333](https://github.com/frederick-douglas-pearce/agentfluent/issues/333); see [D039](.claude/specs/decisions.md)) — per-invocation gate on trace presence replaces the agent-type cross-invocation dedup. Traces carry authoritative error evidence (`TOOL_ERROR_SEQUENCE` / `RETRY_LOOP` / `PERMISSION_FAILURE`), so the metadata keyword fallback is redundant for traced invocations and FP-prone on prose. Visible precision 0% → 100% on the dogfood corpus.
-
-**v0.9 (planned):**
-- Tier 3 stretch signals — at least one additional GitHub-derived signal beyond `CI_FAILURE_FIRST_PUSH` and `PR_REVIEW_COMMENT_DENSITY`, building on the #399 infrastructure ([`prd-tier3-github-enrichment.md`](.claude/specs/prd-tier3-github-enrichment.md) §4).
-
-**Future:**
-- Time-series pricing data structure ([#80](https://github.com/frederick-douglas-pearce/agentfluent/issues/80)) + session-timestamp-aware cost calculation ([#81](https://github.com/frederick-douglas-pearce/agentfluent/issues/81)) + automated pricing updates ([#82](https://github.com/frederick-douglas-pearce/agentfluent/issues/82)).
-- Agent SDK main-session MCP + tool extraction ([#112](https://github.com/frederick-douglas-pearce/agentfluent/issues/112)).
-- Per-invocation token input/output split for more accurate cost estimates ([#143](https://github.com/frederick-douglas-pearce/agentfluent/issues/143)).
-- Hosted documentation site ([#97](https://github.com/frederick-douglas-pearce/agentfluent/issues/97)).
-- Hook coverage in the config rubric.
-- Webapp dashboard for trend visualization.
-- Closed-loop self-improvement — use AgentFluent's diagnostic output as a feedback signal the agent itself consumes to propose config edits against its own past sessions.
-- Agent ROI reporting — roll up cost, usage, and task-completion signals over time so a business can evaluate whether an optimized agent is worth continuing to run.
-
-Browse [open issues](https://github.com/frederick-douglas-pearce/agentfluent/issues) for the full backlog.
+See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full version history (release themes, headline features, design context per release) and [`CHANGELOG.md`](CHANGELOG.md) for the commit-level log. Browse [open issues](https://github.com/frederick-douglas-pearce/agentfluent/issues) for the full backlog.
 
 ## Troubleshooting
 
