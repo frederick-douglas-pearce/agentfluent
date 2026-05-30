@@ -656,7 +656,10 @@ quality issues an independent reviewer might have caught.
 when the CLI passes `--git`. Scans the last 90 days of `git log`
 in the project's source directory for `feat:` commits, then for
 each one looks 7 days forward for any `fix:` commits that share
-at least one file. Each matched pair becomes one signal.
+at least 2 code files (excluding `.md`, `.yaml`, `.yml` paths,
+which co-edit frequently with unrelated commits). The threshold
+applies per fix, not on the union of all fixes for a feat. Each
+matched pair becomes one signal.
 
 Cross-cutting (`agent_type=None`). Severity branches on whether
 the originating session used a review-style subagent (architect,
@@ -674,6 +677,11 @@ session window yield `session_used_reviewer: null`.
 Subprocess invocation is bounded (30s timeout); missing git
 binary, non-repo dir, or empty window all silently skip the
 pipeline rather than raising.
+
+Calibrated on the agentfluent dogfood corpus (#402, v0.8):
+76.2% precision on a 21-pair sample after raising the per-fix
+code-overlap threshold from 1 to 2; baseline v0.7 thresholds
+yielded 58.8% on a 34-pair sample.
 
 **Example:**
 
