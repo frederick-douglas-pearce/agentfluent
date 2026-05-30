@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.8.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.7.0...v0.8.0) (2026-05-30)
+
+
+### Features
+
+* **diagnostics:** [#400](https://github.com/frederick-douglas-pearce/agentfluent/issues/400) — CI_FAILURE_FIRST_PUSH Tier 3 signal ([#463](https://github.com/frederick-douglas-pearce/agentfluent/issues/463)) ([baf81c4](https://github.com/frederick-douglas-pearce/agentfluent/commit/baf81c4a49a683ace44397c7c42c9e11b0bd2974))
+* **diagnostics:** [#401](https://github.com/frederick-douglas-pearce/agentfluent/issues/401) — PR_REVIEW_COMMENT_DENSITY Tier 3 signal ([#464](https://github.com/frederick-douglas-pearce/agentfluent/issues/464)) ([c680db0](https://github.com/frederick-douglas-pearce/agentfluent/commit/c680db09ee2892e6856d4dd73f7622248f6b1ce7))
+* **github:** [#399](https://github.com/frederick-douglas-pearce/agentfluent/issues/399) — Tier 3 infrastructure (gh detection, cache, --github flag, consent UX) ([#462](https://github.com/frederick-douglas-pearce/agentfluent/issues/462)) ([adfd205](https://github.com/frederick-douglas-pearce/agentfluent/commit/adfd20549b4d2fd2e46ede46d117ccba7f5d7fc0))
+
+
+### Bug Fixes
+
+* **diagnostics:** [#333](https://github.com/frederick-douglas-pearce/agentfluent/issues/333) — gate ERROR_PATTERN per-invocation on trace presence ([#475](https://github.com/frederick-douglas-pearce/agentfluent/issues/475)) ([dfe7fbd](https://github.com/frederick-douglas-pearce/agentfluent/commit/dfe7fbdf2ebcb8353ddbbf1784efb9e042e3bcdc))
+* **diagnostics:** [#395](https://github.com/frederick-douglas-pearce/agentfluent/issues/395) — down-weight RETRY_LOOP priority on built-in read-only tools ([#460](https://github.com/frederick-douglas-pearce/agentfluent/issues/460)) ([7134885](https://github.com/frederick-douglas-pearce/agentfluent/commit/71348858342f1b64ee5db3a1156e9ad5da898421))
+* **diagnostics:** [#396](https://github.com/frederick-douglas-pearce/agentfluent/issues/396) — reviewer_caught healthy-band gating for parent_acted rate ([#461](https://github.com/frederick-douglas-pearce/agentfluent/issues/461)) ([c0859c2](https://github.com/frederick-douglas-pearce/agentfluent/commit/c0859c29cadd062db523a098b9906f742287d4ee))
+* **diagnostics:** [#402](https://github.com/frederick-douglas-pearce/agentfluent/issues/402) — raise FEAT_FIX_PROXIMITY code-overlap threshold to 2 (calibration) ([#472](https://github.com/frederick-douglas-pearce/agentfluent/issues/472)) ([a979217](https://github.com/frederick-douglas-pearce/agentfluent/commit/a9792176bd1ba6ed0359a54f35ab18c7995c6b30))
+* **diagnostics:** [#453](https://github.com/frederick-douglas-pearce/agentfluent/issues/453) — tag no-trace invocations as duration-unreliable ([#455](https://github.com/frederick-douglas-pearce/agentfluent/issues/455)) ([7b27684](https://github.com/frederick-douglas-pearce/agentfluent/commit/7b27684b47f0e4304210608a8bc763ff396dd9cc))
+* **diagnostics:** [#454](https://github.com/frederick-douglas-pearce/agentfluent/issues/454) — re-tune idle-gap constants to catch moderate user-coupled waits ([#458](https://github.com/frederick-douglas-pearce/agentfluent/issues/458)) ([0b3cf4f](https://github.com/frederick-douglas-pearce/agentfluent/commit/0b3cf4fc02c904a4342154ad008c272048c1bb46))
+
 ## [0.7.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.6.0...v0.7.0) (2026-05-17)
 
 
