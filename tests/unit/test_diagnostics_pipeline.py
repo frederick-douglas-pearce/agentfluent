@@ -1,8 +1,9 @@
 """Tests for the diagnostics orchestration pipeline.
 
-Covers: metadata/trace signal dedup, subagent_trace_count semantics,
-backward compatibility of the public `run_diagnostics` import path,
-and v0.2 output-shape regression for trace-less sessions.
+Covers: per-invocation trace gating on metadata ``ERROR_PATTERN``
+extraction (#333), subagent_trace_count semantics, backward
+compatibility of the public `run_diagnostics` import path, and v0.2
+output-shape regression for trace-less sessions.
 """
 
 import json
@@ -77,10 +78,44 @@ def _stuck_trace(agent_type: str = "pm") -> SubagentTrace:
     )
 
 
-class TestDedup:
-    def test_metadata_error_pattern_suppressed_when_trace_signal_same_agent_type(
+def _clean_trace(agent_type: str = "pm") -> SubagentTrace:
+    """A successfully-completed trace with no error/retry signals.
+
+    Used by the #333 regression test that pins per-invocation gating:
+    the pre-#333 dedup checked agent-type-level signal presence, so
+    an invocation with a clean trace AND an error-keyword output
+    surfaced a metadata ERROR_PATTERN (cross-invocation overreach).
+    Per-invocation gating drops it because ``inv.trace is not None``.
+    """
+    return SubagentTrace(
+        agent_id="agent-clean",
+        agent_type=agent_type,
+        delegation_prompt="ok",
+        tool_calls=[
+            SubagentToolCall(
+                tool_name="Read",
+                input_summary="ok.txt",
+                result_summary="contents",
+                is_error=False,
+            ),
+        ],
+        retry_sequences=[],
+    )
+
+
+class TestErrorPatternTraceGate:
+    """#333: ``_extract_error_signals`` gates per-invocation on
+    ``inv.trace is not None``. Traces carry authoritative error
+    evidence (TOOL_ERROR_SEQUENCE / RETRY_LOOP / PERMISSION_FAILURE),
+    so the metadata keyword scan is redundant for traced invocations
+    and high-FP on code-discussion prose. Untraced invocations still
+    emit; the 200-char window from #281 is their precision backstop."""
+
+    def test_traced_invocation_with_error_keyword_emits_no_metadata_signal(
         self,
     ) -> None:
+        # Traced + dirty trace: trace-level signals fire (STUCK_PATTERN
+        # here), metadata ERROR_PATTERN is suppressed.
         inv = _inv(
             agent_type="pm",
             output_text="The operation failed with a permission denied error.",
@@ -89,23 +124,36 @@ class TestDedup:
         result = run_diagnostics([inv])
         by_type = {s.signal_type for s in result.signals}
         assert SignalType.STUCK_PATTERN in by_type
-        # ERROR_PATTERN for pm is suppressed.
         assert not any(
             s.signal_type == SignalType.ERROR_PATTERN and s.agent_type == "pm"
             for s in result.signals
         )
 
-    def test_metadata_error_pattern_retained_for_other_agent_type(self) -> None:
-        # agent A has a trace, agent B doesn't; B's metadata signals stay.
-        inv_a = _inv(agent_type="pm", trace=_stuck_trace(agent_type="pm"))
-        inv_b = _inv(agent_type="architect", output_text="permission denied")
-        result = run_diagnostics([inv_a, inv_b])
-        assert any(
-            s.signal_type == SignalType.ERROR_PATTERN and s.agent_type == "architect"
-            for s in result.signals
+    def test_traced_invocation_with_clean_trace_still_suppresses_metadata(
+        self,
+    ) -> None:
+        # The case pre-#333 dedup missed: a clean trace (no trace
+        # signals) didn't add the agent_type to trace_agent_types, so
+        # the agent-type-level dedup let the metadata fallback through.
+        # Per-invocation gating drops it because the trace exists at all.
+        # Dogfood corpus #333: this was the dominant source of visible
+        # FP signals (code-review prose with `error`-keyword identifiers
+        # whose traces happened to complete cleanly).
+        inv = _inv(
+            agent_type="general-purpose",
+            output_text="Reviewed `_extract_error_signals` and confirmed the iterator is correct.",
+            trace=_clean_trace(agent_type="general-purpose"),
+        )
+        result = run_diagnostics([inv])
+        assert not any(
+            s.signal_type == SignalType.ERROR_PATTERN for s in result.signals
         )
 
-    def test_no_trace_signals_all_metadata_retained(self) -> None:
+    def test_untraced_invocation_with_error_keyword_still_emits(self) -> None:
+        # No linked trace (e.g., raw Agent SDK call without a subagent
+        # JSONL). Metadata fallback is the only error signal available;
+        # it must still fire so real "Agent type X not found" / system
+        # error reports reach the user.
         inv = _inv(output_text="failed to load the config")
         result = run_diagnostics([inv])
         error_signals = [
@@ -113,10 +161,37 @@ class TestDedup:
         ]
         assert len(error_signals) >= 1
 
-    def test_token_outlier_not_suppressed_by_trace_signal(self) -> None:
-        # IQR-based detection (#186 P2) needs OUTLIER_MIN_SAMPLE peers
-        # to compute Q3/IQR. One outlier carries a trace; TOKEN_OUTLIER
-        # must survive the dedup pass alongside STUCK_PATTERN.
+    def test_mixed_traced_and_untraced_only_untraced_emits(self) -> None:
+        # Two invocations of the *same agent_type*: one traced (suppress),
+        # one untraced (emit). Pre-#333 dedup operated cross-invocationally
+        # on agent_type — it would have silenced the untraced one too once
+        # the traced one produced any trace signal. Per-invocation gating
+        # gets this right: each invocation is evaluated on its own.
+        inv_traced = _inv(
+            agent_type="pm",
+            output_text="permission denied during the run",
+            trace=_stuck_trace(agent_type="pm"),
+        )
+        inv_untraced = _inv(
+            agent_type="pm",
+            output_text="Agent type 'pm' not found in this session.",
+            trace=None,
+        )
+        result = run_diagnostics([inv_traced, inv_untraced])
+        error_signals = [
+            s for s in result.signals if s.signal_type == SignalType.ERROR_PATTERN
+        ]
+        # Exactly the untraced invocation surfaces a metadata signal.
+        assert len(error_signals) >= 1
+        assert all(
+            s.detail.get("tool_use_id") == inv_untraced.tool_use_id
+            for s in error_signals
+        )
+
+    def test_token_outlier_not_affected_by_trace_gate(self) -> None:
+        # The trace gate applies only to ERROR_PATTERN. IQR-based
+        # TOKEN_OUTLIER detection (#186 P2) operates across all
+        # invocations regardless of trace presence.
         peers = [
             AgentInvocation(
                 agent_type="pm", description=f"p{i}", prompt="x",
@@ -139,24 +214,22 @@ class TestDedup:
         assert any(s.signal_type == SignalType.TOKEN_OUTLIER for s in result.signals)
         assert any(s.signal_type == SignalType.STUCK_PATTERN for s in result.signals)
 
-    def test_dedup_happens_before_correlation(self) -> None:
+    def test_trace_gate_blocks_correlator_recommendations(self) -> None:
         # An ERROR_PATTERN "permission denied" signal normally triggers
-        # AccessErrorRule. When suppressed by a trace signal, its
-        # recommendation must also be absent.
+        # AccessErrorRule. When the invocation is traced, no ERROR_PATTERN
+        # is emitted in the first place, so its recommendation must also
+        # be absent. StuckPatternRule still fires from the trace.
         inv = _inv(
             agent_type="pm",
             output_text="permission denied when accessing file",
             trace=_stuck_trace(agent_type="pm"),
         )
         result = run_diagnostics([inv])
-        # StuckPatternRule should produce a recommendation for the trace.
         stuck_recs = [
             r for r in result.recommendations
             if r.signal_types == [SignalType.STUCK_PATTERN]
         ]
         assert len(stuck_recs) == 1
-        # AccessErrorRule's recommendation (from metadata ERROR_PATTERN)
-        # should NOT appear.
         assert not any(
             r.signal_types == [SignalType.ERROR_PATTERN] and r.agent_type == "pm"
             for r in result.recommendations

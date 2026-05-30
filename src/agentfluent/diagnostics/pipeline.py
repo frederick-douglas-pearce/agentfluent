@@ -1,12 +1,11 @@
 """Diagnostics orchestration.
 
 Owns the `run_diagnostics` pipeline: extracts metadata-level and
-trace-level signals, deduplicates overlapping metadata error signals
-when strictly-more-informative trace signals cover the same
-`agent_type`, runs correlation against any available agent configs,
-computes the parsed-trace count, and (when scikit-learn is installed)
-proposes draft subagent definitions from clustered general-purpose
-delegations.
+trace-level signals (the metadata fallback skips traced invocations —
+see ``signals._extract_error_signals``), runs correlation against any
+available agent configs, computes the parsed-trace count, and (when
+scikit-learn is installed) proposes draft subagent definitions from
+clustered general-purpose delegations.
 
 Kept separate from `analytics/pipeline.py` to keep the analytics layer
 free of diagnostics imports and to match the one-file-per-concern
@@ -149,33 +148,6 @@ def _enrich_dedup_with_mismatches(
         sug.dedup_note = _append_mismatch_phrase(sug.dedup_note, mismatch)
 
 
-def _dedup_error_patterns(signals: list[DiagnosticSignal]) -> list[DiagnosticSignal]:
-    """Drop metadata ERROR_PATTERN signals for agent_types that already
-    have at least one trace-level signal.
-
-    Trace signals carry specific evidence (which tool, which call index,
-    which keyword) and specific remediation; metadata ERROR_PATTERN is a
-    best-effort keyword scan of the final output. Showing both for the
-    same agent would produce two recommendations for the same underlying
-    issue — one vague, one precise.
-
-    Only `ERROR_PATTERN` is suppressed. `TOKEN_OUTLIER` and
-    `DURATION_OUTLIER` measure different axes and are left alone.
-    """
-    trace_agent_types = {
-        s.agent_type for s in signals if s.signal_type in TRACE_SIGNAL_TYPES
-    }
-    if not trace_agent_types:
-        return signals
-    return [
-        s for s in signals
-        if not (
-            s.signal_type == SignalType.ERROR_PATTERN
-            and s.agent_type in trace_agent_types
-        )
-    ]
-
-
 def run_diagnostics(
     invocations: list[AgentInvocation],
     *,
@@ -193,8 +165,9 @@ def run_diagnostics(
 ) -> DiagnosticsResult:
     """Run the full diagnostics pipeline on agent invocations.
 
-    Extracts metadata + trace-level signals, dedups overlapping metadata
-    error signals, scans for agent config files, correlates signals
+    Extracts metadata + trace-level signals (metadata ``ERROR_PATTERN``
+    is gated to untraced invocations only — traces carry authoritative
+    error evidence), scans for agent config files, correlates signals
     with config, produces recommendations, and (when scikit-learn is
     installed) proposes draft subagent definitions from clustered
     general-purpose delegations. ``subagent_trace_count`` on the result
@@ -238,8 +211,6 @@ def run_diagnostics(
                 invocation_id=inv.invocation_id,
             ),
         )
-
-    signals = _dedup_error_patterns(signals)
 
     agent_configs: list[AgentConfig] = []
     try:

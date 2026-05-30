@@ -101,11 +101,30 @@ but the absolute floor is set here."""
 
 
 def _extract_error_signals(invocations: list[AgentInvocation]) -> list[DiagnosticSignal]:
-    """Detect error patterns in agent output text."""
+    """Detect error patterns in agent output text.
+
+    Traced invocations are skipped: trace-level signals
+    (``TOOL_ERROR_SEQUENCE``, ``RETRY_LOOP``, ``PERMISSION_FAILURE``)
+    carry per-tool evidence the keyword scan can't reproduce, so the
+    metadata fallback is redundant there and its FP rate is high
+    (#333 calibration on dogfood corpus: 0% → 100% visible precision
+    once traced invocations were excluded — code-review prose
+    discussing identifiers like ``_exit_with_error`` and
+    ``conversations_with_errors`` no longer surfaces).
+
+    Untraced invocations (Agent SDK calls without linked subagent
+    files) still flow through; the 200-char window is their only
+    precision backstop. If a future corpus surfaces an untraced FP
+    class, next-layer defenses (anchored patterns like ``^Error:``,
+    or a confidence field on the emitted signal) are deferred per
+    #281's architect-review options.
+    """
     signals: list[DiagnosticSignal] = []
 
     for inv in invocations:
         if not inv.output_text:
+            continue
+        if inv.trace is not None:
             continue
 
         for match in iter_error_matches(inv.output_text):
