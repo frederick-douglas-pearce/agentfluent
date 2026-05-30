@@ -95,13 +95,15 @@ class SignalType(StrEnum):
     PR_REVIEW_COMMENT_DENSITY = "pr_review_comment_density"
 
 
-# Signal types emitted by the trace-level extractor. Used by the dedup
-# pass (``pipeline._dedup_error_patterns``) to identify agent_types
-# whose metadata ERROR_PATTERN signals can be safely suppressed in
-# favor of more-specific trace evidence; also used by the priority
-# scorer (``aggregation``) as the trace-evidence boost. Lives here
-# rather than in ``pipeline.py`` so ``aggregation`` can import it
+# Signal types emitted by the trace-level extractor. Used by the
+# priority scorer (``aggregation``) as the trace-evidence boost. Lives
+# here rather than in ``pipeline.py`` so ``aggregation`` can import it
 # without a circular dependency.
+#
+# The metadata ``ERROR_PATTERN`` extractor (``signals._extract_error_signals``)
+# now gates per-invocation on ``inv.trace is not None`` rather than
+# checking this set at the agent-type granularity (#333). The set is
+# retained because the priority scorer still needs it.
 TRACE_SIGNAL_TYPES: frozenset[SignalType] = frozenset(
     {
         SignalType.TOOL_ERROR_SEQUENCE,

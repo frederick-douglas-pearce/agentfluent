@@ -817,3 +817,41 @@ primary_axis = max(AXIS_TIEBREAKER, key=lambda a: axis_scores[a])
 **Reference:** Issue #454 architect review comment (2026-05-25). `prd-v0.8.md`, `backlog-v0.8.md`, #454 issue body updated.
 
 ---
+
+## D039: `ERROR_PATTERN` metadata fallback — per-invocation trace gate, retire `_dedup_error_patterns`
+
+**Date:** 2026-05-30
+**Context:** #281 bounded `ERROR_REGEX` to a 200-char leading window, dropping raw match volume ~98% on the dogfood corpus. Its architect review flagged that the bounded set still has ~80%+ FP on code-discussion prose and proposed a follow-up (#333) to decide whether to suppress, gate, or replace the metadata fallback. The dedup pass `_dedup_error_patterns` (pipeline.py) was the existing partial mitigation: drop metadata `ERROR_PATTERN` for any agent_type that produced any trace-level signal anywhere in the analysis scope.
+
+**Empirical calibration on full dogfood corpus** (29 ERROR_PATTERN signals across agentfluent, codefluent, classifier — `.claude/specs/analysis/333-error-pattern-precision/`):
+
+| Scheme | visible | TP | FP | precision | TPs silenced |
+|---|---:|---:|---:|---:|---:|
+| Current `_dedup_error_patterns` | 4 | 0 | 4 | **0%** | 4 |
+| Per-invocation trace gate (H5) | 2 | 2 | 0 | **100%** | 2 (trace-covered) |
+| H5 + min-match ≥ 2 | 0 | 0 | 0 | — | 4 (too aggressive) |
+
+**Findings:**
+- The current `_dedup_error_patterns` has a recall bug. Operating at agent-type granularity, it silences "Agent type X not found" TPs when *another invocation* of the same agent_type produced trace signals. Per-invocation gating fixes this.
+- Min-match ≥ 2 gate (the #281 architect's prior suggestion) inverts on this corpus: all 4 TPs are single-keyword system error strings; the gate silences 100% of TPs and only 16% of FPs.
+- Per-invocation gate is a strict superset of the dedup's intent — every signal the dedup correctly drops would also be dropped by H5, since those are by definition traced invocations.
+
+**Options considered:**
+- A) Patch `_dedup_error_patterns` to also gate per-invocation. Rejected — reproduces the per-invocation check inside a separate function. Two places to maintain.
+- B) Keep `_dedup_error_patterns` as belt-and-suspenders alongside H5. Rejected — its recall bug continues silencing real "not found" TPs.
+- C) Per-invocation trace gate inside `_extract_error_signals`; delete `_dedup_error_patterns`. Chosen.
+- D) Add min-match gate as additional precision layer. Rejected — corpus data shows it loses real TPs.
+
+**Decision:** Option C. `_extract_error_signals` now skips invocations where `inv.trace is not None`; trace-level signals (`TOOL_ERROR_SEQUENCE`, `RETRY_LOOP`, `PERMISSION_FAILURE`) are the authoritative error source for traced invocations. `_dedup_error_patterns` retired. `compute_error_rate` untouched (denominator-normalized; FP-tolerant). No min-match gate.
+
+**Rationale:**
+- **Visible precision 0% → 100%** on the dogfood corpus; surfaces 2 previously-silenced TPs (`Agent type X not found`).
+- **Coverage preserved at the recommendation layer** — the 2 hook-deny TPs that H5 silences are covered by the trace's `PERMISSION_FAILURE` / `TOOL_ERROR_SEQUENCE` signals, which drive specific correlator recommendations.
+- **Load-bearing for post-v0.8 dogfood run** — Fred runs corpus analysis after each release; the previous 4-visible 0%-precision baseline would have undermined the v0.8 release demo.
+- **Architect-approved** (#333 review comment, 2026-05-30). One IMPORTANT concern addressed: inline comment in `_extract_error_signals` documents the untraced-precision limitation and the planned next-layer defenses (anchored patterns, confidence field) deferred per #281's options.
+
+**Known limitation:** untraced invocations have no precision backstop beyond the 200-char window. The corpus only contained 2 untraced ERROR_PATTERN signals (both TPs). When Agent SDK traffic grows in v0.8+, the untraced FP surface may surface a new class. Anchored-pattern detection (`^Error:`, `^Permission denied`) and per-signal confidence fields are the next-layer mitigations if needed.
+
+**Reference:** Issue #333; calibration data at `.claude/specs/analysis/333-error-pattern-precision/`; architect review comment on #333 (2026-05-30); precedent in D027 (#281 bounded-window decision).
+
+---
