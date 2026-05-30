@@ -229,3 +229,24 @@ These came up during the spike and need a PM/architect call before v0.8 implemen
 - No auth infrastructure
 - No `pyproject.toml` changes
 - No API call prototyping
+
+---
+
+## Implementation outcome (v0.8.0)
+
+Shipped in v0.8.0 per epic [#398](https://github.com/frederick-douglas-pearce/agentfluent/issues/398). The spike's recommendations carried through to implementation; resolutions to the four open questions are recorded below for the next Tier 3 iteration.
+
+**Shipped (resolved spike recommendations):**
+
+- Auth: `gh` CLI subprocess wrapper (`agentfluent.github.client.gh_api`). No AgentFluent-managed token. PAT fallback explicitly deferred per the original recommendation.
+- Optional deps: no new runtime dependency in `pyproject.toml`. `gh` binary required only when `--github` is passed; detection + actionable error wired in `agentfluent.github.detection`.
+- Rate-limit + caching: file-backed TTL response cache with three explicit TTL tiers; rate-limit-degraded runs continue and surface `tier3_degraded: bool` on the JSON envelope. Per-PR error handling skips affected PRs rather than failing the run. Cache key includes `jq_filter` per architect review of [#399](https://github.com/frederick-douglas-pearce/agentfluent/issues/399).
+- Privacy: `gh` CLI is the only network surface (no AgentFluent-issued requests). First-run consent recorded under `~/.config/agentfluent/`. `--github-no-cache` bypasses the cache without disabling the call.
+- Signals: `CI_FAILURE_FIRST_PUSH` ([#400](https://github.com/frederick-douglas-pearce/agentfluent/issues/400)) and `PR_REVIEW_COMMENT_DENSITY` ([#401](https://github.com/frederick-douglas-pearce/agentfluent/issues/401)) shipped; full GLOSSARY entries at [`docs/GLOSSARY.md`](../../docs/GLOSSARY.md#ci_failure_first_push) / [`#pr_review_comment_density`](../../docs/GLOSSARY.md#pr_review_comment_density). Two additional signals (post-merge issue references, review-comment topic clustering) deferred to v0.9+.
+
+**Open-question resolutions (§ "Open questions for v0.8 scoping"):**
+
+1. **Repo discovery from session.** Shipped (a) + (b): infer GitHub remote from the project's git config; `--repo OWNER/NAME` override for the cases where inference fails (non-GitHub remote, non-repo source directory).
+2. **First-run consent UX.** Shipped the recommended split: interactive consent prompt in TTY contexts; `--github` in non-TTY (CI) is treated as consent itself. Consent state is recorded under `~/.config/agentfluent/`.
+3. **Config file layer.** Partial: the `~/.config/agentfluent/` directory was established for consent state via `agentfluent_config_dir()`. No general-purpose user config file (e.g. `config.yaml`) was added — `--github` and its companion flags remain the only Tier 3 gates. The directory exists if a config layer is added later.
+4. **MCP path resurrection.** Open. Revisit after the post-v0.8 dogfood pass — collect friction reports on the `gh` requirement and decide whether the MCP `mcp__github__*` path is worth resurrecting as an alternative auth surface.
