@@ -347,7 +347,7 @@ Step by step:
 9. **Propose new subagents** — `diagnostics/delegation.py` clusters recurring `general-purpose` invocations via TF-IDF + KMeans and drafts candidate subagent definitions with name, model, tool list, and prompt scaffold. Under `--verbose`, each draft is emitted as a copy-paste-ready YAML frontmatter block. Deduped against existing agents by cosine similarity.
 10. **Render** — `cli/formatters/table.py` emits Rich tables; `cli/formatters/json.py` emits the stable JSON envelope. Format is selected by `--format`.
 
-Everything runs locally. No outbound network calls, ever. No API key needed.
+Everything runs locally. No outbound network calls. No API key needed.
 
 ## Features
 
