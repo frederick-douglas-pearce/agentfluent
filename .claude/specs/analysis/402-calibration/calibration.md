@@ -98,6 +98,15 @@ These are the patterns to file as a follow-up issue for targeted suppression. **
 3. **File follow-up issue** for the residual FP patterns (intentional iteration detection; feature-work-labeled-as-fix detection).
 4. **No GLOSSARY change** unless the user wants the precision number surfaced to consumers.
 
-## Forward note: LLM-as-a-judge candidate
+## Forward note: automated-classifier candidate (LLM judge OR classical ML)
 
-This calibration round — and the precedents at #274 (`reviewer_caught`) and #321 (`user_correction`) — are a tagged candidate for LLM-as-a-judge automation once that capability lands on the AgentFluent roadmap. The work is structured: given a small evidence bundle (feat commit + fix commits + shared files) plus a rubric, emit a TP/FP label with rationale. The per-pair table above is suitable as a few-shot prompt and/or a golden-set fixture when the judge is built. Manual rounds remain valuable until then because they validate that the signal's *promise* matches its behavior, but the long-term plan is to make calibration a recurring, automated check rather than a one-shot dev day.
+This calibration round — and the precedents at #274 (`reviewer_caught`) and #321 (`user_correction`) — are a tagged candidate for **automated classification** once that capability lands on the AgentFluent roadmap. The work is structured: given a small evidence bundle (feat commit + fix commits + shared files) plus a rubric, emit a TP/FP label with rationale. The per-pair table above is suitable both as a few-shot prompt for an LLM judge **and** as a labeled training/eval set for a classical ML classifier.
+
+Two automation paths to evaluate in parallel when this milestone is reached:
+
+1. **Classical ML / NLP classifier** (TF-IDF over commit messages + file-path features, fed to logistic regression or gradient-boosted trees; or similar lightweight supervised model). **Benefits:** deterministic across runs, zero per-invocation API cost, fast enough to run on every release as a CI gate, no model-version drift, and on narrow text-classification tasks of this shape with a few hundred labeled examples they routinely match or beat few-shot LLM judges.
+2. **LLM-as-a-judge.** **Benefits:** works from a rubric without requiring a labeled training set, handles genuinely subjective rubric clauses, and produces a human-readable rationale alongside each label. **Costs:** per-call API spend, non-determinism, and verdicts that can shift across model versions.
+
+**Default stance for every LLM-judge candidate going forward:** evaluate the classical-ML path first, because the determinism and cost properties make it a better fit for "calibrate every release" usage. Reach for an LLM judge when the rubric is genuinely subjective, when labeled data is scarce, or as a fallback / tie-breaker on rows the classical model is uncertain about. Hybrid (classical model as first-pass filter, LLM judge on uncertain rows) is often the right answer.
+
+Manual rounds remain valuable until either path is built, because they validate that the signal's *promise* matches its behavior and produce the labeled examples both paths need.
