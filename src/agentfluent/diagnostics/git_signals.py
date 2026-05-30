@@ -20,6 +20,17 @@ and graceful degradation: a missing git binary, a non-repo dir, an
 empty window, or a timeout all return ``[]`` rather than raising.
 The diagnostics pipeline never crashes because the user opted into
 ``--git`` from a non-repo working dir.
+
+**Calibration (v0.8, #402).** On the agentfluent dogfood corpus
+(34 pairs, 90-day window) the v0.7 default thresholds yielded
+**58.8% precision** (20 TP / 14 FP). The dominant false-positive
+mode was single-file coincidental overlap with broad-impact fix
+commits (a schema or UX fix touching widely-used files getting
+paired with unrelated feats). Raising the per-fix overlap threshold
+from 1 to 2 *code* files (excluding ``.md`` / ``.yaml`` / ``.yml``
+paths) raises precision to **76.2%** (16 TP / 5 FP / 21 kept) with
+~20% recall loss. See ``.claude/specs/analysis/402-calibration/``
+for the per-pair classification rubric and methodology.
 """
 
 from __future__ import annotations
@@ -89,6 +100,22 @@ DEFAULT_PROXIMITY_DAYS = 7
 _FEAT_PATTERN = re.compile(r"^feat(\([^)]*\))?!?:", re.IGNORECASE)
 _FIX_PATTERN = re.compile(r"^fix(\([^)]*\))?!?:", re.IGNORECASE)
 
+# Files that do NOT count toward the per-fix code-overlap threshold.
+# Documentation paths (Markdown, YAML) are co-edited frequently with
+# unrelated commits — GLOSSARY.md grows whenever a new signal lands,
+# terms.yaml whenever a term is renamed — so counting them toward the
+# overlap inflated the signal's false-positive rate (#402 calibration).
+_OVERLAP_EXCLUDED_EXTENSIONS: frozenset[str] = frozenset({".md", ".yaml", ".yml"})
+
+# Minimum number of code files a single fix must share with a feat for
+# the pair to count. Raised from 1 to 2 in v0.8 after the #402
+# calibration showed single-file overlap was the dominant FP mode.
+# Applied per-fix inside the inner loop of :func:`_find_feat_fix_pairs`
+# — NOT on the accumulated ``shared`` set — so two single-file-overlap
+# fixes can't combine to clear the bar even though neither individually
+# has strong evidence (architect review on #402, 2026-05-29).
+_MIN_CODE_FILE_OVERLAP = 2
+
 
 @dataclass(frozen=True)
 class _FeatFixPair:
@@ -145,7 +172,12 @@ def _find_feat_fix_pairs(
     commits: list[_GitCommit], *, proximity_days: int,
 ) -> list[_FeatFixPair]:
     """Pair each ``feat:`` commit with subsequent in-window ``fix:`` commits
-    that share at least one file. Commits are sorted chronologically."""
+    that share at least :data:`_MIN_CODE_FILE_OVERLAP` code files (per
+    fix). Commits are sorted chronologically. The threshold check runs
+    inside the inner loop so each fix is evaluated on its own merits —
+    two single-file-overlap fixes can't combine to clear the bar.
+    See module docstring for the calibration result behind these
+    thresholds (#402, v0.8)."""
     sorted_commits = sorted(commits, key=lambda c: c.timestamp)
     feats = [c for c in sorted_commits if _FEAT_PATTERN.match(c.subject)]
     fixes = [c for c in sorted_commits if _FIX_PATTERN.match(c.subject)]
@@ -161,7 +193,8 @@ def _find_feat_fix_pairs(
             if fix.timestamp > window_end:
                 continue
             overlap = feat.files & fix.files
-            if not overlap:
+            code_overlap_count = sum(1 for f in overlap if _is_code_file(f))
+            if code_overlap_count < _MIN_CODE_FILE_OVERLAP:
                 continue
             matching_fixes.append(fix)
             shared.update(overlap)
@@ -172,6 +205,15 @@ def _find_feat_fix_pairs(
                 shared_files=frozenset(shared),
             ))
     return pairs
+
+
+def _is_code_file(path: str) -> bool:
+    """Whether ``path`` counts toward the code-overlap threshold for
+    FEAT_FIX_PROXIMITY pairing. Files matching
+    :data:`_OVERLAP_EXCLUDED_EXTENSIONS` (Markdown / YAML) are filtered
+    out — they co-edit frequently with unrelated commits and previously
+    drove the signal's FP rate (#402 calibration)."""
+    return not any(path.endswith(ext) for ext in _OVERLAP_EXCLUDED_EXTENSIONS)
 
 
 def _signal_for_pair(

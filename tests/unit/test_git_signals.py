@@ -25,8 +25,11 @@ from agentfluent.core.session import SessionMessage
 from agentfluent.diagnostics.git_signals import (
     _GIT_LOG_COMMIT_SEPARATOR,
     _GIT_LOG_FIELD_SEPARATOR,
+    _MIN_CODE_FILE_OVERLAP,
+    _OVERLAP_EXCLUDED_EXTENSIONS,
     _find_feat_fix_pairs,
     _GitCommit,
+    _is_code_file,
     extract_git_quality_signals,
 )
 from agentfluent.diagnostics.models import SignalType
@@ -92,26 +95,37 @@ class TestFeatFixPairing:
     def test_pair_within_window_with_shared_files_emitted(self) -> None:
         t0 = datetime(2026, 5, 1, tzinfo=UTC)
         commits = [
-            _commit("a", t0, "feat: add foo", ["src/foo.py"]),
-            _commit("b", t0 + timedelta(days=2), "fix: foo edge case", ["src/foo.py"]),
+            _commit(
+                "a", t0, "feat: add foo",
+                ["src/foo.py", "src/foo_helpers.py"],
+            ),
+            _commit(
+                "b", t0 + timedelta(days=2), "fix: foo edge case",
+                ["src/foo.py", "src/foo_helpers.py"],
+            ),
         ]
         pairs = _find_feat_fix_pairs(commits, proximity_days=7)
         assert len(pairs) == 1
         assert pairs[0].days_between == 2
-        assert pairs[0].shared_files == frozenset({"src/foo.py"})
+        assert pairs[0].shared_files == frozenset(
+            {"src/foo.py", "src/foo_helpers.py"},
+        )
 
     def test_pair_outside_window_skipped(self) -> None:
         t0 = datetime(2026, 5, 1, tzinfo=UTC)
         commits = [
-            _commit("a", t0, "feat: add foo", ["src/foo.py"]),
-            _commit("b", t0 + timedelta(days=30), "fix: foo regression", ["src/foo.py"]),
+            _commit("a", t0, "feat: add foo", ["src/foo.py", "src/foo_helpers.py"]),
+            _commit(
+                "b", t0 + timedelta(days=30), "fix: foo regression",
+                ["src/foo.py", "src/foo_helpers.py"],
+            ),
         ]
         assert _find_feat_fix_pairs(commits, proximity_days=7) == []
 
     def test_pair_with_no_file_overlap_skipped(self) -> None:
         t0 = datetime(2026, 5, 1, tzinfo=UTC)
         commits = [
-            _commit("a", t0, "feat: add foo", ["src/foo.py"]),
+            _commit("a", t0, "feat: add foo", ["src/foo.py", "src/foo_helpers.py"]),
             _commit("b", t0 + timedelta(days=1), "fix: bar bug", ["src/bar.py"]),
         ]
         assert _find_feat_fix_pairs(commits, proximity_days=7) == []
@@ -119,8 +133,14 @@ class TestFeatFixPairing:
     def test_feat_with_scope_and_breaking_marker_matches(self) -> None:
         t0 = datetime(2026, 5, 1, tzinfo=UTC)
         commits = [
-            _commit("a", t0, "feat(cli)!: redo flag parsing", ["cli.py"]),
-            _commit("b", t0 + timedelta(days=1), "fix(cli): off-by-one", ["cli.py"]),
+            _commit(
+                "a", t0, "feat(cli)!: redo flag parsing",
+                ["cli.py", "cli_helpers.py"],
+            ),
+            _commit(
+                "b", t0 + timedelta(days=1), "fix(cli): off-by-one",
+                ["cli.py", "cli_helpers.py"],
+            ),
         ]
         pairs = _find_feat_fix_pairs(commits, proximity_days=7)
         assert len(pairs) == 1
@@ -128,22 +148,160 @@ class TestFeatFixPairing:
     def test_non_conventional_commits_ignored(self) -> None:
         t0 = datetime(2026, 5, 1, tzinfo=UTC)
         commits = [
-            _commit("a", t0, "added foo", ["src/foo.py"]),
-            _commit("b", t0 + timedelta(days=1), "fixed foo", ["src/foo.py"]),
+            _commit("a", t0, "added foo", ["src/foo.py", "src/foo_helpers.py"]),
+            _commit(
+                "b", t0 + timedelta(days=1), "fixed foo",
+                ["src/foo.py", "src/foo_helpers.py"],
+            ),
         ]
         assert _find_feat_fix_pairs(commits, proximity_days=7) == []
 
     def test_multiple_fixes_collapsed_into_one_pair(self) -> None:
         t0 = datetime(2026, 5, 1, tzinfo=UTC)
         commits = [
-            _commit("a", t0, "feat: add foo", ["src/foo.py", "src/bar.py"]),
-            _commit("b", t0 + timedelta(days=1), "fix: foo regression", ["src/foo.py"]),
-            _commit("c", t0 + timedelta(days=3), "fix: bar regression", ["src/bar.py"]),
+            _commit(
+                "a", t0, "feat: add foo",
+                ["src/foo.py", "src/foo_helpers.py", "src/bar.py", "src/bar_helpers.py"],
+            ),
+            _commit(
+                "b", t0 + timedelta(days=1), "fix: foo regression",
+                ["src/foo.py", "src/foo_helpers.py"],
+            ),
+            _commit(
+                "c", t0 + timedelta(days=3), "fix: bar regression",
+                ["src/bar.py", "src/bar_helpers.py"],
+            ),
         ]
         pairs = _find_feat_fix_pairs(commits, proximity_days=7)
         assert len(pairs) == 1
         assert len(pairs[0].fixes) == 2
-        assert pairs[0].shared_files == frozenset({"src/foo.py", "src/bar.py"})
+        assert pairs[0].shared_files == frozenset(
+            {"src/foo.py", "src/foo_helpers.py", "src/bar.py", "src/bar_helpers.py"},
+        )
+
+
+class TestCodeFileOverlapThreshold:
+    """Per-fix code-file overlap threshold (#402 calibration, v0.8).
+
+    Pairs require :data:`_MIN_CODE_FILE_OVERLAP` overlapping non-doc
+    files per fix. Doc files (.md, .yaml, .yml) are excluded from the
+    overlap count, and the threshold applies per-fix (not on the
+    accumulated shared set across all fixes for a feat).
+    """
+
+    def test_min_overlap_is_two(self) -> None:
+        # Sanity-check the calibration constants. If these move,
+        # docs/GLOSSARY.md and the calibration spec must move with them.
+        assert _MIN_CODE_FILE_OVERLAP == 2
+        assert _OVERLAP_EXCLUDED_EXTENSIONS == frozenset({".md", ".yaml", ".yml"})
+
+    def test_single_code_file_overlap_skipped(self) -> None:
+        t0 = datetime(2026, 5, 1, tzinfo=UTC)
+        commits = [
+            _commit("a", t0, "feat: add foo", ["src/foo.py"]),
+            _commit("b", t0 + timedelta(days=2), "fix: foo edge case", ["src/foo.py"]),
+        ]
+        assert _find_feat_fix_pairs(commits, proximity_days=7) == []
+
+    def test_two_code_files_overlap_emits(self) -> None:
+        t0 = datetime(2026, 5, 1, tzinfo=UTC)
+        commits = [
+            _commit("a", t0, "feat: add foo", ["src/foo.py", "src/foo_helpers.py"]),
+            _commit(
+                "b", t0 + timedelta(days=2), "fix: foo edge case",
+                ["src/foo.py", "src/foo_helpers.py"],
+            ),
+        ]
+        pairs = _find_feat_fix_pairs(commits, proximity_days=7)
+        assert len(pairs) == 1
+
+    def test_doc_files_excluded_from_overlap_count(self) -> None:
+        # One code file + doc files = under threshold even though raw
+        # overlap is >=2. The doc paths still appear in shared_files
+        # (we report what overlapped, even if it didn't drive the bar).
+        t0 = datetime(2026, 5, 1, tzinfo=UTC)
+        commits = [
+            _commit(
+                "a", t0, "feat(security): add hooks",
+                ["src/foo.py", "CLAUDE.md", "docs/GLOSSARY.md"],
+            ),
+            _commit(
+                "b", t0 + timedelta(days=2), "fix: parser bug",
+                ["src/foo.py", "CLAUDE.md", "docs/GLOSSARY.md"],
+            ),
+        ]
+        assert _find_feat_fix_pairs(commits, proximity_days=7) == []
+
+    def test_per_fix_threshold_not_accumulated(self) -> None:
+        # Two fixes each share exactly one *different* code file with
+        # the feat. The accumulated `shared` set would contain 2 files,
+        # but neither fix individually clears the per-fix bar — so the
+        # pair must not emit. Guards against the bug architect flagged
+        # on #402: applying the threshold on the accumulated set instead
+        # of per-fix would let coincidental single-file fixes combine.
+        t0 = datetime(2026, 5, 1, tzinfo=UTC)
+        commits = [
+            _commit(
+                "a", t0, "feat: add foo",
+                ["src/foo.py", "src/bar.py", "src/baz.py", "src/qux.py"],
+            ),
+            _commit(
+                "b", t0 + timedelta(days=1), "fix: foo regression",
+                ["src/foo.py"],
+            ),
+            _commit(
+                "c", t0 + timedelta(days=3), "fix: bar regression",
+                ["src/bar.py"],
+            ),
+        ]
+        assert _find_feat_fix_pairs(commits, proximity_days=7) == []
+
+    def test_one_qualifying_fix_among_singletons_still_emits(self) -> None:
+        # Mixed: fix b clears the per-fix bar (2 code files); fix c
+        # doesn't (1 code file). The pair emits but only fix b is in
+        # the matching set. Confirms the threshold drops sub-bar fixes
+        # without suppressing the whole pair.
+        t0 = datetime(2026, 5, 1, tzinfo=UTC)
+        commits = [
+            _commit(
+                "a", t0, "feat: add foo",
+                ["src/foo.py", "src/foo_helpers.py", "src/bar.py"],
+            ),
+            _commit(
+                "b", t0 + timedelta(days=1), "fix: foo regression",
+                ["src/foo.py", "src/foo_helpers.py"],
+            ),
+            _commit(
+                "c", t0 + timedelta(days=3), "fix: bar regression",
+                ["src/bar.py"],
+            ),
+        ]
+        pairs = _find_feat_fix_pairs(commits, proximity_days=7)
+        assert len(pairs) == 1
+        assert len(pairs[0].fixes) == 1
+        assert pairs[0].fixes[0].sha == "b"
+
+
+class TestIsCodeFile:
+    @pytest.mark.parametrize("path", [
+        "src/foo.py",
+        "tests/unit/test_bar.py",
+        "scripts/build.sh",
+        "Makefile",
+        "src/cli/__init__.py",
+    ])
+    def test_code_paths_are_code(self, path: str) -> None:
+        assert _is_code_file(path) is True
+
+    @pytest.mark.parametrize("path", [
+        "docs/GLOSSARY.md",
+        "README.md",
+        "CLAUDE.md",
+        "src/agentfluent/glossary/terms.yaml",
+        ".github/workflows/ci.yml",
+    ])
+    def test_doc_paths_are_not_code(self, path: str) -> None:
+        assert _is_code_file(path) is False
 
 
 class TestSubprocessErrorHandling:
@@ -185,10 +343,14 @@ class TestSessionCorrelation:
     def feat_fix_stdout(self) -> str:
         t0 = datetime(2026, 5, 1, tzinfo=UTC)
         commits = [
-            _commit("a1b2c3d", t0, "feat: add widget", ["src/widget.py"]),
+            _commit(
+                "a1b2c3d", t0, "feat: add widget",
+                ["src/widget.py", "src/widget_helpers.py"],
+            ),
             _commit(
                 "deadbee", t0 + timedelta(days=2),
-                "fix: widget off-by-one", ["src/widget.py"],
+                "fix: widget off-by-one",
+                ["src/widget.py", "src/widget_helpers.py"],
             ),
         ]
         return _format_git_log(commits)
@@ -256,4 +418,4 @@ class TestSessionCorrelation:
         assert detail["feat_commit"]["sha"] == "a1b2c3d"
         assert detail["fix_commits"][0]["sha"] == "deadbee"
         assert detail["days_between"] == 2
-        assert detail["shared_files"] == ["src/widget.py"]
+        assert detail["shared_files"] == ["src/widget.py", "src/widget_helpers.py"]
