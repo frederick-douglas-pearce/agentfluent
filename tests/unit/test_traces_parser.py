@@ -655,3 +655,47 @@ class TestIdleGapDetection:
             idle_gap_ms=5000,
         )
         assert trace.active_duration_ms == 0
+
+
+class TestModelTurns:
+    """``model_turns`` counts merged assistant messages (round-trips),
+    independent of ``tool_calls`` (actions) — #466."""
+
+    def test_three_assistant_messages(self, write_jsonl: WriteJSONL) -> None:
+        # Three distinct turns (distinct message_ids so the parser's
+        # fragment-merge doesn't collapse them), each with one tool call.
+        path = write_jsonl(
+            "agent-x.jsonl",
+            [
+                _user("go"),
+                _assistant([_tool_use("t1", "Read")], message_id="m1"),
+                _user([_tool_result("t1", "ok")]),
+                _assistant([_tool_use("t2", "Grep")], message_id="m2"),
+                _user([_tool_result("t2", "ok")]),
+                _assistant([_tool_use("t3", "Bash")], message_id="m3"),
+                _user([_tool_result("t3", "ok")]),
+            ],
+        )
+        assert parse_subagent_trace(path).model_turns == 3
+
+    def test_one_turn_many_parallel_tool_uses(self, write_jsonl: WriteJSONL) -> None:
+        # A single assistant message with 5 parallel tool_use blocks is
+        # ONE turn, not five — turns count round-trips, not actions.
+        path = write_jsonl(
+            "agent-x.jsonl",
+            [
+                _user("go"),
+                _assistant(
+                    [_tool_use(f"t{i}", "Read", {"file_path": f"/f{i}"}) for i in range(5)],
+                    message_id="m1",
+                ),
+                _user([_tool_result(f"t{i}", "ok") for i in range(5)]),
+            ],
+        )
+        trace = parse_subagent_trace(path)
+        assert trace.model_turns == 1
+        assert len(trace.tool_calls) == 5
+
+    def test_zero_assistant_messages(self, write_jsonl: WriteJSONL) -> None:
+        path = write_jsonl("agent-x.jsonl", [_user("go, no response")])
+        assert parse_subagent_trace(path).model_turns == 0

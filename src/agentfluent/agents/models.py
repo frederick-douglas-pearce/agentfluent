@@ -140,6 +140,24 @@ class AgentInvocation(BaseModel):
         work, and either annotate or filter them out."""
         return self.trace is not None
 
+    # mypy + pydantic ``@computed_field`` interaction (pydantic/pydantic#6709).
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def model_turns(self) -> int | None:
+        """Number of model turns in this invocation's subagent trace --
+        one merged assistant message (one API round-trip) (#466).
+
+        ``None`` when no trace is linked (~20% of invocations in the
+        dogfood corpus, see #468): turns can't be counted without the
+        trace, and estimating from ``tool_uses`` would erase the
+        turns-vs-tools distinction that makes the metric valuable, so we
+        report the honest gap. Distinct from ``tool_uses`` — neither
+        bounds the other (a turn can have zero or many tool calls).
+        Emitted in ``model_dump`` output as a computed field."""
+        if self.trace is None:
+            return None
+        return self.trace.model_turns
+
     @property
     def active_duration_per_tool_use(self) -> float | None:
         """Average active duration (ms) per tool call. Falls back to

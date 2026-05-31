@@ -52,3 +52,33 @@ class TestAnalyzeAxisJsonContract:
             for value in scores.values():
                 # JSON numerics arrive as int OR float; both are valid.
                 assert isinstance(value, (int, float))
+
+
+class TestAnalyzeModelTurnsJsonContract:
+    """#466: every invocation in the analyze envelope exposes
+    ``model_turns`` — an int when a subagent trace is linked, ``null``
+    otherwise (honest gap)."""
+
+    def test_invocations_carry_model_turns(
+        self,
+        runner: CliRunner,
+        cli_app: typer.Typer,
+        populated_home_with_traces: Path,
+    ) -> None:
+        result = runner.invoke(
+            cli_app, ["analyze", "--project", "project", "--format", "json"],
+        )
+        assert result.exit_code == 0, result.stdout
+        payload = json.loads(result.stdout)
+        invocations = [
+            inv
+            for s in payload["data"]["sessions"]
+            for inv in s["invocations"]
+        ]
+        assert invocations, "expected at least one invocation"
+        for inv in invocations:
+            assert "model_turns" in inv
+            assert inv["model_turns"] is None or isinstance(inv["model_turns"], int)
+        # The traces fixture links every invocation, so at least one
+        # invocation reports a concrete (non-null) turn count.
+        assert any(inv["model_turns"] for inv in invocations)

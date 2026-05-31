@@ -237,6 +237,7 @@ def parse_subagent_trace(path: Path) -> SubagentTrace:
         retry_sequences=retry_sequences,
         total_errors=sum(1 for tc in tool_calls if tc.is_error),
         total_retries=sum(seq.attempts - 1 for seq in retry_sequences),
+        model_turns=sum(1 for m in messages if m.type == "assistant"),
         usage=_sum_usage(messages),
         duration_ms=_compute_duration_ms(messages),
         idle_gap_ms=_compute_idle_gap_ms(tool_calls),
