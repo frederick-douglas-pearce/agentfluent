@@ -16,6 +16,7 @@ from agentfluent.agents.models import AgentInvocation
 from agentfluent.analytics.agent_metrics import (
     AgentMetrics,
     AgentTypeMetrics,
+    _recompute_turn_ratios,
     compute_agent_metrics,
 )
 from agentfluent.analytics.tokens import (
@@ -333,6 +334,8 @@ def _merge_agent_metrics(
                     total_tool_uses=m.total_tool_uses,
                     total_duration_ms=m.total_duration_ms,
                     estimated_total_cost_usd=m.estimated_total_cost_usd,
+                    total_model_turns=m.total_model_turns,
+                    invocations_with_turns=m.invocations_with_turns,
                 )
             else:
                 existing.invocation_count += m.invocation_count
@@ -340,10 +343,12 @@ def _merge_agent_metrics(
                 existing.total_tool_uses += m.total_tool_uses
                 existing.total_duration_ms += m.total_duration_ms
                 existing.estimated_total_cost_usd += m.estimated_total_cost_usd
+                existing.total_model_turns += m.total_model_turns
+                existing.invocations_with_turns += m.invocations_with_turns
 
     # estimated_total_cost_usd is summed at each session's blended rate
     # so the per-invocation average property reads correctly. Tool-use
-    # averages have to be recomputed because the per-tool-use ratio
+    # and turn ratios have to be recomputed because the per-unit ratio
     # changes when invocations from different sessions merge.
     for m in merged.values():
         if m.total_tool_uses > 0:
@@ -351,10 +356,12 @@ def _merge_agent_metrics(
                 m.avg_tokens_per_tool_use = m.total_tokens / m.total_tool_uses
             if m.total_duration_ms > 0:
                 m.avg_duration_per_tool_use = m.total_duration_ms / m.total_tool_uses
+        _recompute_turn_ratios(m)
 
     total_invocations = sum(m.invocation_count for m in merged.values())
     total_agent_tokens = sum(m.total_tokens for m in merged.values())
     total_agent_duration = sum(m.total_duration_ms for m in merged.values())
+    total_turns = sum(m.total_model_turns for m in merged.values())
     builtin_count = sum(m.invocation_count for m in merged.values() if m.is_builtin)
     custom_count = sum(m.invocation_count for m in merged.values() if not m.is_builtin)
 
@@ -372,6 +379,7 @@ def _merge_agent_metrics(
         builtin_invocations=builtin_count,
         custom_invocations=custom_count,
         agent_token_percentage=agent_token_pct,
+        total_model_turns=total_turns,
     )
 
 

@@ -2,10 +2,11 @@
 
 from pathlib import Path
 
-from agentfluent.analytics.agent_metrics import AgentMetrics
+from agentfluent.analytics.agent_metrics import AgentMetrics, AgentTypeMetrics
 from agentfluent.analytics.pipeline import (
     AnalysisResult,
     SessionAnalysis,
+    _merge_agent_metrics,
     analyze_session,
     analyze_sessions,
 )
@@ -140,3 +141,41 @@ class TestModelTurns:
         assert dumped["sessions"][0]["model_turns"] == 5
         # Backing field stays for backward compat.
         assert dumped["sessions"][0]["assistant_message_count"] == 5
+
+
+class TestMergeAgentMetricsTurns:
+    """#467: _merge_agent_metrics carries turn totals across sessions and
+    recomputes the turn ratios from the merged totals."""
+
+    @staticmethod
+    def _metrics(total_turns: int, with_turns: int, tool_uses: int) -> AgentMetrics:
+        t = AgentTypeMetrics(
+            agent_type="pm",
+            is_builtin=False,
+            invocation_count=with_turns,
+            total_tool_uses=tool_uses,
+            total_model_turns=total_turns,
+            invocations_with_turns=with_turns,
+        )
+        return AgentMetrics(by_agent_type={"pm": t}, total_invocations=with_turns)
+
+    def test_turn_fields_summed_and_ratios_recomputed(self) -> None:
+        # Session A: 6 turns over 2 invocations, 12 tool calls.
+        # Session B: 4 turns over 1 invocation, 8 tool calls.
+        merged = _merge_agent_metrics(
+            [self._metrics(6, 2, 12), self._metrics(4, 1, 8)],
+        )
+        pm = merged.by_agent_type["pm"]
+        assert pm.total_model_turns == 10
+        assert pm.invocations_with_turns == 3
+        assert merged.total_model_turns == 10
+        # Ratios recomputed from merged totals, not averaged.
+        assert pm.avg_turns_per_invocation == 10 / 3
+        assert pm.avg_tool_calls_per_turn == 20 / 10
+
+    def test_first_seen_branch_preserves_turn_fields(self) -> None:
+        # A single-session merge exercises only the first-seen
+        # constructor branch — turn fields must survive it.
+        pm = _merge_agent_metrics([self._metrics(6, 2, 12)]).by_agent_type["pm"]
+        assert pm.total_model_turns == 6
+        assert pm.invocations_with_turns == 2

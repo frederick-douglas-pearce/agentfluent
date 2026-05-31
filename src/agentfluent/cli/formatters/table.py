@@ -193,11 +193,17 @@ def format_analysis_table(
         agent_table = Table(title="Agent Invocations", show_header=True)
         agent_table.add_column("Agent Type", style="cyan")
         agent_table.add_column("Count", justify="right")
+        agent_table.add_column("Avg Turns", justify="right")
         agent_table.add_column("Tokens", justify="right")
         agent_table.add_column("Avg Tokens/Call", justify="right")
         agent_table.add_column("Duration", justify="right")
         for _key, m in sorted(am.by_agent_type.items()):
             label = f"{m.agent_type} {'(builtin)' if m.is_builtin else ''}"
+            avg_turns = (
+                f"{m.avg_turns_per_invocation:.1f}"
+                if m.avg_turns_per_invocation is not None
+                else "-"
+            )
             avg_tok = (
                 format_tokens(int(m.avg_tokens_per_invocation))
                 if m.avg_tokens_per_invocation
@@ -207,15 +213,17 @@ def format_analysis_table(
             agent_table.add_row(
                 label.strip(),
                 str(m.invocation_count),
+                avg_turns,
                 format_tokens(m.total_tokens),
                 avg_tok,
                 duration,
             )
-        agent_table.add_row("", "", "", "", "")
-        agent_table.add_row("Total", str(am.total_invocations), "", "", "")
+        agent_table.add_row("", "", "", "", "", "")
+        agent_table.add_row("Total", str(am.total_invocations), "", "", "", "")
         agent_table.add_row(
             "Agent token %",
             f"{am.agent_token_percentage}%",
+            "",
             "",
             "",
             "",

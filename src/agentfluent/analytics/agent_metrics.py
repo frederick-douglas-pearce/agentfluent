@@ -16,6 +16,33 @@ from dataclasses import dataclass, field
 from agentfluent.agents.models import AgentInvocation
 
 
+def _recompute_turn_ratios(metrics: AgentTypeMetrics) -> None:
+    """Set the four turn-based ratio fields from the stored totals.
+
+    Shared by ``compute_agent_metrics`` (single session) and
+    ``_merge_agent_metrics`` (multi-session) so the guard logic lives in
+    one place. ``estimated_avg_cost_per_turn_usd`` divides
+    ``estimated_total_cost_usd``, so the caller must set cost before
+    calling this. ``avg_turns_per_invocation`` is guarded on
+    ``invocations_with_turns`` (so a 0-turn trace yields 0.0, not None);
+    the per-turn ratios are guarded on ``total_model_turns`` (0 turns ->
+    None, division-by-zero guard).
+    """
+    if metrics.invocations_with_turns > 0:
+        metrics.avg_turns_per_invocation = (
+            metrics.total_model_turns / metrics.invocations_with_turns
+        )
+    if metrics.total_model_turns > 0:
+        metrics.avg_tool_calls_per_turn = (
+            metrics.total_tool_uses / metrics.total_model_turns
+        )
+        metrics.avg_tokens_per_turn = metrics.total_tokens / metrics.total_model_turns
+        if metrics.estimated_total_cost_usd > 0:
+            metrics.estimated_avg_cost_per_turn_usd = (
+                metrics.estimated_total_cost_usd / metrics.total_model_turns
+            )
+
+
 @dataclass
 class AgentTypeMetrics:
     """Execution metrics for a single agent type."""
@@ -30,6 +57,29 @@ class AgentTypeMetrics:
     """Estimate; see module docstring. Bounded by #143."""
     avg_tokens_per_tool_use: float | None = None
     avg_duration_per_tool_use: float | None = None
+
+    total_model_turns: int = 0
+    """Sum of ``model_turns`` across this agent type's invocations,
+    counting only invocations where ``model_turns is not None`` (a
+    subagent trace was linked). One model turn is one merged assistant
+    message -- one API round-trip (#467)."""
+
+    invocations_with_turns: int = 0
+    """Count of this agent type's invocations that had turn data
+    (``model_turns is not None``). The denominator for
+    ``avg_turns_per_invocation`` -- distinct from ``invocation_count``,
+    which includes trace-missing invocations. Lets a consumer see how
+    much of the population the turn averages actually cover (#467)."""
+
+    # Turn-based ratios. Stored (not @property) so they serialize: this
+    # is a stdlib dataclass nested in a Pydantic envelope, and Pydantic
+    # serializes dataclass *fields* but not their properties. Computed in
+    # compute_agent_metrics() / recomputed in _merge_agent_metrics(),
+    # mirroring avg_tokens_per_tool_use above.
+    avg_turns_per_invocation: float | None = None
+    avg_tool_calls_per_turn: float | None = None
+    avg_tokens_per_turn: float | None = None
+    estimated_avg_cost_per_turn_usd: float | None = None
 
     @property
     def avg_tokens_per_invocation(self) -> float | None:
@@ -68,6 +118,9 @@ class AgentMetrics:
     """Agent tokens as percentage of session total tokens (0-100).
     Set by the caller who has session-level token data."""
 
+    total_model_turns: int = 0
+    """Sum of ``total_model_turns`` across all agent types (#467)."""
+
 
 def compute_agent_metrics(
     invocations: list[AgentInvocation],
@@ -105,6 +158,12 @@ def compute_agent_metrics(
             metrics.total_tool_uses += inv.tool_uses
         if inv.duration_ms is not None:
             metrics.total_duration_ms += inv.duration_ms
+        # ``is not None`` (not truthiness): a 0-turn trace still has turn
+        # data, so it counts toward invocations_with_turns and yields a
+        # legitimate 0.0 average, distinct from a trace-missing gap.
+        if inv.model_turns is not None:
+            metrics.total_model_turns += inv.model_turns
+            metrics.invocations_with_turns += 1
 
     # Session-level blended rate: total_cost / total_tokens. Per-agent
     # cost is then `agent_tokens * rate`. This is an estimate — without
@@ -127,11 +186,14 @@ def compute_agent_metrics(
                 )
         if blended_rate > 0 and metrics.total_tokens > 0:
             metrics.estimated_total_cost_usd = metrics.total_tokens * blended_rate
+        # After cost is set: cost-per-turn divides the value above.
+        _recompute_turn_ratios(metrics)
 
     # Aggregate totals
     total_invocations = sum(m.invocation_count for m in by_type.values())
     total_agent_tokens = sum(m.total_tokens for m in by_type.values())
     total_agent_duration = sum(m.total_duration_ms for m in by_type.values())
+    total_turns = sum(m.total_model_turns for m in by_type.values())
     builtin_count = sum(m.invocation_count for m in by_type.values() if m.is_builtin)
     custom_count = sum(m.invocation_count for m in by_type.values() if not m.is_builtin)
 
@@ -149,4 +211,5 @@ def compute_agent_metrics(
         builtin_invocations=builtin_count,
         custom_invocations=custom_count,
         agent_token_percentage=agent_token_pct,
+        total_model_turns=total_turns,
     )
