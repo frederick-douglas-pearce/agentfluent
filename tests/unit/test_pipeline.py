@@ -2,7 +2,26 @@
 
 from pathlib import Path
 
-from agentfluent.analytics.pipeline import analyze_session, analyze_sessions
+from agentfluent.analytics.agent_metrics import AgentMetrics
+from agentfluent.analytics.pipeline import (
+    AnalysisResult,
+    SessionAnalysis,
+    analyze_session,
+    analyze_sessions,
+)
+from agentfluent.analytics.tokens import TokenMetrics
+from agentfluent.analytics.tools import ToolMetrics
+
+
+def _session(assistant_count: int, name: str = "s.jsonl") -> SessionAnalysis:
+    """Build a minimal SessionAnalysis with a given assistant-message count."""
+    return SessionAnalysis(
+        session_path=Path(name),
+        token_metrics=TokenMetrics(),
+        tool_metrics=ToolMetrics(),
+        agent_metrics=AgentMetrics(),
+        assistant_message_count=assistant_count,
+    )
 
 
 class TestAnalyzeSession:
@@ -83,3 +102,41 @@ class TestAnalyzeSessions:
         for session in result.sessions:
             for _key, m in session.agent_metrics.by_agent_type.items():
                 assert m.agent_type.lower() == "pm"
+
+
+class TestModelTurns:
+    """#465: model_turns aliases assistant_message_count; total_model_turns sums."""
+
+    def test_model_turns_aliases_assistant_count(self) -> None:
+        assert _session(5).model_turns == 5
+
+    def test_model_turns_empty_session(self) -> None:
+        assert _session(0).model_turns == 0
+
+    def test_model_turns_matches_pipeline_count(
+        self, basic_session_path: Path,
+    ) -> None:
+        result = analyze_session(basic_session_path)
+        assert result.model_turns == result.assistant_message_count
+
+    def test_total_model_turns_sums_sessions(self) -> None:
+        result = AnalysisResult(sessions=[_session(5), _session(3), _session(0)])
+        assert result.total_model_turns == 8
+
+    def test_total_model_turns_empty_result(self) -> None:
+        assert AnalysisResult().total_model_turns == 0
+
+    def test_total_model_turns_via_analyze_sessions(
+        self, basic_session_path: Path, agent_session_path: Path,
+    ) -> None:
+        result = analyze_sessions([basic_session_path, agent_session_path])
+        assert result.total_model_turns == sum(
+            s.model_turns for s in result.sessions
+        )
+
+    def test_model_turns_in_json_dump(self) -> None:
+        dumped = AnalysisResult(sessions=[_session(5)]).model_dump(mode="json")
+        assert dumped["total_model_turns"] == 5
+        assert dumped["sessions"][0]["model_turns"] == 5
+        # Backing field stays for backward compat.
+        assert dumped["sessions"][0]["assistant_message_count"] == 5

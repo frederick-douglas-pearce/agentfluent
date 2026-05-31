@@ -1355,6 +1355,53 @@ cleanly and skips the warning.
 
 ---
 
+## Session metrics
+
+### `model_turns`
+
+**Short:** The number of model turns in a session -- one merged assistant
+message (one API round-trip).
+
+**Detail:** Added in v0.9 (#465). A *model turn* is one merged assistant
+message: a single API round-trip the model took. The parser's
+fragment-merging step can combine several raw JSONL lines into one
+logical assistant message, so a turn is **not** "one JSONL line" --
+it is the merged message.
+
+Distinct from `tool_uses` and from tokens:
+
+- `tool_uses` counts *actions*. A single turn carries zero, one, or
+  many `tool_use` blocks (parallel tool calls), so turns and tool
+  calls are independent -- neither bounds the other.
+- tokens measure the *cost* of each turn.
+
+Turns are the headline efficiency metric: an agent that calls 10
+tools in 3 turns batches its work (efficient); one that calls 10
+tools in 10 turns serializes it (wasteful). Reducing turns for a
+fixed task while holding quality steady drops both cost and latency
+more than any single other change.
+
+Surfaced in the Token Usage table ("Model turns" row), in the
+verbose Per-Session Breakdown table ("Turns" column), and in
+`analyze --json` as `model_turns` per session plus
+`total_model_turns` aggregated across sessions at the envelope top
+level. Backed by the session's `assistant_message_count` field,
+which stays in the JSON output for backward compatibility.
+
+**Example:**
+
+```
+Token Usage
+  ...
+  API calls      42
+  Model turns    20
+```
+
+**Related:** [`output`](#output), [`total_cost`](#total_cost)
+
+
+---
+
 ## Comparison row status
 
 ### `new`
