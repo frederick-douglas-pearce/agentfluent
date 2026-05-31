@@ -855,3 +855,66 @@ primary_axis = max(AXIS_TIEBREAKER, key=lambda a: axis_scores[a])
 **Reference:** Issue #333; calibration data at `.claude/specs/analysis/333-error-pattern-precision/`; architect review comment on #333 (2026-05-30); precedent in D027 (#281 bounded-window decision).
 
 ---
+
+## D040: v0.9 scoping -- Model-turn integration as headline, Advanced Tool Use as complement
+
+**Date:** 2026-05-30
+**Context:** v0.8.0 shipped (2026-05-30). The v0.8 dogfood analysis (`.claude/specs/analysis/2026-05-30-v08-dogfood/analysis.md`) confirmed signal calibration landed and Tier 3 infrastructure works. Six model-turn integration issues (#465-#470) were filed under `epic:analytics` on 2026-05-27. Epic #403 (Advanced Tool Use diagnostics) was pre-scoped for v0.9 since 2026-05-18 with a full PRD (`prd-advanced-tool-use-diagnostics.md`). Additionally, the v0.8 dogfood surfaced five concrete follow-up issues (#477-#481). The scoping question: how to frame v0.9 and what to pair with the model-turn work.
+
+**Options considered:**
+- A) Model-turn integration only (~4-5 dev days) -- ships quickly but underwhelming narrative
+- B) Model-turn + Advanced Tool Use diagnostics (~13-17 dev days) -- two complementary feature streams with synergy at `avg_tool_calls_per_turn`
+- C) Model-turn + Advanced Tool Use + dogfood fixes (~17-26 dev days) -- adds the cheap trust-building items from the v0.8 analysis
+- D) Model-turn + Advanced Tool Use + dogfood fixes + webapp dashboard -- overloaded, violates "right-size the release" norm
+
+**Decision:** Option C. Model-turn integration is the headline (Stream A). Advanced Tool Use diagnostics is the complement (Stream B). Dogfood fixes are cheap insurance (Stream C). v0.9 theme: "Count Every Turn."
+
+**Rationale:**
+- **Model-turn + ATU synergy.** `avg_tool_calls_per_turn` (computed in #467) is the exact denominator that makes `TOOL_ORCHESTRATION_CHAIN` (#406) interpretable. Shipping them together means the analytics and diagnostics tell a coherent story about agent efficiency.
+- **Dogfood fixes are insurance, not scope creep.** #477 (remove tester, XS), #478 (docs, XS), #479 (prompt tightening, XS), #480 (active_duration in table, S), and #481 (cleanupPeriodDays, S-M) total ~3-4 dev days. They fix issues that misled the tool's own author during the v0.8 dogfood. Landing them before the next dogfood prevents repeat confusion.
+- **Sizing is consistent with v0.7/v0.8.** v0.7 was ~18 issues, ~22-28 dev days, 3-4 weeks. v0.8 was 11 issues, ~20-29 dev days, 3-4+ weeks. v0.9 at 17 issues, ~17-26 dev days fits the same envelope.
+- **Option A ships too thin.** Model-turn integration is 6 issues totaling ~4-5 dev days of actual implementation (one XS, two S, one S-M, one XS research, one stub). A release built only on surfacing an existing field would lack narrative weight.
+- **Option D exceeds the envelope.** Adding a webapp dashboard or cross-project aggregation would push past 4 weeks and introduce a new technology surface (frontend framework, deployment) that doesn't pair with the CLI-focused turn+diagnostics work.
+
+**Reference:** `prd-v0.9.md`; `backlog-v0.9.md`. v0.8 dogfood analysis at `.claude/specs/analysis/2026-05-30-v08-dogfood/analysis.md`.
+
+---
+
+## D041: #469 (per-turn diagnostic ratios) as stub -- defer implementation to dogfood validation
+
+**Date:** 2026-05-30
+**Context:** #469 proposes per-turn diagnostic ratios (`tool_errors_per_turn`, `retries_per_turn`, `cost_per_turn`) as new signal inputs. The denominators (#466, #467) ship in v0.9 Stream A. But the issue explicitly states "NOT implementation-ready" and "NOT a commitment to implement all three ratios." The question: should #469 be in v0.9 scope as a must-implement, a stretch, or a tracking item?
+
+**Options considered:**
+- A) Must-implement in v0.9 -- commit to shipping at least one per-turn ratio
+- B) Stretch -- implement if time and data allow
+- C) Tracking item only -- include in the milestone as a stub, assess at dogfood time
+
+**Decision:** Option C. #469 is in the v0.9 milestone as a tracking item. Its disposition (implement vs. defer to v0.10) is decided at dogfood time based on two criteria: (1) do enough invocations have both turn data and diagnostic signals to make per-turn normalization useful, and (2) do the raw distributions suggest meaningful thresholds?
+
+**Rationale:**
+- **No data to set thresholds.** The model-turn fields don't exist in any production envelope yet. Until #465-#467 ship and a dogfood run produces real turn-count distributions, any threshold for "high tool_errors_per_turn" is guesswork.
+- **Low cost to track, high cost to implement blind.** Leaving #469 as a stub costs nothing. Implementing it with guessed thresholds risks shipping a signal that fires incorrectly on day one, requiring immediate calibration work (the exact pattern v0.8's D039 corrected for ERROR_PATTERN).
+- **The stub preserves the design intent.** #469's issue body documents the candidate ratios, their formulas, and the validation criteria. Future implementers have a complete spec to pick up.
+
+**Reference:** #469 issue body ("What This Issue Is NOT" section). D002 (rule-based constraint), D019 (calibration data availability pattern).
+
+---
+
+## D042: Advanced Tool Use diagnostics kept at epic #403 scope -- no scope expansion for v0.9
+
+**Date:** 2026-05-30
+**Context:** Epic #403 (Advanced Tool Use diagnostics) was scoped on 2026-05-18 with four child stories (#404, #405, #406, #407). The PRD (`prd-advanced-tool-use-diagnostics.md`) also references follow-up items: #373 (tool description quality rubric), #374 (tool-schema token attribution), #375 (Tool Search regression in diff), and a Tier B trace-enhanced detection for TOOL_ORCHESTRATION_CHAIN. The question: should v0.9 pull in any of these follow-ups?
+
+**Decision:** No. v0.9 scope for Advanced Tool Use diagnostics is exactly the four stories in epic #403 (#404, #405, #406, #407). Follow-ups remain parked/deferred.
+
+**Rationale:**
+- **#373 (tool description quality rubric) has a research component.** It requires defining what makes a tool description "good" -- a judgment that benefits from LLM-call augmentation (D035 tracking discipline) rather than rule-based heuristics. Not v0.9 material.
+- **#374 (tool-schema token attribution) is an analytics enhancement**, not a diagnostic. It computes how many tokens each tool's schema consumes in the context window. Useful but independent of the three ATU signals and not needed for them to ship.
+- **#375 (Tool Search regression in diff) is blocked on #374.** If #374 doesn't ship, #375 can't ship.
+- **Tier B trace-enhanced detection for TOOL_ORCHESTRATION_CHAIN** would improve precision but requires per-call payload size analysis from subagent traces. The Tier A metadata-only version is explicitly designed to ship first (60-70% estimated precision) with the calibration check (#407) gating the release. If #407 shows unacceptable precision, the response is threshold tuning, not a Tier B expansion mid-release.
+- **Right-sizing.** v0.9 already has 17 issues across 4 streams. Adding ATU follow-ups pushes past the consistent 3-4 week envelope.
+
+**Reference:** Epic #403 body ("Out of Scope" section); `prd-advanced-tool-use-diagnostics.md` Section 3 (Non-Goals).
+
+---
