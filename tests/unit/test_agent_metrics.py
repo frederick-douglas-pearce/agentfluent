@@ -4,6 +4,7 @@ import pytest
 
 from agentfluent.agents.models import AgentInvocation
 from agentfluent.analytics.agent_metrics import compute_agent_metrics
+from agentfluent.traces.models import SubagentTrace
 
 
 def _invocation(
@@ -11,8 +12,9 @@ def _invocation(
     total_tokens: int | None = 10000,
     tool_uses: int | None = 5,
     duration_ms: int | None = 30000,
+    model_turns: int | None = None,
 ) -> AgentInvocation:
-    return AgentInvocation(
+    inv = AgentInvocation(
         agent_type=agent_type,
         description="test",
         prompt="do something",
@@ -21,6 +23,14 @@ def _invocation(
         tool_uses=tool_uses,
         duration_ms=duration_ms,
     )
+    # ``model_turns`` is derived from a linked trace; attach a minimal
+    # one carrying the requested count. ``None`` leaves the invocation
+    # trace-less (the honest-gap case from #466).
+    if model_turns is not None:
+        inv.trace = SubagentTrace(
+            agent_id="a", delegation_prompt="x", model_turns=model_turns,
+        )
+    return inv
 
 
 class TestComputeAgentMetrics:
@@ -237,3 +247,71 @@ class TestPerAgentCost:
         assert explore.estimated_total_cost_usd == pytest.approx(0.70)
         # Cost preserves the input/output dollar total.
         assert pm.estimated_total_cost_usd + explore.estimated_total_cost_usd == pytest.approx(1.0)
+
+
+class TestModelTurnRollup:
+    """#467: per-agent-type turn totals and derived efficiency ratios."""
+
+    def test_total_and_avg_skips_trace_missing(self) -> None:
+        # turns [4, 6, None]: the trace-missing invocation is counted
+        # toward invocation_count but excluded from the turn average.
+        invocations = [
+            _invocation(model_turns=4),
+            _invocation(model_turns=6),
+            _invocation(model_turns=None),
+        ]
+        pm = compute_agent_metrics(invocations).by_agent_type["pm"]
+        assert pm.invocation_count == 3
+        assert pm.total_model_turns == 10
+        assert pm.invocations_with_turns == 2
+        assert pm.avg_turns_per_invocation == 5.0
+
+    def test_all_turns_missing_yields_none(self) -> None:
+        invocations = [_invocation(model_turns=None), _invocation(model_turns=None)]
+        pm = compute_agent_metrics(invocations).by_agent_type["pm"]
+        assert pm.total_model_turns == 0
+        assert pm.invocations_with_turns == 0
+        assert pm.avg_turns_per_invocation is None
+        assert pm.avg_tool_calls_per_turn is None
+        assert pm.avg_tokens_per_turn is None
+        assert pm.estimated_avg_cost_per_turn_usd is None
+
+    def test_tool_calls_per_turn(self) -> None:
+        # 20 tool calls across 5 turns -> 4.0 calls/turn.
+        invocations = [_invocation(tool_uses=20, model_turns=5)]
+        pm = compute_agent_metrics(invocations).by_agent_type["pm"]
+        assert pm.avg_tool_calls_per_turn == 4.0
+
+    def test_tokens_and_cost_per_turn(self) -> None:
+        # 10k tokens / 5 turns -> 2000 tokens/turn. Session 10k @ $1.00
+        # blended -> agent cost $1.00 / 5 turns -> $0.20/turn.
+        invocations = [_invocation(total_tokens=10000, tool_uses=5, model_turns=5)]
+        pm = compute_agent_metrics(
+            invocations, session_total_tokens=10000, session_total_cost=1.0,
+        ).by_agent_type["pm"]
+        assert pm.avg_tokens_per_turn == 2000.0
+        assert pm.estimated_avg_cost_per_turn_usd == pytest.approx(0.20)
+
+    def test_zero_turn_trace_guards_per_turn_ratios(self) -> None:
+        # Trace exists but has 0 assistant messages: invocations_with_turns
+        # counts it (turn data IS present), avg_turns_per_invocation is a
+        # legitimate 0.0, but per-turn ratios are None (no division by 0).
+        invocations = [_invocation(total_tokens=10000, tool_uses=5, model_turns=0)]
+        pm = compute_agent_metrics(invocations).by_agent_type["pm"]
+        assert pm.invocations_with_turns == 1
+        assert pm.total_model_turns == 0
+        assert pm.avg_turns_per_invocation == 0.0
+        assert pm.avg_tool_calls_per_turn is None
+        assert pm.avg_tokens_per_turn is None
+        assert pm.estimated_avg_cost_per_turn_usd is None
+
+    def test_aggregate_total_across_types(self) -> None:
+        invocations = [
+            _invocation(agent_type="pm", model_turns=4),
+            _invocation(agent_type="pm", model_turns=6),
+            _invocation(agent_type="Explore", model_turns=3),
+        ]
+        metrics = compute_agent_metrics(invocations)
+        assert metrics.total_model_turns == 13
+        assert metrics.by_agent_type["pm"].total_model_turns == 10
+        assert metrics.by_agent_type["explore"].total_model_turns == 3
