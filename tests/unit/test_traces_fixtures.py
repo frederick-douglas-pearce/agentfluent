@@ -50,6 +50,14 @@ class TestBasicTrace:
     def test_agent_id_from_filename(self, subagent_basic_path: Path) -> None:
         assert parse_subagent_trace(subagent_basic_path).agent_id == "basic"
 
+    def test_model_turns_counts_assistant_messages(
+        self, subagent_basic_path: Path,
+    ) -> None:
+        # 4 assistant messages -> 4 turns, distinct from the 3 tool calls.
+        trace = parse_subagent_trace(subagent_basic_path)
+        assert trace.model_turns == 4
+        assert len(trace.tool_calls) == 3
+
     def test_agent_type_is_unknown(self, subagent_basic_path: Path) -> None:
         # Linker overwrites; parser leaves UNKNOWN.
         assert parse_subagent_trace(subagent_basic_path).agent_type == UNKNOWN_AGENT_TYPE
@@ -132,6 +140,7 @@ class TestEmptyFile:
         assert trace.delegation_prompt == ""
         assert trace.usage.total_tokens == 0
         assert trace.duration_ms is None
+        assert trace.model_turns == 0
 
     def test_agent_id_still_from_filename(
         self, subagent_empty_path: Path,

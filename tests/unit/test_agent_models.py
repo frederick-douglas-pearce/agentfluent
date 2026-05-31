@@ -181,3 +181,37 @@ class TestDurationReliable:
         inv.trace = self._trace(idle_gap_ms=60_000)  # type: ignore[assignment]
         payload = inv.model_dump(mode="json")
         assert payload["duration_reliable"] is True
+
+
+class TestModelTurns:
+    """`model_turns` delegates to the linked trace's count, or is None
+    when no trace is linked (honest gap, #466)."""
+
+    @staticmethod
+    def _trace(*, model_turns: int) -> object:
+        from agentfluent.traces.models import SubagentTrace
+
+        return SubagentTrace(
+            agent_id="abc",
+            agent_type="pm",
+            delegation_prompt="x",
+            model_turns=model_turns,
+        )
+
+    def test_no_trace_returns_none(self) -> None:
+        inv = _full_invocation()
+        assert inv.trace is None
+        assert inv.model_turns is None
+
+    def test_trace_returns_trace_count(self) -> None:
+        inv = _full_invocation()
+        inv.trace = self._trace(model_turns=3)  # type: ignore[assignment]
+        assert inv.model_turns == 3
+
+    def test_serialized_in_json(self) -> None:
+        inv = _full_invocation()
+        payload = inv.model_dump(mode="json")
+        assert payload["model_turns"] is None
+        inv.trace = self._trace(model_turns=7)  # type: ignore[assignment]
+        payload = inv.model_dump(mode="json")
+        assert payload["model_turns"] == 7

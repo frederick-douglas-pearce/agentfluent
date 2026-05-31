@@ -246,12 +246,17 @@ def format_analysis_table(
         inv_table.add_column("Agent", style="cyan")
         inv_table.add_column("Description")
         inv_table.add_column("Tokens", justify="right")
+        inv_table.add_column("Turns", justify="right")
         inv_table.add_column("Tool uses", justify="right")
         inv_table.add_column("Duration", justify="right")
         any_unreliable = False
         for s in result.sessions:
             for inv in s.invocations:
                 tokens = format_tokens(inv.total_tokens) if inv.total_tokens else "-"
+                # None (no trace) and 0 turns both render "-": a linked
+                # trace always has >= 1 assistant message, so 0 only
+                # occurs for empty/degenerate traces where "-" is apt.
+                turns = str(inv.model_turns) if inv.model_turns else "-"
                 tools = str(inv.tool_uses) if inv.tool_uses else "-"
                 # Gate on idle_gap_ms, not (active vs duration) diff:
                 # the two come from different sources (JSONL timestamps
@@ -274,6 +279,7 @@ def format_analysis_table(
                     escape(inv.agent_type),
                     escape(desc),
                     tokens,
+                    turns,
                     tools,
                     duration,
                 )

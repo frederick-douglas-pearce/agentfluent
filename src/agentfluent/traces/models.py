@@ -107,6 +107,17 @@ class SubagentTrace(BaseModel):
     retry_sequences: list[RetrySequence] = Field(default_factory=list)
     total_errors: int = 0
     total_retries: int = 0
+
+    model_turns: int = 0
+    """Number of model turns in this subagent trace -- one merged
+    assistant message (one API round-trip). Set at parse time by
+    counting ``type == "assistant"`` messages after fragment-merging
+    (#466). Independent of ``tool_calls``: a single turn can carry zero
+    ``tool_use`` blocks (text/thinking/refusal) or many (parallel tool
+    use), so neither count bounds the other. Always definitive for a
+    trace (``0`` for an empty trace); ``AgentInvocation.model_turns`` is
+    ``int | None`` because the trace itself may be absent."""
+
     usage: Usage = Field(default_factory=Usage)
     duration_ms: int | None = None
     idle_gap_ms: int | None = None
