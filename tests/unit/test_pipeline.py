@@ -13,10 +13,10 @@ from agentfluent.analytics.tokens import TokenMetrics
 from agentfluent.analytics.tools import ToolMetrics
 
 
-def _session(assistant_count: int, name: str = "s.jsonl") -> SessionAnalysis:
+def _session(assistant_count: int) -> SessionAnalysis:
     """Build a minimal SessionAnalysis with a given assistant-message count."""
     return SessionAnalysis(
-        session_path=Path(name),
+        session_path=Path("s.jsonl"),
         token_metrics=TokenMetrics(),
         tool_metrics=ToolMetrics(),
         agent_metrics=AgentMetrics(),
