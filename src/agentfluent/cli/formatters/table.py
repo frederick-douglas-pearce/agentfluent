@@ -152,6 +152,7 @@ def format_analysis_table(
     token_table.add_row("Total cost (API rate)", format_cost(tm.total_cost))
     token_table.add_row("Cache efficiency", f"{tm.cache_efficiency}%")
     token_table.add_row("API calls", str(tm.api_call_count))
+    token_table.add_row("Model turns", str(result.total_model_turns))
     console.print(token_table)
 
     if tm.by_model and (verbose or len(tm.by_model) > 1):
@@ -226,6 +227,7 @@ def format_analysis_table(
         session_table.add_column("Session", style="cyan")
         session_table.add_column("Tokens", justify="right")
         session_table.add_column("Cost (API rate)", justify="right")
+        session_table.add_column("Turns", justify="right")
         session_table.add_column("Tool calls", justify="right")
         session_table.add_column("Invocations", justify="right")
         for s in result.sessions:
@@ -233,6 +235,7 @@ def format_analysis_table(
                 s.session_path.name,
                 format_tokens(s.token_metrics.total_tokens),
                 format_cost(s.token_metrics.total_cost),
+                str(s.model_turns),
                 str(s.tool_metrics.total_tool_calls),
                 str(s.agent_metrics.total_invocations),
             )

@@ -57,6 +57,9 @@ class TestAnalyzeJsonEnvelope:
         data = _assert_clean_envelope(result.stdout, "analyze")
         assert "token_metrics" in data
         assert "sessions" in data
+        # #465: model-turn count surfaced at both levels.
+        assert "total_model_turns" in data
+        assert all("model_turns" in s for s in data["sessions"])
 
     def test_quiet_envelope(
         self, runner: CliRunner, cli_app: typer.Typer, populated_home: Path,

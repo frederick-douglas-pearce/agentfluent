@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 from agentfluent.agents.extractor import extract_agent_invocations
 from agentfluent.agents.models import AgentInvocation
@@ -80,6 +80,24 @@ class SessionAnalysis(BaseModel):
     user_message_count: int = 0
     assistant_message_count: int = 0
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def model_turns(self) -> int:
+        """Number of model turns in this session.
+
+        A *model turn* is one merged assistant message -- one API
+        round-trip. Fragment-merging in the parser may combine several
+        raw JSONL lines into one logical assistant message, so this is
+        the merged-message count, not the raw-line count. Distinct from
+        ``tool_uses`` (actions within a turn) and tokens (cost per turn).
+
+        Aliases the backing ``assistant_message_count`` field: the
+        semantic name communicates intent to downstream consumers while
+        the existing field stays in the JSON output for backward compat
+        (#465). Emitted in ``model_dump`` output as a computed field.
+        """
+        return self.assistant_message_count
+
 
 class AnalysisResult(BaseModel):
     """Aggregated analysis results across one or more sessions."""
@@ -110,6 +128,21 @@ class AnalysisResult(BaseModel):
     otherwise. Surfaced so consumers can verify scope at a glance: when
     set, every metric and diagnostic in this envelope reflects exactly
     one session. Stamped by :mod:`agentfluent.cli.commands.analyze` (#357)."""
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def total_model_turns(self) -> int:
+        """Aggregate model-turn count across all analyzed sessions (#465).
+
+        Summed from each session's ``model_turns``. Recomputes from
+        ``self.sessions`` rather than being stored, so it stays correct
+        when an envelope is rehydrated from serialized JSON (the session
+        list is always present) and is ``0`` for an empty result.
+
+        Lives at the ``AnalysisResult`` top level of the JSON envelope --
+        alongside ``session_count`` -- NOT nested under ``token_metrics``.
+        #470 (diff integration) reads it from the top level."""
+        return sum(s.model_turns for s in self.sessions)
 
 
 def analyze_session(
