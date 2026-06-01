@@ -153,10 +153,15 @@ This is a step toward "apply fix" automation without crossing the auto-apply non
 Unchanged from #372's specification. Key updates from the article:
 
 - **Quantitative anchor update:** Add the article's Opus 4.5 benchmark (79.5% -> 88.1%) alongside the RAG-MCP research (43% vs 14%). The article provides a stronger authority source for the recommendation.
-- **Configuration syntax update:** The recommendation text should reference the platform-level `defer_loading: true` syntax from the article, not just Claude Code's internal implementation.
+- **Configuration syntax update:** The recommendation text should reference the platform-level `defer_loading: true` syntax from the article, not just Claude Code's internal implementation. Specifically:
+  - API/SDK agents: add a `tool_search_tool_regex_20251119` tool to the `tools[]` array and set `defer_loading: true` on the individual tools that should load lazily.
+  - MCP servers: use an `mcp_toolset` block with `default_config: {"defer_loading": true}`.
+  - Claude Code agents: `defer_loading: true` in agent frontmatter (the original Claude Code-only path).
 - **Priority upgrade:** From `priority:medium` to `priority:high` given the article's confirmation that the feature is production-ready on the platform.
 
-No structural changes to #372's acceptance criteria.
+The verbatim Observation/Reason/Action recommendation text (refreshed for the article) lives on #372's implementation checklist; the developer should copy it from there.
+
+No structural changes to #372's acceptance criteria, thresholds (30 tools, 0.5 utilization ratio), or the `SIGNAL_AXIS_MAP` (cost) entry.
 
 ---
 
