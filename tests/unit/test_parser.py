@@ -342,6 +342,9 @@ class TestToolUseResultOnUserMessage:
         assert len(messages) == 1
         assert messages[0].metadata is not None
         assert messages[0].metadata.total_tokens == 100
+        # `toolStats` is now a modeled field (#372): its keys are the
+        # source of observed tool diversity for the tool-inventory audit.
+        assert messages[0].metadata.tool_stats == {"Read": 1}
 
     def test_user_message_without_tool_use_result(self, tmp_path: Path) -> None:
         """Regular user messages (no toolUseResult) have metadata=None."""

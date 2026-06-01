@@ -572,6 +572,43 @@ invocations across 11 analyzed sessions.
 
 **Related:** [`target_description`](#target_description), [`mcp_unused_server`](#mcp_unused_server)
 
+### `tool_inventory_oversized`
+
+**Short:** An agent declares a large tool list (>30 tools) but exercises fewer than
+half of them in the analyzed window.
+
+**Detail:** Triggered when a config-declared agent's `tools:` list (or an SDK
+agent's `allowed_tools`) exceeds 30 entries AND its utilization ratio
+— unique observed tools divided by declared tools — falls below 0.5.
+Observed tool diversity comes from `toolStats` on the agent's
+`toolUseResult` metadata, unioned across every invocation of that
+agent type. RAG-MCP (arXiv 2505.03275) places the tool-selection
+accuracy inflection point at ~30 tools (43% with retrieval vs 14%
+without); Anthropic's "Advanced Tool Use" article reports the Tool
+Search Tool lifts Opus 4.5 accuracy from 79.5% to 88.1% while
+preserving ~85% of the context window. Two suppression rules avoid
+false positives: agents whose declared list is a wildcard (`*`) are
+skipped (undefined denominator), and agents whose invocations carry
+no `toolStats` are skipped (observed diversity unknown, not zero).
+Scope is config-declared agents only — built-in agents (Explore,
+Plan, general-purpose) are excluded because there is no
+declared-tool-count data source for them.
+
+**Example:**
+
+```
+Agent 'researcher' declares 42 tools but used only 9 unique tools
+(21% utilization) across 11 analyzed sessions.
+```
+
+**Severity:** info
+
+**Threshold:** >30 declared tools and <0.5 utilization ratio
+
+**Recommendation target:** `tools`
+
+**Related:** [`unused_agent`](#unused_agent), [`token_outlier`](#token_outlier), [`target_tools`](#target_tools)
+
 ### `user_correction`
 
 **Short:** The user interrupted or redirected the parent thread mid-flight ("no, do X

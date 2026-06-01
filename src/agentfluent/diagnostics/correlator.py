@@ -805,6 +805,61 @@ class UnusedAgentRule:
         )
 
 
+class ToolInventoryOversizedRule:
+    """``TOOL_INVENTORY_OVERSIZED`` -> recommend Tool Search + trimming.
+
+    Targets the ``tools`` surface: an oversized declared inventory with
+    low observed utilization both wastes context-window tokens on unused
+    schemas and degrades tool-selection accuracy. The fix is to defer
+    schema loading (Tool Search) and prune tools that are never called.
+    """
+
+    def matches(self, signal: DiagnosticSignal, config: AgentConfig | None) -> bool:
+        return signal.signal_type == SignalType.TOOL_INVENTORY_OVERSIZED
+
+    def recommend(
+        self, signal: DiagnosticSignal, config: AgentConfig | None,
+    ) -> DiagnosticRecommendation:
+        observation = signal.message
+        source_file = str(signal.detail.get("source_file", ""))
+
+        reason = (
+            "Large tool inventories consume context-window tokens for schema "
+            "definitions and degrade tool-selection accuracy. RAG-MCP "
+            "(arXiv 2505.03275) shows retrieval-based tool selection outperforms "
+            "full-schema dumps above ~30 tools (43% vs 14% accuracy); Anthropic's "
+            "Advanced Tool Use article reports the Tool Search Tool lifts Opus 4.5 "
+            "accuracy from 79.5% to 88.1% while preserving ~85% of the context "
+            "window."
+        )
+        file_clause = (
+            f" File: {_relpath(Path(source_file))}." if source_file else ""
+        )
+        action = (
+            "Enable the Tool Search Tool so schemas load on demand. For API/SDK "
+            "agents, add a `tool_search_tool_regex_20251119` tool to the `tools[]` "
+            "array and set `defer_loading: true` on the individual tools that "
+            'should load lazily; for MCP servers, use an `mcp_toolset` block with '
+            '`default_config: {"defer_loading": true}`. (Claude Code agents can '
+            "set `defer_loading: true` in agent frontmatter.) Also review the "
+            "declared tool list for tools that are never invoked and consider "
+            f"removing them.{file_clause}"
+        )
+
+        return DiagnosticRecommendation(
+            target="tools",
+            severity=signal.severity,
+            message=f"{observation} {reason} {action}",
+            observation=observation,
+            reason=reason,
+            action=action,
+            agent_type=signal.agent_type,
+            invocation_id=signal.invocation_id,
+            config_file=source_file,
+            signal_types=[signal.signal_type],
+        )
+
+
 class _QualityRule(ABC):
     """Shared base for cross-cutting and per-agent quality-axis rules.
 
@@ -1159,6 +1214,7 @@ RULES: list[CorrelationRule] = [
     ToolOrchestrationRule(),
     McpAuditRule(),
     UnusedAgentRule(),
+    ToolInventoryOversizedRule(),
     UserCorrectionRule(),
     FileReworkRule(),
     ReviewerCaughtRule(),
