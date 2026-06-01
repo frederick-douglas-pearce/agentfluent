@@ -374,6 +374,29 @@ class TestAgentTypeDelta:
         assert delta.estimated_cost_delta_usd == -0.30
 
 
+class TestAgentTypeDeltaHasChange:
+    """``has_change`` drives the diff renderer's zero-row filter; any
+    nonzero metric delta keeps the row visible (#470)."""
+
+    def test_all_zero_deltas_is_unchanged(self) -> None:
+        entry = {"invocation_count": 3, "total_tokens": 1, "estimated_total_cost_usd": 0.5}
+        result = compute_diff(
+            _envelope(by_agent={"pm": entry}), _envelope(by_agent={"pm": entry}),
+        )
+        delta = next(d for d in result.by_agent_type if d.agent_type == "pm")
+        assert delta.has_change is False
+
+    def test_turn_only_delta_counts_as_change(self) -> None:
+        # Tokens/cost/invocations identical; only model turns differ.
+        result = compute_diff(
+            _envelope(by_agent={"pm": _agent_entry(total_model_turns=4, invocations_with_turns=2)}),
+            _envelope(by_agent={"pm": _agent_entry(total_model_turns=8, invocations_with_turns=2)}),
+        )
+        delta = next(d for d in result.by_agent_type if d.agent_type == "pm")
+        assert delta.invocation_count_delta == 0
+        assert delta.has_change is True
+
+
 def _agent_entry(
     *,
     invocation_count: int = 1,

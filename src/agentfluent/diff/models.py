@@ -159,6 +159,22 @@ class AgentTypeDelta(BaseModel):
     keeping the two outputs from diverging. No precomputed avg-delta field
     exists by design."""
 
+    @property
+    def has_change(self) -> bool:
+        """``True`` iff any tracked metric delta is nonzero.
+
+        Centralizes the "is this row worth showing" policy so the diff
+        renderer's zero-row filter stays stable as new metric deltas are
+        added — each new metric extends this one predicate instead of
+        growing an OR-chain at the call site. A plain ``@property`` (not a
+        ``computed_field``) so it stays out of the JSON envelope."""
+        return bool(
+            self.invocation_count_delta
+            or self.total_tokens_delta
+            or self.estimated_cost_delta_usd
+            or self.total_model_turns_delta,
+        )
+
 
 class DiffResult(BaseModel):
     """Complete diff output. JSON envelope wraps ``model_dump(mode='json')``.

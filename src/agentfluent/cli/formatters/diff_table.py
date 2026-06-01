@@ -313,14 +313,7 @@ def _render_agent_metrics(
     *,
     verbose: bool,
 ) -> None:
-    rows = [
-        d for d in result.by_agent_type
-        if verbose
-        or d.invocation_count_delta != 0
-        or d.total_tokens_delta != 0
-        or d.estimated_cost_delta_usd != 0
-        or d.total_model_turns_delta != 0
-    ]
+    rows = [d for d in result.by_agent_type if verbose or d.has_change]
     if not rows:
         return
 
@@ -336,11 +329,13 @@ def _render_agent_metrics(
     )
 
     for row in rows:
-        avg_turns_delta = _derive_avg_turns(
-            row.current_total_model_turns, row.current_invocations_with_turns,
-        ) - _derive_avg_turns(
+        baseline_avg = _derive_avg_turns(
             row.baseline_total_model_turns, row.baseline_invocations_with_turns,
         )
+        current_avg = _derive_avg_turns(
+            row.current_total_model_turns, row.current_invocations_with_turns,
+        )
+        avg_turns_delta = current_avg - baseline_avg
         table.add_row(
             row.agent_type,
             _signed_int(row.invocation_count_delta),
