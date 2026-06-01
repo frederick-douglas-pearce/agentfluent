@@ -268,6 +268,12 @@ def _render_token_metrics(console: Console, result: DiffResult) -> None:
             higher_is_better=True,
         ),
     )
+    table.add_row(
+        "Model turns",
+        f"{tm.baseline_model_turns:,}",
+        f"{tm.current_model_turns:,}",
+        _signed_int(tm.model_turns_delta),
+    )
     console.print(table)
     console.print()
 
@@ -307,13 +313,7 @@ def _render_agent_metrics(
     *,
     verbose: bool,
 ) -> None:
-    rows = [
-        d for d in result.by_agent_type
-        if verbose
-        or d.invocation_count_delta != 0
-        or d.total_tokens_delta != 0
-        or d.estimated_cost_delta_usd != 0
-    ]
+    rows = [d for d in result.by_agent_type if verbose or d.has_change]
     if not rows:
         return
 
@@ -322,20 +322,43 @@ def _render_agent_metrics(
     table.add_column("Invocations Δ", justify="right")
     table.add_column("Tokens Δ", justify="right")
     table.add_column("Cost Δ", justify="right")
+    table.add_column("Avg Turns Δ", justify="right")
 
     rows.sort(
         key=lambda d: (-abs(d.estimated_cost_delta_usd), d.agent_type),
     )
 
     for row in rows:
+        baseline_avg = _derive_avg_turns(
+            row.baseline_total_model_turns, row.baseline_invocations_with_turns,
+        )
+        current_avg = _derive_avg_turns(
+            row.current_total_model_turns, row.current_invocations_with_turns,
+        )
+        avg_turns_delta = current_avg - baseline_avg
         table.add_row(
             row.agent_type,
             _signed_int(row.invocation_count_delta),
             _signed_int(row.total_tokens_delta),
             _signed_cost(row.estimated_cost_delta_usd),
+            _signed_float(avg_turns_delta, precision=2),
         )
     console.print(table)
     console.print()
+
+
+def _derive_avg_turns(total_model_turns: int, invocations_with_turns: int) -> float:
+    """Avg model turns per invocation, derived from stored totals (#470).
+
+    Mirrors ``analyze``'s derivation (#467) rather than precomputing an
+    avg-delta field, so the two surfaces never disagree. Guards the
+    denominator: zero invocations-with-turns yields ``0.0``, not a
+    ``ZeroDivisionError`` — matching the ``invocations_with_turns > 0``
+    guard in :mod:`agentfluent.analytics.agent_metrics`.
+    """
+    if invocations_with_turns <= 0:
+        return 0.0
+    return total_model_turns / invocations_with_turns
 
 
 def _render_regression_footer(console: Console, result: DiffResult) -> None:

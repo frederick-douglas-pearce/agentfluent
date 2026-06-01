@@ -8,6 +8,7 @@ of cost/token deltas.
 from __future__ import annotations
 
 from agentfluent.cli.formatters.diff_table import (
+    _derive_avg_turns,
     _signed,
     _signed_cost,
     _signed_float,
@@ -55,3 +56,19 @@ class TestHigherIsBetterInversion:
             -1.5, precision=1, suffix="%", higher_is_better=True,
         )
         assert rendered == "[red]-1.5%[/red]"
+
+
+class TestDeriveAvgTurns:
+    """#470 — avg turns per invocation is derived in the renderer from
+    stored totals, not precomputed as a delta field."""
+
+    def test_derives_avg_from_stored_totals(self) -> None:
+        assert _derive_avg_turns(20, 4) == 5.0
+
+    def test_zero_invocations_with_turns_guards_division(self) -> None:
+        assert _derive_avg_turns(0, 0) == 0.0
+
+    def test_nonzero_turns_zero_denominator_still_guarded(self) -> None:
+        # Defensive: a malformed envelope with turns but no counted
+        # invocations must not raise.
+        assert _derive_avg_turns(7, 0) == 0.0
