@@ -52,7 +52,7 @@ class SignalType(StrEnum):
 
     Trace-level signals (extracted from `SubagentTrace` evidence):
     - `TOOL_ERROR_SEQUENCE`, `RETRY_LOOP`, `PERMISSION_FAILURE`,
-      `STUCK_PATTERN`
+      `STUCK_PATTERN`, `PARAMETER_RETRY`
 
     Aggregate-level signals (extracted from per-agent-type rollups):
     - `MODEL_MISMATCH`, `TOOL_ORCHESTRATION_CHAIN`
@@ -83,6 +83,7 @@ class SignalType(StrEnum):
     RETRY_LOOP = "retry_loop"
     PERMISSION_FAILURE = "permission_failure"
     STUCK_PATTERN = "stuck_pattern"
+    PARAMETER_RETRY = "parameter_retry"
     MODEL_MISMATCH = "model_mismatch"
     TOOL_ORCHESTRATION_CHAIN = "tool_orchestration_chain"
     MCP_UNUSED_SERVER = "mcp_unused_server"
@@ -111,6 +112,7 @@ TRACE_SIGNAL_TYPES: frozenset[SignalType] = frozenset(
         SignalType.RETRY_LOOP,
         SignalType.PERMISSION_FAILURE,
         SignalType.STUCK_PATTERN,
+        SignalType.PARAMETER_RETRY,
     },
 )
 

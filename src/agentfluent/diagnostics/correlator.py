@@ -7,6 +7,7 @@ for extensibility.
 
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import ClassVar, Protocol
@@ -28,6 +29,7 @@ from agentfluent.diagnostics.quality_signals import (
     PARENT_ACTED_HEALTHY_BAND_LOW,
 )
 from agentfluent.diagnostics.tool_orchestration import ESTIMATED_TOKEN_SAVINGS_KEY
+from agentfluent.diagnostics.trace_signals import PARAMETER_RETRY_EXAMPLE_KEY
 
 
 def _relpath(path: Path) -> str:
@@ -640,6 +642,63 @@ class ToolOrchestrationRule:
         )
 
 
+class ParameterRetryRule:
+    """PARAMETER_RETRY -> recommend `input_examples` on the tool definition.
+
+    The agent retried the same tool with different parameter shapes after
+    an initial error -- it's guessing at the input format. The fix is an
+    ``input_examples`` array on the *tool definition* (MCP server, SDK
+    tool, or custom tool), not the agent's own prompt/tools config. This
+    rule therefore does NOT branch on built-in agents the way
+    prompt/tools/model rules do: ``input_examples`` helps whoever calls
+    the tool regardless of whether the caller is a built-in agent. When
+    the trace captured a subsequent successful call, its ``input`` dict
+    is surfaced as a paste-ready example (D002: informational, never
+    auto-applied).
+    """
+
+    def matches(self, signal: DiagnosticSignal, config: AgentConfig | None) -> bool:
+        return signal.signal_type == SignalType.PARAMETER_RETRY
+
+    def recommend(
+        self, signal: DiagnosticSignal, config: AgentConfig | None,
+    ) -> DiagnosticRecommendation:
+        tool_name = str(signal.detail.get("tool_name", "the tool"))
+        observation = signal.message
+        reason = (
+            "Parameter-retry patterns indicate the agent is guessing at "
+            "input formats. Adding concrete examples to the tool definition "
+            "(an `input_examples` array) improves accuracy from 72% to 90% "
+            "on complex parameter handling (Anthropic benchmark)."
+        )
+
+        action_parts = [
+            f"Add an `input_examples` array to the '{tool_name}' tool "
+            "definition showing the expected parameter shape.",
+        ]
+        example = signal.detail.get(PARAMETER_RETRY_EXAMPLE_KEY)
+        if isinstance(example, dict):
+            rendered = json.dumps(example, indent=2, ensure_ascii=False)
+            action_parts.append(
+                f"Suggested `input_examples` entry for tool '{tool_name}' "
+                f"based on the observed successful call:\n{rendered}",
+            )
+        action = "\n".join(action_parts)
+
+        return DiagnosticRecommendation(
+            target="tools",
+            severity=signal.severity,
+            message=f"{observation} {reason} {action}",
+            observation=observation,
+            reason=reason,
+            action=action,
+            agent_type=signal.agent_type,
+            invocation_id=signal.invocation_id,
+            config_file=str(config.file_path) if config else "",
+            signal_types=[signal.signal_type],
+        )
+
+
 # Module-level rule registry. Add new rules here.
 class McpAuditRule:
     """MCP server audit signals -> recommend mcpServers config edit.
@@ -1095,6 +1154,7 @@ RULES: list[CorrelationRule] = [
     RetryLoopRule(),
     StuckPatternRule(),
     ErrorSequenceRule(),
+    ParameterRetryRule(),
     ModelRoutingRule(),
     ToolOrchestrationRule(),
     McpAuditRule(),

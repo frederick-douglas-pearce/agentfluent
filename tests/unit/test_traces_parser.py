@@ -11,6 +11,7 @@ import pytest
 
 from agentfluent.diagnostics.signals import ERROR_DETECTION_WINDOW_CHARS
 from agentfluent.traces.models import (
+    INPUT_DATA_MAX_CHARS,
     INPUT_SUMMARY_MAX_CHARS,
     RESULT_SUMMARY_MAX_CHARS,
     UNKNOWN_AGENT_TYPE,
@@ -195,7 +196,7 @@ class TestInputResultSummaries:
     def test_non_serializable_input_does_not_crash(self, write_jsonl: WriteJSONL) -> None:
         # Input dict from JSONL only contains JSON-native types, so a
         # non-serializable value can't actually round-trip through the
-        # file; simulate by injecting on-disk-valid JSON that _truncate_input
+        # file; simulate by injecting on-disk-valid JSON that _summarize_input
         # will pass through json.dumps cleanly.
         path = write_jsonl(
             "agent-x.jsonl",
@@ -222,6 +223,54 @@ class TestInputResultSummaries:
         trace = parse_subagent_trace(path)
         assert "café" in trace.tool_calls[0].input_summary
         assert "résumé" in trace.tool_calls[0].result_summary
+
+    def test_input_keys_and_data_captured(self, write_jsonl: WriteJSONL) -> None:
+        path = write_jsonl(
+            "agent-x.jsonl",
+            [
+                _user("go"),
+                _assistant(
+                    [_tool_use("t1", "Edit", {"file_path": "a.py", "old": "x"})],
+                ),
+                _user([_tool_result("t1")]),
+            ],
+        )
+        call = parse_subagent_trace(path).tool_calls[0]
+        assert call.input_keys == ["file_path", "old"]
+        assert call.input_data == {"file_path": "a.py", "old": "x"}
+
+    def test_oversized_input_data_dropped_but_keys_kept(
+        self, write_jsonl: WriteJSONL,
+    ) -> None:
+        big_value = "x" * (INPUT_DATA_MAX_CHARS + 100)
+        path = write_jsonl(
+            "agent-x.jsonl",
+            [
+                _user("go"),
+                _assistant([_tool_use("t1", "Bash", {"cmd": big_value})]),
+                _user([_tool_result("t1")]),
+            ],
+        )
+        call = parse_subagent_trace(path).tool_calls[0]
+        # Keys are always captured; the oversized dict is dropped so the
+        # paste-ready example is omitted rather than truncated/invalid.
+        assert call.input_keys == ["cmd"]
+        assert call.input_data is None
+
+    def test_empty_input_yields_no_keys_or_data(
+        self, write_jsonl: WriteJSONL,
+    ) -> None:
+        path = write_jsonl(
+            "agent-x.jsonl",
+            [
+                _user("go"),
+                _assistant([_tool_use("t1", "Bash")]),
+                _user([_tool_result("t1")]),
+            ],
+        )
+        call = parse_subagent_trace(path).tool_calls[0]
+        assert call.input_keys == []
+        assert call.input_data is None
 
 
 class TestIsErrorDetection:

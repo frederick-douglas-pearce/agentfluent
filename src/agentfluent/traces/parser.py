@@ -32,6 +32,7 @@ from agentfluent.core.session import ContentBlock, SessionMessage, Usage
 from agentfluent.diagnostics.signals import detect_is_error_from_text
 from agentfluent.traces.discovery import AGENT_FILENAME_PATTERN
 from agentfluent.traces.models import (
+    INPUT_DATA_MAX_CHARS,
     INPUT_SUMMARY_MAX_CHARS,
     RESULT_SUMMARY_MAX_CHARS,
     UNKNOWN_AGENT_TYPE,
@@ -61,19 +62,36 @@ IDLE_GAP_K = 5
 IDLE_GAP_FLOOR_MS = 60_000
 
 
-def _truncate_input(input_dict: dict[str, Any] | None) -> str:
-    """Serialize a tool_use input dict and truncate to the model's max.
+def _summarize_input(
+    input_dict: dict[str, Any] | None,
+) -> tuple[str, dict[str, Any] | None]:
+    """Serialize a tool_use input ONCE and derive both views the trace needs.
+
+    Returns ``(input_summary, input_data)``:
+
+    - ``input_summary`` — the serialized form truncated to
+      ``INPUT_SUMMARY_MAX_CHARS`` for display.
+    - ``input_data`` — a JSON-normalized copy (round-tripped through
+      ``json.loads`` so it holds only plain JSON types and is guaranteed
+      re-serializable for paste-ready ``input_examples`` output), or
+      ``None`` when the input is absent/empty or its serialized form
+      exceeds ``INPUT_DATA_MAX_CHARS`` (oversized inputs omit the
+      paste-ready example rather than store a truncated, invalid dict).
 
     ``default=str`` handles non-serializable values (datetimes, Paths);
-    ``ensure_ascii=False`` preserves unicode for readability. Python str
-    slicing is codepoint-aware, so the truncation never produces invalid
-    unicode (though it can split extended grapheme clusters — acceptable
-    for summary display).
+    ``ensure_ascii=False`` preserves unicode. Python str slicing is
+    codepoint-aware, so truncation never produces invalid unicode (it can
+    split a grapheme cluster — acceptable for summary display). Serializing
+    once here avoids paying ``json.dumps`` twice per tool call at parse time.
     """
     if input_dict is None:
-        return ""
+        return "", None
     serialized = json.dumps(input_dict, default=str, ensure_ascii=False)
-    return serialized[:INPUT_SUMMARY_MAX_CHARS]
+    summary = serialized[:INPUT_SUMMARY_MAX_CHARS]
+    if not input_dict or len(serialized) > INPUT_DATA_MAX_CHARS:
+        return summary, None
+    data: dict[str, Any] = json.loads(serialized)
+    return summary, data
 
 
 def _truncate_result(text: str | None) -> str:
@@ -156,10 +174,13 @@ def _pair_tool_calls(messages: list[SessionMessage]) -> list[SubagentToolCall]:
                 is_error = False
                 result_text = None
                 result_ts = None
+            input_summary, input_data = _summarize_input(block.input)
             tool_calls.append(
                 SubagentToolCall(
                     tool_name=block.name or "",
-                    input_summary=_truncate_input(block.input),
+                    input_summary=input_summary,
+                    input_keys=list(block.input.keys()) if block.input else [],
+                    input_data=input_data,
                     result_summary=_truncate_result(result_text),
                     is_error=is_error,
                     timestamp=msg.timestamp,
