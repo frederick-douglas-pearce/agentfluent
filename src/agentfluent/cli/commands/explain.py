@@ -42,6 +42,10 @@ Examples:
       Show only the signal-type terms.
 """
 
+# Cap on how many fuzzy suggestions to print before truncating with an
+# "...and N more" note. Keeps a broad query from flooding the terminal.
+_MAX_FUZZY_SUGGESTIONS = 5
+
 app = typer.Typer(help="Look up an AgentFluent term.")
 console = Console()
 err_console = Console(stderr=True)
@@ -131,12 +135,23 @@ def _explain_lookup(term: str, entries: list[GlossaryEntry]) -> int:
         )
         _render_entry(only, prefix_note=note)
         return EXIT_OK
-    if 2 <= len(candidates) <= 5:
+    if len(candidates) >= 2:
+        # Cap the displayed list so a broad query (e.g. a single letter)
+        # doesn't flood the terminal, but still tell the user there were
+        # more matches rather than collapsing to the "not found" message
+        # — distinguishing "too many matches" from "no matches at all".
+        shown = candidates[:_MAX_FUZZY_SUGGESTIONS]
         err_console.print(
             f"[yellow]No exact match for {term!r}. Did you mean:[/yellow]",
         )
-        for c in candidates:
+        for c in shown:
             err_console.print(f"  [cyan]{c.name}[/cyan] -- {c.short.strip()}")
+        extra = len(candidates) - len(shown)
+        if extra:
+            err_console.print(
+                f"  [dim]...and {extra} more. Run "
+                "[cyan]agentfluent explain --list[/cyan] to see all terms.[/dim]",
+            )
         return EXIT_USER_ERROR
     err_console.print(
         f"[red]Term {term!r} not found.[/red] "

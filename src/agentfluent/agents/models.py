@@ -67,6 +67,12 @@ class AgentInvocation(BaseModel):
     tool_uses: int | None = None
     duration_ms: int | None = None
     agent_id: str | None = None
+    tool_stats: dict[str, int] | None = None
+    """Per-tool invocation counts from ``toolUseResult.toolStats`` (keyed
+    by tool name). ``None`` when the result carried no ``toolStats``.
+    The keys are observed tool diversity for this invocation; the
+    ``tool_inventory_oversized`` audit (#372) unions them across an
+    agent type's invocations to compute a utilization ratio."""
 
     # From tool_result content
     output_text: str = ""
@@ -75,6 +81,14 @@ class AgentInvocation(BaseModel):
     # otherwise (e.g., older sessions predating trace capture). Serves as the
     # evidence layer for trace-level diagnostics.
     trace: SubagentTrace | None = None
+
+    @property
+    def observed_tool_names(self) -> set[str]:
+        """Unique tool names this invocation called, from ``tool_stats``
+        keys. Empty set when ``tool_stats`` is ``None`` or empty — callers
+        that need to distinguish "unknown" from "none observed" should
+        check ``tool_stats is None`` directly."""
+        return set(self.tool_stats or {})
 
     @property
     def is_builtin(self) -> bool:

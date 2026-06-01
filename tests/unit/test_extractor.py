@@ -258,6 +258,7 @@ class TestExtractFromConstructedMessages:
                     tool_uses=14,
                     duration_ms=122963,
                     agent_id="uuid-real",
+                    tool_stats={"Read": 8, "Bash": 6},
                 ),
             ),
         ]
@@ -270,6 +271,10 @@ class TestExtractFromConstructedMessages:
         assert inv.duration_ms == 122963
         assert inv.agent_id == "uuid-real"
         assert inv.output_text == "Agent finished successfully."
+        # toolStats flows through to the invocation (#372); its keys are
+        # the observed-tool-diversity source for the tool-inventory audit.
+        assert inv.tool_stats == {"Read": 8, "Bash": 6}
+        assert inv.observed_tool_names == {"Read", "Bash"}
 
     def test_missing_subagent_type_defaults_to_general_purpose(self) -> None:
         # Some caller-side skills and older Claude Code versions invoke

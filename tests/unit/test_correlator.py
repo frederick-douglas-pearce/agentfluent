@@ -519,6 +519,58 @@ class TestUnusedAgentCorrelation:
         assert 'Current description: ""' not in rec.action
 
 
+class TestToolInventoryOversizedCorrelation:
+    def _oversized_signal(
+        self,
+        agent_name: str = "researcher",
+        source_file: str = "/home/u/.claude/agents/researcher.md",
+    ) -> DiagnosticSignal:
+        return _signal(
+            signal_type=SignalType.TOOL_INVENTORY_OVERSIZED,
+            severity=Severity.INFO,
+            agent_type=agent_name,
+            message=(
+                f"Agent '{agent_name}' declares 42 tools but used only 9 "
+                "unique tools (21% utilization) across 11 analyzed sessions."
+            ),
+            detail={
+                "agent_name": agent_name,
+                "source_file": source_file,
+                "declared_count": 42,
+                "observed_count": 9,
+                "utilization_ratio": 9 / 42,
+                "sessions_analyzed": 11,
+            },
+        )
+
+    def test_produces_tools_target_recommendation(self) -> None:
+        recs = correlate([self._oversized_signal()])
+        assert len(recs) == 1
+        rec = recs[0]
+        assert rec.target == "tools"
+        assert rec.severity == Severity.INFO
+        assert rec.agent_type == "researcher"
+        assert rec.config_file == "/home/u/.claude/agents/researcher.md"
+        assert rec.signal_types == [SignalType.TOOL_INVENTORY_OVERSIZED]
+        # Action references the platform-level Tool Search syntax (#404).
+        assert "tool_search_tool_regex_20251119" in rec.action
+        assert "defer_loading" in rec.action
+        assert "mcp_toolset" in rec.action
+        assert "researcher.md" in rec.action
+        # Reason cites both research anchors.
+        assert "43% vs 14%" in rec.reason
+        assert "79.5% to 88.1%" in rec.reason
+
+    def test_action_points_at_source_file_when_present(self) -> None:
+        recs = correlate([self._oversized_signal()])
+        assert "File:" in recs[0].action
+
+    def test_missing_source_file_omits_file_clause(self) -> None:
+        recs = correlate([self._oversized_signal(source_file="")])
+        assert len(recs) == 1
+        assert "File:" not in recs[0].action
+
+
 def _builtin_signal(signal_type: SignalType, agent_type: str = "explore") -> DiagnosticSignal:
     detail: dict[str, object] = {}
     if signal_type == SignalType.ERROR_PATTERN:

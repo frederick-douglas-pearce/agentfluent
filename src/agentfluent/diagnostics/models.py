@@ -61,7 +61,7 @@ class SignalType(StrEnum):
     - `MCP_UNUSED_SERVER`, `MCP_MISSING_SERVER`
 
     Agent audit signals (configured-vs-observed agent delegation):
-    - `UNUSED_AGENT`
+    - `UNUSED_AGENT`, `TOOL_INVENTORY_OVERSIZED`
 
     Quality signals (extracted from parent-thread message patterns):
     - `USER_CORRECTION`, `FILE_REWORK`, `REVIEWER_CAUGHT`
@@ -89,6 +89,7 @@ class SignalType(StrEnum):
     MCP_UNUSED_SERVER = "mcp_unused_server"
     MCP_MISSING_SERVER = "mcp_missing_server"
     UNUSED_AGENT = "unused_agent"
+    TOOL_INVENTORY_OVERSIZED = "tool_inventory_oversized"
     USER_CORRECTION = "user_correction"
     FILE_REWORK = "file_rework"
     REVIEWER_CAUGHT = "reviewer_caught"

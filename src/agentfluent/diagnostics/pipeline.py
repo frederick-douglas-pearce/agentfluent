@@ -27,7 +27,10 @@ from agentfluent.config.mcp_discovery import discover_mcp_servers
 from agentfluent.config.models import AgentConfig
 from agentfluent.config.scanner import scan_agents
 from agentfluent.core.session import SessionMessage
-from agentfluent.diagnostics.agent_audit import audit_unused_agents
+from agentfluent.diagnostics.agent_audit import (
+    audit_tool_inventory,
+    audit_unused_agents,
+)
 from agentfluent.diagnostics.aggregation import aggregate_recommendations
 from agentfluent.diagnostics.correlator import correlate
 from agentfluent.diagnostics.delegation import (
@@ -236,6 +239,13 @@ def run_diagnostics(
 
     signals.extend(
         audit_unused_agents(
+            invocations, agent_configs,
+            sessions_analyzed=session_count,
+        ),
+    )
+
+    signals.extend(
+        audit_tool_inventory(
             invocations, agent_configs,
             sessions_analyzed=session_count,
         ),

@@ -36,12 +36,15 @@ class TestFuzzyLookup:
     ) -> None:
         result = runner.invoke(cli_app, ["explain", "tools"])
         assert result.exit_code != 0
-        # `tools` substring matches at least target_tools and concern_tools
-        # (and others); the "did you mean" branch uses stderr.
+        # `tools` substring matches more than five `tool*` terms; the
+        # "did you mean" branch fires (uses stderr), caps the displayed
+        # list, and reports the remainder as "...and N more" rather than
+        # collapsing into the "not found" message.
         combined = result.stdout + result.stderr
         assert "Did you mean" in combined
         assert "target_tools" in combined
         assert "concern_tools" in combined
+        assert "more" in combined
 
     def test_unknown_term_exits_with_user_error(
         self, runner: CliRunner, cli_app: typer.Typer,

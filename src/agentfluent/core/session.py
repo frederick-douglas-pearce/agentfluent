@@ -89,6 +89,13 @@ class ToolResultMetadata(BaseModel):
     tool_uses: int | None = Field(None, alias="totalToolUseCount")
     duration_ms: int | None = Field(None, alias="totalDurationMs")
     agent_id: str | None = Field(None, alias="agentId")
+    tool_stats: dict[str, int] | None = Field(None, alias="toolStats")
+    """Per-tool invocation counts keyed by tool name (e.g.
+    ``{"Read": 3, "Bash": 1}``). ``None`` when ``toolStats`` is absent
+    from the result — distinct from an empty dict so consumers can tell
+    "no data" apart from "ran but recorded no tool calls". Keys are the
+    source of observed tool *diversity* (vs ``tool_uses``, which is only
+    a count). Used by the ``tool_inventory_oversized`` audit (#372)."""
 
 
 class SessionMessage(BaseModel):
