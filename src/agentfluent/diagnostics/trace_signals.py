@@ -45,7 +45,6 @@ Different remediation axes.
 
 from __future__ import annotations
 
-import json
 import re
 
 from agentfluent.config.models import Severity
@@ -257,11 +256,12 @@ def _input_shape_changed(run_calls: list[SubagentToolCall]) -> bool:
     if len(key_shapes) > 1:
         return True
     if all(c.input_data is not None for c in run_calls):
-        value_shapes = {
-            json.dumps(_value_shape(c.input_data), sort_keys=True)
-            for c in run_calls
-        }
-        return len(value_shapes) > 1
+        # `_value_shape` returns nested dicts of type-name strings, which
+        # compare structurally with `==` — no need to serialize to compare.
+        first_shape = _value_shape(run_calls[0].input_data)
+        return any(
+            _value_shape(c.input_data) != first_shape for c in run_calls[1:]
+        )
     return False
 
 
@@ -353,8 +353,8 @@ def _extract_parameter_retries(
         j = i + 1
         while j < n and calls[j].tool_name == calls[i].tool_name:
             j += 1
-        run_indices = list(range(i, j))
-        if len(run_indices) >= _PARAMETER_RETRY_MIN_ATTEMPTS:
+        if j - i >= _PARAMETER_RETRY_MIN_ATTEMPTS:
+            run_indices = list(range(i, j))
             signal = _build_parameter_retry_signal(
                 calls, run_indices, agent_type, invocation_id,
             )

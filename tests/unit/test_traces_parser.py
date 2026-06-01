@@ -196,7 +196,7 @@ class TestInputResultSummaries:
     def test_non_serializable_input_does_not_crash(self, write_jsonl: WriteJSONL) -> None:
         # Input dict from JSONL only contains JSON-native types, so a
         # non-serializable value can't actually round-trip through the
-        # file; simulate by injecting on-disk-valid JSON that _truncate_input
+        # file; simulate by injecting on-disk-valid JSON that _summarize_input
         # will pass through json.dumps cleanly.
         path = write_jsonl(
             "agent-x.jsonl",
