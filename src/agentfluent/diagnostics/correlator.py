@@ -578,6 +578,12 @@ class ToolOrchestrationRule:
     """
 
     _ARTICLE_URL = "https://www.anthropic.com/engineering/advanced-tool-use"
+    # "tools" is the closest fit in the coarse concern taxonomy
+    # (scope/recovery/tools/model): the fix is a tool-coordination change
+    # (migrate to ``allowed_callers``), not a grant/deny of tools. The
+    # built-in action ("route to a custom subagent with explicit tool
+    # grants") still lands the user in the right place. Revisit if a 3rd
+    # orchestration-pattern signal makes a dedicated concern worthwhile.
     _builtin_target = "tools"
     _builtin_concern: BuiltinConcern = "tools"
 
