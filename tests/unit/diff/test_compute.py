@@ -28,6 +28,7 @@ def _envelope(
     total_cost: float = 0.0,
     cache_efficiency: float = 0.0,
     session_count: int = 1,
+    total_model_turns: int | None = None,
 ) -> dict[str, Any]:
     by_model_payload: dict[str, Any] | list[Any]
     if by_model is None:
@@ -36,7 +37,7 @@ def _envelope(
         by_model_payload = []
     else:
         by_model_payload = by_model
-    return {
+    envelope: dict[str, Any] = {
         "session_count": session_count,
         "token_metrics": {
             "input_tokens": 100,
@@ -55,6 +56,11 @@ def _envelope(
             "aggregated_recommendations": aggregated_recs or [],
         } if aggregated_recs is not None else None,
     }
+    # Parent-session model turns live at the envelope top level (#465).
+    # Pass ``None`` to omit the key entirely, simulating a pre-#465 envelope.
+    if total_model_turns is not None:
+        envelope["total_model_turns"] = total_model_turns
+    return envelope
 
 
 def _agg_rec(
@@ -366,6 +372,105 @@ class TestAgentTypeDelta:
         assert delta.invocation_count_delta == -6
         assert delta.total_tokens_delta == -3000
         assert delta.estimated_cost_delta_usd == -0.30
+
+
+def _agent_entry(
+    *,
+    invocation_count: int = 1,
+    total_model_turns: int | None = None,
+    invocations_with_turns: int | None = None,
+) -> dict[str, Any]:
+    """Build a ``by_agent_type`` entry. Omit turn keys to simulate a
+    pre-#467 envelope (the ``None`` sentinels drop the keys entirely)."""
+    entry: dict[str, Any] = {
+        "invocation_count": invocation_count,
+        "total_tokens": 1000,
+        "estimated_total_cost_usd": 0.10,
+    }
+    if total_model_turns is not None:
+        entry["total_model_turns"] = total_model_turns
+    if invocations_with_turns is not None:
+        entry["invocations_with_turns"] = invocations_with_turns
+    return entry
+
+
+class TestModelTurnDeltas:
+    """#470 — parent-session and per-agent-type model-turn deltas."""
+
+    def test_parent_session_turn_delta(self) -> None:
+        baseline = _envelope(total_model_turns=40)
+        current = _envelope(total_model_turns=55)
+        result = compute_diff(baseline, current)
+        assert result.token_metrics.baseline_model_turns == 40
+        assert result.token_metrics.current_model_turns == 55
+        assert result.token_metrics.model_turns_delta == 15
+
+    def test_parent_session_turns_legacy_baseline_falls_back_to_zero(self) -> None:
+        # Pre-#465 baseline has no ``total_model_turns`` key at all.
+        baseline = _envelope(total_model_turns=None)
+        current = _envelope(total_model_turns=30)
+        result = compute_diff(baseline, current)
+        assert result.token_metrics.baseline_model_turns == 0
+        assert result.token_metrics.model_turns_delta == 30
+
+    def test_parent_session_turns_both_zero_yields_zero_delta(self) -> None:
+        baseline = _envelope(total_model_turns=0)
+        current = _envelope(total_model_turns=0)
+        result = compute_diff(baseline, current)
+        assert result.token_metrics.model_turns_delta == 0
+
+    def test_per_agent_turn_delta(self) -> None:
+        baseline = _envelope(by_agent={
+            "pm": _agent_entry(total_model_turns=12, invocations_with_turns=3),
+        })
+        current = _envelope(by_agent={
+            "pm": _agent_entry(total_model_turns=20, invocations_with_turns=4),
+        })
+        result = compute_diff(baseline, current)
+        delta = next(d for d in result.by_agent_type if d.agent_type == "pm")
+        assert delta.baseline_total_model_turns == 12
+        assert delta.current_total_model_turns == 20
+        assert delta.total_model_turns_delta == 8
+        assert delta.baseline_invocations_with_turns == 3
+        assert delta.current_invocations_with_turns == 4
+
+    def test_per_agent_turns_legacy_baseline_falls_back_to_zero(self) -> None:
+        # Pre-#467 baseline entry lacks both turn keys → graceful 0, no crash.
+        baseline = _envelope(by_agent={"pm": _agent_entry()})
+        current = _envelope(by_agent={
+            "pm": _agent_entry(total_model_turns=20, invocations_with_turns=4),
+        })
+        result = compute_diff(baseline, current)
+        delta = next(d for d in result.by_agent_type if d.agent_type == "pm")
+        assert delta.baseline_total_model_turns == 0
+        assert delta.baseline_invocations_with_turns == 0
+        assert delta.total_model_turns_delta == 20
+
+    def test_per_agent_turns_both_zero_yields_zero_delta(self) -> None:
+        baseline = _envelope(by_agent={
+            "pm": _agent_entry(total_model_turns=0, invocations_with_turns=0),
+        })
+        current = _envelope(by_agent={
+            "pm": _agent_entry(total_model_turns=0, invocations_with_turns=0),
+        })
+        result = compute_diff(baseline, current)
+        delta = next(d for d in result.by_agent_type if d.agent_type == "pm")
+        assert delta.total_model_turns_delta == 0
+
+    def test_turn_fields_serialize_in_json_dump(self) -> None:
+        baseline = _envelope(
+            total_model_turns=10,
+            by_agent={"pm": _agent_entry(total_model_turns=5, invocations_with_turns=2)},
+        )
+        current = _envelope(
+            total_model_turns=18,
+            by_agent={"pm": _agent_entry(total_model_turns=9, invocations_with_turns=3)},
+        )
+        dumped = compute_diff(baseline, current).model_dump(mode="json")
+        assert dumped["token_metrics"]["model_turns_delta"] == 8
+        agent_row = next(d for d in dumped["by_agent_type"] if d["agent_type"] == "pm")
+        assert agent_row["total_model_turns_delta"] == 4
+        assert agent_row["current_invocations_with_turns"] == 3
 
 
 class TestForwardCompat:

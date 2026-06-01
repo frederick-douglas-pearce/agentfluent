@@ -267,6 +267,13 @@ def _diff_token_metrics(
     baseline_cache = float(baseline_tm.get("cache_efficiency", 0.0) or 0.0)
     current_cache = float(current_tm.get("cache_efficiency", 0.0) or 0.0)
 
+    # Parent-session model turns live at the envelope top level (#465),
+    # alongside ``session_count`` — NOT under ``token_metrics``. Read from
+    # the full envelope dicts, not ``*_tm``. Pre-#465 envelopes lack the
+    # key; ``or 0`` covers both missing and ``None``.
+    baseline_turns = int(baseline.get("total_model_turns", 0) or 0)
+    current_turns = int(current.get("total_model_turns", 0) or 0)
+
     by_model = _diff_by_model(
         baseline_tm.get("by_model") or [],
         current_tm.get("by_model") or [],
@@ -282,6 +289,9 @@ def _diff_token_metrics(
         baseline_cache_efficiency=baseline_cache,
         current_cache_efficiency=current_cache,
         cache_efficiency_delta=current_cache - baseline_cache,
+        baseline_model_turns=baseline_turns,
+        current_model_turns=current_turns,
+        model_turns_delta=current_turns - baseline_turns,
         by_model=by_model,
     )
 
@@ -384,6 +394,14 @@ def _diff_agent_metrics(
         b_cost = float(b.get("estimated_total_cost_usd", 0.0) or 0.0)
         c_cost = float(c.get("estimated_total_cost_usd", 0.0) or 0.0)
 
+        # Model-turn totals (#467). Legacy-envelope fallback: pre-turn
+        # entries lack both keys and resolve to 0, so the delta shows the
+        # full current value as new (correct — there was nothing to compare).
+        b_turns = int(b.get("total_model_turns", 0) or 0)
+        c_turns = int(c.get("total_model_turns", 0) or 0)
+        b_with_turns = int(b.get("invocations_with_turns", 0) or 0)
+        c_with_turns = int(c.get("invocations_with_turns", 0) or 0)
+
         # is_builtin is identity-bound to the agent name; if either side
         # has it set we can trust it.
         is_builtin = bool(c.get("is_builtin", False) or b.get("is_builtin", False))
@@ -401,6 +419,11 @@ def _diff_agent_metrics(
                 baseline_estimated_cost_usd=b_cost,
                 current_estimated_cost_usd=c_cost,
                 estimated_cost_delta_usd=c_cost - b_cost,
+                baseline_total_model_turns=b_turns,
+                current_total_model_turns=c_turns,
+                total_model_turns_delta=c_turns - b_turns,
+                baseline_invocations_with_turns=b_with_turns,
+                current_invocations_with_turns=c_with_turns,
             ),
         )
     return deltas

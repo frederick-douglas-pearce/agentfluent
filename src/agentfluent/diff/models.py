@@ -113,6 +113,15 @@ class TokenMetricsDelta(BaseModel):
     current_cache_efficiency: float = 0.0
     cache_efficiency_delta: float = 0.0
 
+    baseline_model_turns: int = 0
+    current_model_turns: int = 0
+    model_turns_delta: int = 0
+    """Parent-session model-turn delta (#470). Sourced from the envelope's
+    top-level ``total_model_turns`` (#465), not from the nested
+    ``token_metrics`` block — it lives here because ``TokenMetricsDelta``
+    already holds session-shape metrics. Pre-#465 envelopes lack the field
+    and fall back to ``0`` on both sides (delta ``0``)."""
+
     by_model: list[ModelTokenDelta] = Field(default_factory=list)
     """One entry per model that appears in either baseline or current. A
     model present on only one side has zero on the missing side."""
@@ -135,6 +144,20 @@ class AgentTypeDelta(BaseModel):
     baseline_estimated_cost_usd: float = 0.0
     current_estimated_cost_usd: float = 0.0
     estimated_cost_delta_usd: float = 0.0
+
+    baseline_total_model_turns: int = 0
+    current_total_model_turns: int = 0
+    total_model_turns_delta: int = 0
+    """Per-agent-type model-turn delta (#470), summed across this type's
+    invocations (#467). Pre-#467 envelopes lack the field and fall back to
+    ``0`` on both sides."""
+
+    baseline_invocations_with_turns: int = 0
+    current_invocations_with_turns: int = 0
+    """Denominator for avg-turns-per-invocation, stored (not averaged) so
+    the diff renderer derives the avg the same way ``analyze`` does (#467),
+    keeping the two outputs from diverging. No precomputed avg-delta field
+    exists by design."""
 
 
 class DiffResult(BaseModel):
