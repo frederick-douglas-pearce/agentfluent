@@ -407,6 +407,41 @@ claude-haiku-4-5.
 
 **Related:** [`complexity_tier`](#complexity_tier), [`overspec`](#overspec), [`underspec`](#underspec), [`target_model`](#target_model)
 
+### `tool_orchestration_chain`
+
+**Short:** An agent runs long tool-call chains whose large intermediate results
+pass through the context window unnecessarily.
+
+**Detail:** Per-agent-type signal (Tier A, metadata-only). Flags invocations that
+make 10+ tool calls AND average more than 2,000 tokens per call -- a
+proxy for orchestration chains where each `tool_result` enters the
+context window even though only the final output is needed. Fires when
+3+ invocations of the same agent type match the pattern. Recommends
+Programmatic Tool Calling (`allowed_callers:
+["code_execution_20250825"]`), which runs the orchestration in a
+code-execution sandbox so intermediate results stay out of context.
+Severity is `info`, not `warning`: the metadata-only proxy cannot tell
+a true chain (intermediates discarded) from an agent that legitimately
+needs each intermediate in context for reasoning. Estimated precision
+is 60-70%; this is the first LLM-call augmentation candidate (D035).
+
+**Example:**
+
+```
+Agent 'general-purpose' made 47 tool calls consuming 132,000 tokens
+across 3 invocations. Average token cost per tool call: 2,809 tokens.
+Estimated savings ~48,840 tokens at the 37% benchmark by migrating to
+code-execution orchestration.
+```
+
+**Severity:** info
+
+**Threshold:** 10+ tool calls AND >2000 tokens/call per invocation; min 3 invocations
+
+**Recommendation target:** `tools`
+
+**Related:** [`token_outlier`](#token_outlier), [`target_tools`](#target_tools), [`model_mismatch`](#model_mismatch)
+
 ### `mcp_unused_server`
 
 **Short:** An MCP server is configured but never called in observed sessions.

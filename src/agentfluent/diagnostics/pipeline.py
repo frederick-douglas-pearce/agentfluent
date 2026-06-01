@@ -63,6 +63,9 @@ from agentfluent.diagnostics.models import (
 from agentfluent.diagnostics.parent_workload import build_offload_candidates
 from agentfluent.diagnostics.quality_signals import extract_quality_signals
 from agentfluent.diagnostics.signals import extract_signals
+from agentfluent.diagnostics.tool_orchestration import (
+    extract_tool_orchestration_signals,
+)
 from agentfluent.diagnostics.trace_signals import extract_trace_signals
 
 logger = logging.getLogger(__name__)
@@ -225,6 +228,11 @@ def run_diagnostics(
     # Aggregate-level signals (model-routing) use the same config lookup
     # the correlator will read from; fold them in before correlation.
     signals.extend(extract_model_routing_signals(invocations, configs_by_name))
+
+    # Tool-orchestration-chain signals (Tier A, metadata-only) — same
+    # aggregate-level phase as model-routing; uses only invocation
+    # metadata, so it doesn't need configs.
+    signals.extend(extract_tool_orchestration_signals(invocations))
 
     signals.extend(
         audit_unused_agents(

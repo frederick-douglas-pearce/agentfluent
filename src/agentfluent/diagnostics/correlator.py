@@ -27,6 +27,7 @@ from agentfluent.diagnostics.quality_signals import (
     PARENT_ACTED_HEALTHY_BAND_HIGH,
     PARENT_ACTED_HEALTHY_BAND_LOW,
 )
+from agentfluent.diagnostics.tool_orchestration import ESTIMATED_TOKEN_SAVINGS_KEY
 
 
 def _relpath(path: Path) -> str:
@@ -565,6 +566,74 @@ class ModelRoutingRule:
         )
 
 
+class ToolOrchestrationRule:
+    """TOOL_ORCHESTRATION_CHAIN -> recommend Programmatic Tool Calling.
+
+    The agent orchestrates long tool-call chains whose large intermediate
+    results pass through the context window. Recommends migrating the
+    chained tools to ``allowed_callers: ["code_execution_20250825"]`` so
+    intermediates stay in the code-execution sandbox. Severity stays
+    ``INFO`` (carried from the signal) to reflect the Tier A metadata-only
+    precision limitation.
+    """
+
+    _ARTICLE_URL = "https://www.anthropic.com/engineering/advanced-tool-use"
+    _builtin_target = "tools"
+    _builtin_concern: BuiltinConcern = "tools"
+
+    def matches(self, signal: DiagnosticSignal, config: AgentConfig | None) -> bool:
+        return signal.signal_type == SignalType.TOOL_ORCHESTRATION_CHAIN
+
+    def recommend(
+        self, signal: DiagnosticSignal, config: AgentConfig | None,
+    ) -> DiagnosticRecommendation:
+        savings = signal.detail.get(ESTIMATED_TOKEN_SAVINGS_KEY)
+
+        observation = signal.message
+        reason = (
+            "Sequential tool-call chains with large intermediate payloads "
+            "inflate context-window usage. Programmatic Tool Calling lets "
+            "the agent orchestrate tool calls in a sandboxed code-execution "
+            "environment where intermediate results don't enter the context "
+            "window. Anthropic reports a 37% token reduction on complex "
+            "research tasks."
+        )
+
+        if rec := _check_builtin(self, signal, reason):
+            return rec
+
+        action_parts = [
+            "Consider migrating the tools this agent calls to "
+            '`allowed_callers: ["code_execution_20250825"]` so intermediate '
+            "results are processed in the code-execution sandbox",
+        ]
+        if isinstance(savings, int) and savings > 0:
+            action_parts.append(
+                f"(estimated savings: ~{savings:,} tokens at the 37% benchmark)",
+            )
+        if config:
+            action_parts.append(
+                f"— edit the tool definitions referenced by "
+                f"{_relpath(config.file_path)}.",
+            )
+        else:
+            action_parts.append(f"— see {self._ARTICLE_URL}.")
+        action = " ".join(action_parts)
+
+        return DiagnosticRecommendation(
+            target="tools",
+            severity=signal.severity,
+            message=f"{observation} {reason} {action}",
+            observation=observation,
+            reason=reason,
+            action=action,
+            agent_type=signal.agent_type,
+            invocation_id=signal.invocation_id,
+            config_file=str(config.file_path) if config else "",
+            signal_types=[signal.signal_type],
+        )
+
+
 # Module-level rule registry. Add new rules here.
 class McpAuditRule:
     """MCP server audit signals -> recommend mcpServers config edit.
@@ -1021,6 +1090,7 @@ RULES: list[CorrelationRule] = [
     StuckPatternRule(),
     ErrorSequenceRule(),
     ModelRoutingRule(),
+    ToolOrchestrationRule(),
     McpAuditRule(),
     UnusedAgentRule(),
     UserCorrectionRule(),
