@@ -109,12 +109,11 @@ def audit_tool_inventory(
         return []
 
     observed_by_agent: dict[str, set[str]] = {}
-    invoked_agents: set[str] = set()
     for inv in invocations:
-        key = inv.agent_type.lower()
-        invoked_agents.add(key)
         if inv.tool_stats:
-            observed_by_agent.setdefault(key, set()).update(inv.tool_stats)
+            observed_by_agent.setdefault(inv.agent_type.lower(), set()).update(
+                inv.tool_stats,
+            )
 
     signals: list[DiagnosticSignal] = []
     for config in agent_configs:
@@ -125,14 +124,13 @@ def audit_tool_inventory(
         if declared_count <= declared_threshold:
             continue
 
-        key = config.name.lower()
-        if key not in invoked_agents:
-            continue
-
-        observed = observed_by_agent.get(key, set())
+        # An agent only appears in observed_by_agent when at least one of
+        # its invocations reported toolStats, so an empty set covers both
+        # suppressed cases: never invoked in the window (that's the
+        # unused-agent audit's domain), and invoked but with no toolStats
+        # (observed diversity unknown — suppress rather than report 0%).
+        observed = observed_by_agent.get(config.name.lower(), set())
         if not observed:
-            # Invoked, but no invocation reported toolStats — observed
-            # diversity is unknown. Suppress rather than report 0%.
             continue
 
         observed_count = len(observed)
