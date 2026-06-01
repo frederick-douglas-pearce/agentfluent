@@ -320,6 +320,53 @@ without progress.
 
 **Related:** [`retry_loop`](#retry_loop)
 
+### `parameter_retry`
+
+**Short:** A subagent retried the same tool with a **different parameter shape**
+after an initial error -- it's guessing at the input format.
+
+**Detail:** Trace-level signal (Tier A). Triggered when 2+ consecutive calls to
+the same tool show (a) the first call errored (`is_error`, or a
+validation keyword -- `invalid`, `validation`, `missing required`,
+`type error`, `schema` -- in the leading window of the result) AND
+(b) the `input` shape changed between attempts. Shape change is
+measured primarily by the set of top-level keys (a key added,
+removed, or renamed) and secondarily by nested-value structure or a
+scalar type change when the full input was captured. This is
+high-precision: an error followed by an input-shape change is strong
+evidence the agent doesn't know the parameter format.
+
+Scanned directly from `tool_calls`, independent of the
+similarity-based retry detector -- a parameter-shape retry varies the
+input enough that it may not register as a `retry_loop` at all. Takes
+precedence over `stuck_pattern`, `retry_loop`, and
+`tool_error_sequence`: indices it claims are suppressed for those
+signals, because the `input_examples` fix is more specific and more
+actionable.
+
+When a subsequent call to the same tool succeeded, AgentFluent
+extracts that call's `input` dict and surfaces it as a paste-ready
+`input_examples` entry in the recommendation (informational only; the
+user copies it manually -- see D002). Adding `input_examples` to a
+tool definition improves accuracy from 72% to 90% on complex
+parameter handling (Anthropic benchmark).
+
+**Example:**
+
+```
+Subagent 'general-purpose' retried tool 'mcp__github__create_issue' 3
+times with different parameter shapes before succeeding. First attempt
+failed with: 'validation error: missing required field "title"'.
+```
+
+**Severity:** warning
+
+**Threshold:** 2+ consecutive same-tool calls; first errored; input shape changed
+
+**Recommendation target:** `tools`
+
+**Related:** [`retry_loop`](#retry_loop), [`stuck_pattern`](#stuck_pattern), [`tool_error_sequence`](#tool_error_sequence), [`target_tools`](#target_tools)
+
 ### `permission_failure`
 
 **Short:** A tool result contained a permission-denied keyword.

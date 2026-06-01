@@ -1077,3 +1077,63 @@ class TestRelpath:
         # Programmatic field keeps the absolute path for JSON consumers.
         assert recs[0].config_file == str(Path.home() / ".claude/agents/pm.md")
 
+
+
+class TestParameterRetryRule:
+    """PARAMETER_RETRY -> `input_examples` recommendation on the tool def."""
+
+    def _param_signal(
+        self,
+        *,
+        with_example: bool = True,
+        agent_type: str = "general-purpose",
+    ) -> DiagnosticSignal:
+        detail: dict[str, object] = {
+            "tool_name": "Edit",
+            "retry_count": 2,
+            "eventual_success": with_example,
+        }
+        if with_example:
+            detail["input_example"] = {
+                "file_path": "a.py",
+                "old_string": "x",
+                "new_string": "y",
+            }
+        return _signal(
+            signal_type=SignalType.PARAMETER_RETRY,
+            severity=Severity.WARNING,
+            agent_type=agent_type,
+            message="Subagent 'general-purpose' retried tool 'Edit' 2 times.",
+            detail=detail,
+        )
+
+    def test_recommends_input_examples_on_tools_target(self) -> None:
+        recs = correlate([self._param_signal()], None)
+        assert len(recs) == 1
+        assert recs[0].target == "tools"
+        assert recs[0].severity == Severity.WARNING
+        assert "input_examples" in recs[0].action
+        assert "'Edit'" in recs[0].action
+
+    def test_includes_paste_ready_example_when_available(self) -> None:
+        recs = correlate([self._param_signal(with_example=True)], None)
+        action = recs[0].action
+        assert "Suggested `input_examples` entry" in action
+        # The extracted dict is rendered as indented JSON.
+        assert '"file_path": "a.py"' in action
+        assert '"new_string": "y"' in action
+
+    def test_omits_paste_ready_when_no_example(self) -> None:
+        recs = correlate([self._param_signal(with_example=False)], None)
+        action = recs[0].action
+        assert "input_examples" in action
+        assert "Suggested `input_examples` entry" not in action
+
+    def test_fires_for_builtin_agent_without_builtin_branch(self) -> None:
+        # The fix targets the tool definition, not the agent config, so a
+        # built-in agent still gets the input_examples recommendation
+        # (not the generic "route to a custom subagent" built-in action).
+        recs = correlate([self._param_signal(agent_type="Explore")], None)
+        assert len(recs) == 1
+        assert recs[0].target == "tools"
+        assert "input_examples" in recs[0].action

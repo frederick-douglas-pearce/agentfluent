@@ -8,6 +8,10 @@ trace-specific signal types:
 
 - `PERMISSION_FAILURE` — a tool result contains a permission-denied
   keyword. Specific remediation: grant the tool in the agent's config.
+- `PARAMETER_RETRY` — 2+ consecutive calls to the same tool where the
+  first errored and the `input` shape changed between attempts.
+  Indicates the agent is guessing at the parameter format; remediation
+  is `input_examples` on the tool definition.
 - `STUCK_PATTERN` — 4+ consecutive identical calls to the same tool.
   Indicates a missing exit condition in the prompt.
 - `RETRY_LOOP` — a `RetrySequence` with `attempts >= 3` that is not
@@ -16,31 +20,76 @@ trace-specific signal types:
   are not covered by a STUCK or RETRY sequence. Indicates missing
   fallback instructions.
 
-STUCK and RETRY are mutually exclusive: a single `RetrySequence` emits
-exactly one of them, never both, and TOOL_ERROR_SEQUENCE never emits
-for indices already covered by STUCK or RETRY. This invariant keeps the
-principle "one observed pattern → one signal" — a future dev must not
-"fix" this to independent emission without updating the downstream
-correlator contract.
+PARAMETER_RETRY, STUCK, RETRY, and TOOL_ERROR_SEQUENCE share one
+`covered` index set, enforcing "one observed pattern → one signal" with
+the precedence **PARAMETER_RETRY > STUCK_PATTERN > RETRY_LOOP >
+TOOL_ERROR_SEQUENCE**. PARAMETER_RETRY runs first and is the most
+specific/actionable (it yields a concrete `input_examples` fix), so its
+indices suppress any overlapping RETRY_LOOP/STUCK_PATTERN/error
+sequence. STUCK and RETRY remain mutually exclusive per `RetrySequence`.
+A future dev must not "fix" this to independent emission without
+updating the downstream correlator contract.
 
-PERMISSION_FAILURE is intentionally NOT mutually exclusive with
-TOOL_ERROR_SEQUENCE: a permission-denied run produces both a
-specialized recommendation (grant the tool) and the general fallback
-signal. Different remediation axes.
+PARAMETER_RETRY scans `tool_calls` directly rather than reusing
+`trace.retry_sequences`: a parameter-shape retry changes the `input`
+enough that the similarity-based retry detector (`traces.retry`, 0.80
+threshold) may not group the calls into a `RetrySequence` at all. The
+two detectors answer different questions — "same args, no progress"
+(retry) vs "different arg shape after an error" (parameter).
+
+PERMISSION_FAILURE is intentionally NOT mutually exclusive with the
+above: a permission-denied run produces both a specialized
+recommendation (grant the tool) and the general fallback signal.
+Different remediation axes.
 """
 
 from __future__ import annotations
 
+import json
 import re
 
 from agentfluent.config.models import Severity
 from agentfluent.diagnostics.models import DiagnosticSignal, SignalType
+from agentfluent.diagnostics.signals import ERROR_DETECTION_WINDOW_CHARS
 from agentfluent.traces.models import (
     RESULT_SUMMARY_MAX_CHARS,
     RetrySequence,
     SubagentToolCall,
     SubagentTrace,
 )
+
+# Producer/consumer contract: ``_extract_parameter_retries`` stores the
+# extracted paste-ready input dict under this key in the signal's
+# ``detail`` (only when a successful call's ``input_data`` is available);
+# ``correlator.ParameterRetryRule`` reads it to format the suggested
+# ``input_examples`` block. Absent when no successful call followed the
+# retries or its input exceeded the capture cap.
+PARAMETER_RETRY_EXAMPLE_KEY = "input_example"
+
+# Validation-flavored error keywords that signal parameter/schema
+# confusion specifically (a superset trigger for PARAMETER_RETRY beyond
+# the generic ``is_error`` flag). Kept separate from
+# ``signals.ERROR_PATTERNS`` (which governs the metadata ERROR_PATTERN
+# signal): these terms are too narrow to flag a generic failure but are
+# strong evidence the agent supplied a malformed ``input``. Matched
+# against the leading window only, reusing the FP-defense bound that
+# ``signals.detect_is_error_from_text`` applies.
+_PARAM_ERROR_KEYWORDS = (
+    "invalid",
+    "validation",
+    "missing required",
+    "type error",
+    "schema",
+)
+_PARAM_ERROR_REGEX = re.compile(
+    "|".join(re.escape(k) for k in _PARAM_ERROR_KEYWORDS),
+    re.IGNORECASE,
+)
+
+# Minimum consecutive same-tool calls to consider a parameter-retry run.
+_PARAMETER_RETRY_MIN_ATTEMPTS = 2
+# First-error summary length cap in the signal message.
+_PARAM_ERROR_SUMMARY_MAX_CHARS = 120
 
 # Keywords that signal an authorization/access failure in a tool_result.
 # Substring match is intentional — "not allowed" inside a longer message
@@ -164,11 +213,165 @@ def _extract_permission_failures(
     return signals
 
 
+def _is_param_error(call: SubagentToolCall) -> bool:
+    """Whether ``call`` looks like a parameter/validation failure.
+
+    The parser-supplied ``is_error`` flag (generic error detection) OR a
+    validation-flavored keyword in the leading window of the result. The
+    window bound mirrors ``signals.detect_is_error_from_text``'s
+    FP-defense — keep keyword matches to the start of the result, where
+    real error messages lead.
+    """
+    if call.is_error:
+        return True
+    window = call.result_summary[:ERROR_DETECTION_WINDOW_CHARS]
+    return bool(_PARAM_ERROR_REGEX.search(window))
+
+
+def _value_shape(value: object) -> object:
+    """Recursively reduce a JSON value to its structural shape.
+
+    Dicts recurse (sorted keys mapped to nested shapes) so nested-object
+    differences and added/removed nested keys are detected; every other
+    value collapses to its type name, so a scalar type change
+    (``"str"`` -> ``"int"``) registers while same-typed value changes
+    (two different file paths) do not. Lists collapse to ``"list"`` —
+    element-level drift is out of scope for shape comparison.
+    """
+    if isinstance(value, dict):
+        return {k: _value_shape(v) for k, v in sorted(value.items())}
+    return type(value).__name__
+
+
+def _input_shape_changed(run_calls: list[SubagentToolCall]) -> bool:
+    """Whether the ``input`` shape changed across a same-tool run.
+
+    Primary signal: the set of top-level keys differs between calls
+    (a key added, removed, or renamed). Secondary signal (only when every
+    call captured ``input_data``): the nested value structure differs —
+    a nested key change or a scalar type change. Returns ``False`` when
+    no shape evidence exists (all inputs empty / uncaptured), so a run
+    with no observable parameter variation never fires PARAMETER_RETRY.
+    """
+    key_shapes = {tuple(sorted(c.input_keys)) for c in run_calls}
+    if len(key_shapes) > 1:
+        return True
+    if all(c.input_data is not None for c in run_calls):
+        value_shapes = {
+            json.dumps(_value_shape(c.input_data), sort_keys=True)
+            for c in run_calls
+        }
+        return len(value_shapes) > 1
+    return False
+
+
+def _extract_successful_example(
+    run_calls: list[SubagentToolCall],
+) -> dict[str, object] | None:
+    """The most-evolved successful ``input_data`` in the run, if any.
+
+    Scans from the end so the last (most-corrected) successful shape is
+    preferred. Returns ``None`` when no non-error call carries captured
+    ``input_data`` — the paste-ready section is then omitted while the
+    signal still fires.
+    """
+    for call in reversed(run_calls):
+        if not call.is_error and call.input_data is not None:
+            return call.input_data
+    return None
+
+
+def _build_parameter_retry_signal(
+    calls: list[SubagentToolCall],
+    run_indices: list[int],
+    agent_type: str,
+    invocation_id: str | None,
+) -> DiagnosticSignal | None:
+    """Emit PARAMETER_RETRY for a same-tool run, or ``None`` if it doesn't
+    qualify (first call not an error, or no input-shape change)."""
+    run_calls = [calls[i] for i in run_indices]
+    if not _is_param_error(run_calls[0]):
+        return None
+    if not _input_shape_changed(run_calls):
+        return None
+
+    tool_name = run_calls[0].tool_name
+    attempts = len(run_calls)
+    eventual_success = not run_calls[-1].is_error
+    error_summary = " ".join(run_calls[0].result_summary.split())[
+        :_PARAM_ERROR_SUMMARY_MAX_CHARS
+    ]
+    suffix = " before succeeding" if eventual_success else ""
+
+    detail: dict[str, object] = {
+        "tool_calls": _cap_evidence(run_calls, run_indices),
+        "tool_name": tool_name,
+        "retry_count": attempts,
+        "first_error_message": run_calls[0].result_summary,
+        "eventual_success": eventual_success,
+    }
+    example = _extract_successful_example(run_calls)
+    if example is not None:
+        detail[PARAMETER_RETRY_EXAMPLE_KEY] = example
+
+    return DiagnosticSignal(
+        signal_type=SignalType.PARAMETER_RETRY,
+        severity=Severity.WARNING,
+        agent_type=agent_type,
+        invocation_id=invocation_id,
+        message=(
+            f"Subagent '{agent_type}' retried tool '{tool_name}' "
+            f"{attempts} times with different parameter shapes{suffix}. "
+            f"First attempt failed with: '{error_summary}'."
+        ),
+        detail=detail,
+    )
+
+
+def _extract_parameter_retries(
+    trace: SubagentTrace,
+    agent_type: str,
+    *,
+    invocation_id: str | None = None,
+) -> tuple[list[DiagnosticSignal], set[int]]:
+    """Emit PARAMETER_RETRY for consecutive same-tool runs that show an
+    initial error followed by an input-shape change.
+
+    Scans ``tool_calls`` directly (independent of ``retry_sequences``) for
+    maximal runs of 2+ calls sharing a ``tool_name``. The returned
+    ``covered`` set lists every index claimed by an emitted signal so the
+    retry/stuck and error-sequence extractors skip the same evidence —
+    PARAMETER_RETRY wins the precedence.
+    """
+    signals: list[DiagnosticSignal] = []
+    covered: set[int] = set()
+    calls = trace.tool_calls
+    n = len(calls)
+
+    i = 0
+    while i < n:
+        j = i + 1
+        while j < n and calls[j].tool_name == calls[i].tool_name:
+            j += 1
+        run_indices = list(range(i, j))
+        if len(run_indices) >= _PARAMETER_RETRY_MIN_ATTEMPTS:
+            signal = _build_parameter_retry_signal(
+                calls, run_indices, agent_type, invocation_id,
+            )
+            if signal is not None:
+                signals.append(signal)
+                covered.update(run_indices)
+        i = j
+
+    return signals, covered
+
+
 def _extract_retry_and_stuck(
     trace: SubagentTrace,
     agent_type: str,
     *,
     invocation_id: str | None = None,
+    exclude: set[int] | None = None,
 ) -> tuple[list[DiagnosticSignal], set[int]]:
     """Emit STUCK_PATTERN or RETRY_LOOP — never both — per `RetrySequence`.
 
@@ -181,12 +384,19 @@ def _extract_retry_and_stuck(
     The returned `covered` set lists all `tool_call_indices` consumed by
     emitted STUCK or RETRY signals so `_extract_error_sequences` can
     avoid double-emitting TOOL_ERROR_SEQUENCE on the same bytes.
+
+    `exclude` carries the indices already claimed by PARAMETER_RETRY
+    (higher precedence); any `RetrySequence` overlapping it is skipped so
+    a parameter-shape retry doesn't also surface as a RETRY_LOOP.
     """
+    exclude = exclude or set()
     signals: list[DiagnosticSignal] = []
     covered: set[int] = set()
 
     for seq in trace.retry_sequences:
         if seq.attempts < _RETRY_LOOP_MIN_ATTEMPTS:
+            continue
+        if exclude.intersection(seq.tool_call_indices):
             continue
 
         calls = [trace.tool_calls[i] for i in seq.tool_call_indices]
@@ -341,8 +551,10 @@ def extract_trace_signals(
 
     Handles `None` (unlinked invocation) and empty traces by returning
     an empty list. Order of signals: PERMISSION_FAILURE first
-    (remediation-specific), then STUCK/RETRY (indexed), then
-    TOOL_ERROR_SEQUENCE (filtered by STUCK/RETRY coverage).
+    (remediation-specific, non-exclusive), then PARAMETER_RETRY (claims
+    its indices), then STUCK/RETRY (skipping PARAMETER_RETRY-covered
+    sequences), then TOOL_ERROR_SEQUENCE (filtered by all prior
+    coverage).
 
     `agent_type` overrides `trace.agent_type` on emitted signals when
     provided. The pipeline passes the parent `AgentInvocation.agent_type`
@@ -365,13 +577,23 @@ def extract_trace_signals(
             trace, effective_agent_type, invocation_id=invocation_id,
         ),
     )
-    retry_stuck, covered = _extract_retry_and_stuck(
+    param_signals, param_covered = _extract_parameter_retries(
         trace, effective_agent_type, invocation_id=invocation_id,
+    )
+    signals.extend(param_signals)
+    retry_stuck, retry_covered = _extract_retry_and_stuck(
+        trace,
+        effective_agent_type,
+        invocation_id=invocation_id,
+        exclude=param_covered,
     )
     signals.extend(retry_stuck)
     signals.extend(
         _extract_error_sequences(
-            trace, covered, effective_agent_type, invocation_id=invocation_id,
+            trace,
+            param_covered | retry_covered,
+            effective_agent_type,
+            invocation_id=invocation_id,
         ),
     )
     return signals

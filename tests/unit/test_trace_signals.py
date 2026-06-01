@@ -1,10 +1,15 @@
 """Tests for trace-level signal extraction."""
 
+import json
+
 import pytest
 
 from agentfluent.config.models import Severity
 from agentfluent.diagnostics.models import SignalType
-from agentfluent.diagnostics.trace_signals import extract_trace_signals
+from agentfluent.diagnostics.trace_signals import (
+    PARAMETER_RETRY_EXAMPLE_KEY,
+    extract_trace_signals,
+)
 from agentfluent.traces.models import (
     RESULT_SUMMARY_MAX_CHARS,
     RetrySequence,
@@ -346,3 +351,169 @@ class TestMutualExclusion:
         seqs = [s for s in signals if s.signal_type == SignalType.TOOL_ERROR_SEQUENCE]
         # Only the uncovered [0, 1] run should be reported.
         assert seqs[0].detail["error_count"] == 2
+
+
+def _ptc(
+    tool: str = "Edit",
+    inp: dict[str, object] | None = None,
+    res: str = "ok",
+    err: bool = False,
+    *,
+    capture_data: bool = True,
+) -> SubagentToolCall:
+    """Build a tool call with structured ``input_keys`` / ``input_data``.
+
+    ``capture_data=False`` simulates an oversized input the parser
+    dropped (``input_data is None``) while still recording ``input_keys``.
+    """
+    inp = inp if inp is not None else {}
+    return SubagentToolCall(
+        tool_name=tool,
+        input_summary=json.dumps(inp),
+        input_keys=list(inp.keys()),
+        input_data=inp if capture_data else None,
+        result_summary=res,
+        is_error=err,
+    )
+
+
+def _param_signals(trace: SubagentTrace) -> list:
+    return [
+        s
+        for s in extract_trace_signals(trace)
+        if s.signal_type == SignalType.PARAMETER_RETRY
+    ]
+
+
+class TestParameterRetry:
+    def test_first_error_keys_differ_fires(self) -> None:
+        calls = [
+            _ptc("Edit", {"path": "a.py", "old": "x"}, res="validation error", err=True),
+            _ptc(
+                "Edit",
+                {"file_path": "a.py", "old_string": "x", "new_string": "y"},
+                err=False,
+            ),
+        ]
+        sigs = _param_signals(_trace(calls=calls))
+        assert len(sigs) == 1
+        assert sigs[0].severity == Severity.WARNING
+        assert sigs[0].detail["tool_name"] == "Edit"
+        assert sigs[0].detail["retry_count"] == 2
+        assert sigs[0].detail["eventual_success"] is True
+
+    def test_both_succeed_no_signal(self) -> None:
+        calls = [
+            _ptc("Edit", {"path": "a"}, err=False),
+            _ptc("Edit", {"file_path": "a", "old": "x"}, err=False),
+        ]
+        assert _param_signals(_trace(calls=calls)) == []
+
+    def test_different_tools_no_signal(self) -> None:
+        calls = [
+            _ptc("Edit", {"path": "a"}, res="error", err=True),
+            _ptc("Read", {"file_path": "a"}, err=False),
+        ]
+        assert _param_signals(_trace(calls=calls)) == []
+
+    def test_same_keys_same_types_no_signal(self) -> None:
+        # Different target (file not found then retried elsewhere), same
+        # shape -> not a parameter-format problem.
+        calls = [
+            _ptc("Read", {"file_path": "a.py"}, res="error: not found", err=True),
+            _ptc("Read", {"file_path": "b.py"}, err=False),
+        ]
+        assert _param_signals(_trace(calls=calls)) == []
+
+    def test_paste_ready_example_extracted(self) -> None:
+        success_input = {
+            "file_path": "a.py",
+            "old_string": "x",
+            "new_string": "y",
+        }
+        calls = [
+            _ptc("Edit", {"path": "a.py"}, res="invalid", err=True),
+            _ptc("Edit", success_input, err=False),
+        ]
+        sigs = _param_signals(_trace(calls=calls))
+        assert len(sigs) == 1
+        assert sigs[0].detail[PARAMETER_RETRY_EXAMPLE_KEY] == success_input
+
+    def test_no_success_signal_without_paste_ready(self) -> None:
+        calls = [
+            _ptc("Edit", {"path": "a"}, res="invalid", err=True),
+            _ptc("Edit", {"file_path": "a", "old": "x"}, res="invalid", err=True),
+        ]
+        sigs = _param_signals(_trace(calls=calls))
+        assert len(sigs) == 1
+        assert sigs[0].detail["eventual_success"] is False
+        assert PARAMETER_RETRY_EXAMPLE_KEY not in sigs[0].detail
+
+    def test_nested_dict_shape_change_fires(self) -> None:
+        # Top-level keys identical ({"cfg"}); nested key added.
+        calls = [
+            _ptc("Run", {"cfg": {"a": 1}}, res="schema error", err=True),
+            _ptc("Run", {"cfg": {"a": 1, "b": 2}}, err=False),
+        ]
+        assert len(_param_signals(_trace(calls=calls))) == 1
+
+    def test_optional_top_level_field_added_fires(self) -> None:
+        calls = [
+            _ptc("Run", {"a": 1}, res="missing required", err=True),
+            _ptc("Run", {"a": 1, "b": 2}, err=False),
+        ]
+        assert len(_param_signals(_trace(calls=calls))) == 1
+
+    def test_scalar_type_change_same_keys_fires(self) -> None:
+        # Same key, value type str -> int (secondary signal).
+        calls = [
+            _ptc("Run", {"timeout": "30"}, res="type error", err=True),
+            _ptc("Run", {"timeout": 30}, err=False),
+        ]
+        assert len(_param_signals(_trace(calls=calls))) == 1
+
+    def test_validation_keyword_triggers_without_is_error(self) -> None:
+        calls = [
+            _ptc(
+                "Run",
+                {"a": 1},
+                res="Schema validation failed: missing required field 'b'",
+                err=False,
+            ),
+            _ptc("Run", {"a": 1, "b": 2}, err=False),
+        ]
+        assert len(_param_signals(_trace(calls=calls))) == 1
+
+    def test_no_shape_evidence_no_signal(self) -> None:
+        # First errored but inputs uncaptured and keys empty -> can't
+        # observe a shape change, so no signal.
+        calls = [
+            _ptc("Run", {}, res="invalid", err=True, capture_data=False),
+            _ptc("Run", {}, err=False, capture_data=False),
+        ]
+        assert _param_signals(_trace(calls=calls)) == []
+
+    def test_precedence_suppresses_retry_loop(self) -> None:
+        calls = [
+            _ptc("Edit", {"path": "a"}, res="invalid", err=True),
+            _ptc("Edit", {"file_path": "a"}, res="invalid", err=True),
+            _ptc(
+                "Edit",
+                {"file_path": "a", "old_string": "x", "new_string": "y"},
+                err=False,
+            ),
+        ]
+        seqs = [
+            RetrySequence(
+                tool_name="Edit",
+                attempts=3,
+                tool_call_indices=[0, 1, 2],
+                eventual_success=True,
+            ),
+        ]
+        types = {
+            s.signal_type for s in extract_trace_signals(_trace(calls=calls, sequences=seqs))
+        }
+        assert SignalType.PARAMETER_RETRY in types
+        assert SignalType.RETRY_LOOP not in types
+        assert SignalType.TOOL_ERROR_SEQUENCE not in types

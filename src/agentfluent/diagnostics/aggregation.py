@@ -83,6 +83,7 @@ SIGNAL_AXIS_MAP: dict[SignalType, Axis] = {
     SignalType.RETRY_LOOP: Axis.SPEED,
     SignalType.STUCK_PATTERN: Axis.SPEED,
     SignalType.TOOL_ERROR_SEQUENCE: Axis.SPEED,
+    SignalType.PARAMETER_RETRY: Axis.SPEED,
     SignalType.ERROR_PATTERN: Axis.SPEED,
     SignalType.PERMISSION_FAILURE: Axis.SPEED,
     SignalType.MCP_MISSING_SERVER: Axis.SPEED,

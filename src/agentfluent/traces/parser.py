@@ -32,6 +32,7 @@ from agentfluent.core.session import ContentBlock, SessionMessage, Usage
 from agentfluent.diagnostics.signals import detect_is_error_from_text
 from agentfluent.traces.discovery import AGENT_FILENAME_PATTERN
 from agentfluent.traces.models import (
+    INPUT_DATA_MAX_CHARS,
     INPUT_SUMMARY_MAX_CHARS,
     RESULT_SUMMARY_MAX_CHARS,
     UNKNOWN_AGENT_TYPE,
@@ -74,6 +75,28 @@ def _truncate_input(input_dict: dict[str, Any] | None) -> str:
         return ""
     serialized = json.dumps(input_dict, default=str, ensure_ascii=False)
     return serialized[:INPUT_SUMMARY_MAX_CHARS]
+
+
+def _capped_input_data(
+    input_dict: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Return a JSON-normalized copy of ``input_dict`` if it fits the cap.
+
+    Serializes with ``default=str`` (matching ``_truncate_input``) to
+    measure size, then round-trips through ``json.loads`` so the stored
+    dict holds only plain JSON types -- datetimes/Paths become strings,
+    and the result is guaranteed re-serializable for paste-ready output.
+    Returns ``None`` when the input is absent or its serialized form
+    exceeds ``INPUT_DATA_MAX_CHARS`` (oversized inputs omit the
+    paste-ready example rather than store a truncated, invalid dict).
+    """
+    if not input_dict:
+        return None
+    serialized = json.dumps(input_dict, default=str, ensure_ascii=False)
+    if len(serialized) > INPUT_DATA_MAX_CHARS:
+        return None
+    normalized: dict[str, Any] = json.loads(serialized)
+    return normalized
 
 
 def _truncate_result(text: str | None) -> str:
@@ -160,6 +183,8 @@ def _pair_tool_calls(messages: list[SessionMessage]) -> list[SubagentToolCall]:
                 SubagentToolCall(
                     tool_name=block.name or "",
                     input_summary=_truncate_input(block.input),
+                    input_keys=list(block.input.keys()) if block.input else [],
+                    input_data=_capped_input_data(block.input),
                     result_summary=_truncate_result(result_text),
                     is_error=is_error,
                     timestamp=msg.timestamp,

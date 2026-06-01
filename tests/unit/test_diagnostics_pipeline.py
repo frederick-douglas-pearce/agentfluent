@@ -985,3 +985,60 @@ class TestTier3DegradationWiring:
         # path.
         result = run_diagnostics([_inv()])
         assert result.tier3_degraded is False
+
+
+def _param_retry_trace(agent_type: str = "general-purpose") -> SubagentTrace:
+    """A trace where the agent guesses at a tool's parameter shape: the
+    first call errors with a validation message, then a reshaped call
+    succeeds."""
+    return SubagentTrace(
+        agent_id="agent-pr",
+        agent_type=agent_type,
+        delegation_prompt="edit the file",
+        tool_calls=[
+            SubagentToolCall(
+                tool_name="Edit",
+                input_summary='{"path": "a.py"}',
+                input_keys=["path"],
+                input_data={"path": "a.py"},
+                result_summary="validation error: missing required field",
+                is_error=True,
+            ),
+            SubagentToolCall(
+                tool_name="Edit",
+                input_summary='{"file_path": "a.py", "old_string": "x"}',
+                input_keys=["file_path", "old_string", "new_string"],
+                input_data={
+                    "file_path": "a.py",
+                    "old_string": "x",
+                    "new_string": "y",
+                },
+                result_summary="ok",
+                is_error=False,
+            ),
+        ],
+        retry_sequences=[],
+    )
+
+
+class TestParameterRetryPipeline:
+    """#405: PARAMETER_RETRY flows through run_diagnostics end-to-end."""
+
+    def test_parameter_retry_signal_and_recommendation_surface(self) -> None:
+        inv = _inv(agent_type="general-purpose", trace=_param_retry_trace())
+        result = run_diagnostics([inv])
+
+        param_signals = [
+            s for s in result.signals if s.signal_type == SignalType.PARAMETER_RETRY
+        ]
+        assert len(param_signals) == 1
+
+        param_recs = [
+            r
+            for r in result.recommendations
+            if SignalType.PARAMETER_RETRY in r.signal_types
+        ]
+        assert len(param_recs) == 1
+        assert param_recs[0].target == "tools"
+        # Paste-ready example extracted from the successful call.
+        assert '"file_path": "a.py"' in param_recs[0].action

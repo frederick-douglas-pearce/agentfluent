@@ -18,6 +18,7 @@ from __future__ import annotations
 from datetime import datetime
 from functools import cached_property
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
@@ -25,6 +26,15 @@ from agentfluent.core.session import Usage
 
 INPUT_SUMMARY_MAX_CHARS = 200
 RESULT_SUMMARY_MAX_CHARS = 500
+# Cap on the serialized size of ``SubagentToolCall.input_data``. The full
+# raw input dict is captured for paste-ready ``input_examples`` extraction
+# (#405), but tool inputs can be large (a Bash heredoc or a Write payload
+# runs to tens of KB), so we only retain the dict when its JSON form fits
+# this budget. Oversized inputs store ``None`` -- the PARAMETER_RETRY
+# paste-ready section is omitted rather than emitting a truncated,
+# invalid-JSON example. ``input_keys`` is always captured regardless of
+# size, since shape comparison only needs the keys.
+INPUT_DATA_MAX_CHARS = 2000
 UNKNOWN_AGENT_TYPE = "unknown"
 
 
@@ -54,6 +64,25 @@ class SubagentToolCall(BaseModel):
     usage: Usage = Field(default_factory=Usage)
     timestamp: datetime | None = None
     result_timestamp: datetime | None = None
+
+    input_keys: list[str] = Field(default_factory=list)
+    """Top-level keys of the ``tool_use`` input dict, in source order.
+    The primary evidence for PARAMETER_RETRY (#405) input-shape comparison:
+    keys added/removed between consecutive same-tool calls signal that the
+    agent is guessing at the parameter shape. Always captured (cheap and
+    size-independent), unlike ``input_data``. Empty when the call had no
+    input or the input wasn't a dict."""
+
+    input_data: dict[str, Any] | None = None
+    """The full ``tool_use`` input dict, JSON-normalized (``json.dumps``
+    round-trip with ``default=str``) so it holds only plain JSON types and
+    is safe to re-serialize. ``None`` when the input was absent OR its
+    serialized form exceeded ``INPUT_DATA_MAX_CHARS`` -- see that constant
+    for the rationale. Used by PARAMETER_RETRY (#405) to extract a
+    paste-ready ``input_examples`` entry from a successful call. Carries
+    raw tool arguments, which may include paths or other user content;
+    consumers render it under the D002 "informational, never auto-applied"
+    caveat."""
 
 
 class RetrySequence(BaseModel):
