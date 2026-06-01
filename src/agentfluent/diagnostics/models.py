@@ -55,7 +55,7 @@ class SignalType(StrEnum):
       `STUCK_PATTERN`
 
     Aggregate-level signals (extracted from per-agent-type rollups):
-    - `MODEL_MISMATCH`
+    - `MODEL_MISMATCH`, `TOOL_ORCHESTRATION_CHAIN`
 
     MCP audit signals (configured-vs-observed MCP server usage):
     - `MCP_UNUSED_SERVER`, `MCP_MISSING_SERVER`
@@ -84,6 +84,7 @@ class SignalType(StrEnum):
     PERMISSION_FAILURE = "permission_failure"
     STUCK_PATTERN = "stuck_pattern"
     MODEL_MISMATCH = "model_mismatch"
+    TOOL_ORCHESTRATION_CHAIN = "tool_orchestration_chain"
     MCP_UNUSED_SERVER = "mcp_unused_server"
     MCP_MISSING_SERVER = "mcp_missing_server"
     UNUSED_AGENT = "unused_agent"

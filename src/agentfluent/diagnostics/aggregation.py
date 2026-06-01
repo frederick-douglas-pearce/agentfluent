@@ -77,6 +77,7 @@ from agentfluent.diagnostics.models import (
 SIGNAL_AXIS_MAP: dict[SignalType, Axis] = {
     SignalType.TOKEN_OUTLIER: Axis.COST,
     SignalType.MODEL_MISMATCH: Axis.COST,
+    SignalType.TOOL_ORCHESTRATION_CHAIN: Axis.COST,
     SignalType.MCP_UNUSED_SERVER: Axis.COST,
     SignalType.DURATION_OUTLIER: Axis.SPEED,
     SignalType.RETRY_LOOP: Axis.SPEED,
