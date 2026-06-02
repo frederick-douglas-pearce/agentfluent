@@ -141,33 +141,49 @@ FPs (`tokens/call > 7000`) eliminates *every* detection, i.e. it disables the si
 rather than tuning it. **Threshold tuning cannot rescue precision here.** The limitation
 is the proxy itself, not its constants.
 
-## Recommendation
+## Recommendation (analysis) and disposition (decided)
 
 The AC's tuning lever does not apply (no threshold band reaches 70% while retaining
-detections). The honest dispositions, in order of preference:
+detections). Two honest analytical dispositions were on the table: (1) gate emission off
+for v0.9 until Tier B/D035 lands; (2) keep it emitting at `INFO` with an explicit
+low-confidence caveat. The architect review ([#407 comment](https://github.com/frederick-douglas-pearce/agentfluent/issues/407#issuecomment-4600895787))
+recommended (1).
 
-1. **Do not ship `TOOL_ORCHESTRATION_CHAIN` as a rule-only INFO signal in v0.9.**
-   At 0% dogfood precision it is pure noise, and noise undermines the trust theme the
-   diagnostics output depends on. Gate its emission off (keep the code + tests) pending
-   Tier B or LLM augmentation. **This changes v0.9 signal scope → needs Fred/PM sign-off
-   and a `decisions.md` entry.**
-2. If it must ship, emit only with an explicit low-confidence caveat in the message and
-   keep `INFO` severity — but (1) is cleaner.
+**Decision (Fred, 2026-06-02): option (2) — keep the signal live with a low-confidence
+caveat.** Rationale that overrides the gate-off recommendation: the 0% precision is an
+**artifact of the current dogfood corpus**, which contains only reasoning/review/scoping
+subagents (no agents that run genuine tool-orchestration chains). Fred expects to run
+agents that *do* generate real orchestration-chain true positives in future dogfood
+sessions; gating the signal off would mean those future TPs never surface. Keeping it
+emitting (with the caveat managing the present noise) preserves the detection surface for
+the corpus it was designed for. **Tier B is the precision fix**, not a precondition for
+shipping.
+
+Concretely for v0.9: the signal continues to emit at `INFO`; its message carries an
+explicit "metadata-only proxy, low precision until trace-level Tier B" caveat; the
+calibration result is recorded in the module docstring; PRD §11 criterion #3 (≥70%
+precision) is an **accepted known limitation for v0.9** (not met, not deferred-by-removal),
+with Tier B tracked as the path to meeting it.
 
 This is **strong evidence for D035** (LLM-call augmentation candidate #1): the rule-based
-baseline FP rate is ~100%, far above the 30% threshold that the PRD set as the bar for
-"LLM augmentation would pay off." A viable signal needs trace-level inspection (compare
-summed tool-result token size vs. final-output size — Tier B) or an LLM relevance
+baseline FP rate is ~100% *on this corpus*, far above the 30% threshold the PRD set for
+"LLM augmentation would pay off." A higher-precision signal needs trace-level inspection
+(summed tool-result token size vs. final-output size — Tier B) or an LLM relevance
 classifier; the metadata proxy alone cannot distinguish orchestration from reasoning.
 
-## Follow-ups to file (pending Fred's disposition call)
+## Follow-ups (per the decision above)
 
-- **Signal disposition issue** — gate Tier A emission off for v0.9; track Tier B /
-  D035 LLM-augmentation as the path to a shippable version. Capture the
-  "`anthropic-research` is the only plausibly-TP type but sits below the min-invocation
-  gate" observation.
-- **D035 candidate entry** (PRD §9) — annotate with this calibration's ~100% rule-based
-  FP rate as the measured baseline LLM augmentation would improve upon.
+- **Caveat + docstring (v0.9, code):** add the low-confidence caveat to the signal
+  message and document this calibration in `tool_orchestration.py`. *(Parent-thread
+  implementation.)*
+- **`decisions.md` entry + PRD updates:** record the disposition; mark §11 criterion #3
+  as an accepted known limitation; annotate §9 / D035 with the ~100% rule-based FP
+  baseline. *(pm.)*
+- **Tier B story:** trace-level orchestration detection (summed tool-result tokens vs.
+  final-output size) as the precision fix. Note the architect's caution that the size
+  ratio is still a proxy (re-run this calibration harness against Tier B before shipping;
+  keep anchor #80 as a regression fixture) and the "`anthropic-research` is the only
+  plausibly-TP type but sits below the min-invocation gate" observation. *(pm.)*
 
 ## Forward note: automated-classifier candidate
 

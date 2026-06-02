@@ -918,3 +918,22 @@ primary_axis = max(AXIS_TIEBREAKER, key=lambda a: axis_scores[a])
 **Reference:** Epic #403 body ("Out of Scope" section); `prd-advanced-tool-use-diagnostics.md` Section 3 (Non-Goals).
 
 ---
+
+## D043: TOOL_ORCHESTRATION_CHAIN ships live-with-caveat in v0.9 -- 0% dogfood precision is a corpus artifact; Tier B (#499) is the precision fix
+
+**Date:** 2026-06-02
+**Context:** The #407 calibration of the Tier A `TOOL_ORCHESTRATION_CHAIN` signal (#406) measured precision against the agentfluent + codefluent dogfood corpora: 195 matching invocations, a seeded stratified sample of 30, classified **0/30 true positives = 0% precision** -- below the 70% target and the PRD's 60-70% estimate. Root cause is structural, not a threshold miss: `tokens_per_tool_use` divides whole-invocation token burn (large cached context re-sent each turn + reasoning output) by tool count, **not** intermediate-tool-*result* size, so it fires uniformly on token-heavy reasoning/review/scoping subagents (architect, general-purpose, pm, explore) whose intermediates are genuinely consumed. The tuning simulation (the D042-anticipated response) confirmed no threshold band improves precision -- every band emits the same reasoning agents; the only band that drops the FPs drops all detections. See `.claude/specs/analysis/407-calibration/`.
+
+**Decision:** Ship the signal **live in v0.9, emitting at `INFO` with an explicit low-confidence caveat** in its message (`_LOW_CONFIDENCE_CAVEAT` in `tool_orchestration.py`). It is **not** gated off. The architect's #407 review recommended gating off; that recommendation is **superseded** by this decision, as is D042's assumption that "the response is threshold tuning, not Tier B."
+
+**Rationale:**
+- **The 0% precision is a corpus artifact, not a broken signal.** Today's dogfood corpus contains only reasoning agents -- no agents that run genuine tool-orchestration chains, so there are no true positives to find. Fred expects to run agents that *will* generate real orchestration-chain TPs in future dogfood sessions; gating the signal off would mean those future TPs never surface.
+- **The caveat manages present noise honestly** -- the signal is flagged a low-confidence lead, not asserted as a finding, and the caveat propagates into the recommendation observation so the fix text never presents the orchestration claim as fact.
+- **Tier B is the precision fix, not a precondition for shipping.** Trace-level detection (summed tool-result tokens vs. final-output size -- deterministic, inputs already exist on ~185/195 invocations) directly measures the quantity the metadata proxy lacks. Filed as **#499** (post-v0.9). D035 (LLM relevance classifier) remains candidate #1 as the complement; the calibration's ~100% rule-based FP rate on this corpus is the measured baseline it would improve upon.
+- **PRD §11 success criterion #3 (>=70% precision) is an accepted known limitation for v0.9** -- not met on the current corpus, tracked to Tier B (#499). It is explicitly *not* "deferred by removing the signal."
+
+**Supersedes:** the architect's #407 gate-off recommendation; D042's tuning-not-Tier-B assumption. **Complements:** D035 (LLM-augmentation tracking).
+
+**Reference:** `.claude/specs/analysis/407-calibration/calibration.md`; #407 (calibration) and its disposition comment; #499 (Tier B); #406 (signal); epic #403; PRD `prd-advanced-tool-use-diagnostics.md` §9 / §11.
+
+---
