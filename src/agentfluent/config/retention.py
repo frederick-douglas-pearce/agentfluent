@@ -34,11 +34,14 @@ DEFAULT_CLEANUP_PERIOD_DAYS = 30
 Sessions older than this are deleted, so a *missing* key is treated the
 same as an explicit ``30``."""
 
-WARN_THRESHOLD_DAYS = 30
-"""Warn when the effective retention is at or below this many days.
+WARN_THRESHOLD_DAYS = DEFAULT_CLEANUP_PERIOD_DAYS
+"""Warn when the effective retention is no better than Claude Code's
+unconfigured default — i.e. at or below ``DEFAULT_CLEANUP_PERIOD_DAYS``.
 Above it (31+), the user has deliberately raised retention past the
 default, so no warning fires (#481 AC: no warning at ``>= 365``; the
-31–364 band is a deliberate user choice and likewise stays quiet)."""
+31–364 band is a deliberate user choice and likewise stays quiet).
+Deriving from the default (rather than a second ``30`` literal) keeps
+the "warn at-or-below default" relationship explicit and single-sourced."""
 
 RECOMMENDED_RETENTION_DAYS = 3650
 """The long-retention value (~10 years) the warning recommends adding."""
@@ -151,8 +154,13 @@ def check_cleanup_retention(
     if value is not None and value > WARN_THRESHOLD_DAYS:
         return None
 
-    effective_days = DEFAULT_CLEANUP_PERIOD_DAYS if value is None else value
-    default_note = " (unset — Claude Code's 30-day default applies)" if value is None else ""
+    is_unset = value is None
+    effective_days = DEFAULT_CLEANUP_PERIOD_DAYS if is_unset else value
+    default_note = (
+        f" (unset — Claude Code's {DEFAULT_CLEANUP_PERIOD_DAYS}-day default applies)"
+        if is_unset
+        else ""
+    )
 
     message = (
         f"Claude Code `{SETTINGS_KEY}` is {effective_days} days{default_note}. "
