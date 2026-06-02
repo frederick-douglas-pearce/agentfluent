@@ -26,6 +26,18 @@ def _make_config_with_project(root: Path, fixtures_dir: Path) -> None:
     shutil.copy(fixtures_dir / "session_basic.jsonl", project_dir / "s1.jsonl")
 
 
+def _despace(text: str) -> str:
+    """Collapse all whitespace so wrap-split tokens match again.
+
+    Rich hard-wraps the long warning banner at terminal width (80 in
+    CI), inserting ``\\n`` mid-token — e.g. a remediation path can land
+    as ``.../setti\\nngs.json``. Rich only ever inserts newlines (never
+    hyphens) at a fold, so removing every run of whitespace rejoins the
+    pieces, making substring assertions width-independent.
+    """
+    return "".join(text.split())
+
+
 def _analyze(
     runner: CliRunner, cli_app: typer.Typer, config_dir: Path, *extra: str,
 ) -> str:
@@ -46,14 +58,14 @@ def test_missing_settings_warns_in_table(
     # No settings.json written -> Claude Code's 30-day default applies.
 
     out = _analyze(runner, cli_app, cfg)
+    flat = _despace(out)
 
     assert "⚠" in out
-    assert "cleanupPeriodDays" in out
-    # Rich may wrap the long remediation path across lines, so assert on
-    # wrap-stable fragments; the full-path contract is covered at the
-    # message level in test_retention.py.
-    assert "settings.json" in out
-    assert "3650" in out
+    assert "cleanupPeriodDays" in flat
+    # The full remediation path and recommended value are present once
+    # wrap-inserted newlines are normalized away.
+    assert _despace(str(cfg / "settings.json")) in flat
+    assert "3650" in flat
 
 
 def test_long_retention_no_warning_in_table(
