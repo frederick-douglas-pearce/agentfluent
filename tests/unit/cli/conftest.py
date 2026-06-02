@@ -75,6 +75,17 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(
         "agentfluent.config.scanner.DEFAULT_USER_AGENTS_DIR", user_agents_dir,
     )
+    # Redirect the default Claude config root so the #481 cleanupPeriodDays
+    # check reads this hermetic tmp home, not the host's real
+    # ~/.claude/settings.json. Without a settings file the check would warn
+    # (missing key == 30-day default) and inject a ⚠ banner into every
+    # analyze table test on CI. Give it an explicit long-retention value so
+    # unrelated tests see no truncation warning; tests that exercise the
+    # warning build their own config dirs.
+    monkeypatch.setattr(
+        "agentfluent.core.paths.DEFAULT_CLAUDE_CONFIG_DIR", tmp_path,
+    )
+    (tmp_path / "settings.json").write_text(json.dumps({"cleanupPeriodDays": 3650}))
     monkeypatch.chdir(tmp_path)
 
     return tmp_path

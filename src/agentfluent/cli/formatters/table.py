@@ -24,6 +24,7 @@ from agentfluent.cli.formatters.helpers import (
     format_date,
     format_size,
     format_tokens,
+    render_environment_warnings,
     score_color,
     severity_cell,
     truncate,
@@ -140,6 +141,10 @@ def format_analysis_table(
     tm = result.token_metrics
     am = result.agent_metrics
     tlm = result.tool_metrics
+
+    # Environment warnings (e.g., cleanupPeriodDays truncation) render
+    # first so they're seen before the metrics they may have bounded.
+    render_environment_warnings(console, result.warnings)
 
     token_table = Table(title="Token Usage", show_header=True)
     token_table.add_column("Metric", style="cyan")

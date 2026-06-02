@@ -67,6 +67,24 @@ def claude_json_for(config_root: Path | None) -> Path:
     return config_root.parent / ".claude.json"
 
 
+def settings_path_for(config_root: Path | None) -> Path:
+    """Path to the user's ``~/.claude/settings.json`` file.
+
+    Claude Code stores user-scope settings (hooks, ``cleanupPeriodDays``,
+    and other knobs) in ``settings.json`` *inside* the ``.claude/``
+    directory — unlike ``.claude.json``, which is a sibling of it.
+
+    When ``config_root`` is given (e.g., from ``--claude-config-dir``),
+    the settings file resolves inside the override
+    (``<config_root>/settings.json``); otherwise the default
+    ``~/.claude/settings.json`` applies. This is the file the
+    ``cleanupPeriodDays`` retention warning quotes as the place to add a
+    longer-retention override.
+    """
+    root = config_root if config_root else DEFAULT_CLAUDE_CONFIG_DIR
+    return root / "settings.json"
+
+
 def validate_claude_config_dir(override: Path | None) -> Path | None:
     """Validate an override path for the Claude config directory.
 

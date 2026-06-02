@@ -32,6 +32,7 @@ from agentfluent.analytics.tools import (
     ToolMetrics,
     compute_tool_metrics,
 )
+from agentfluent.config.models import EnvironmentWarning
 from agentfluent.core.filtering import WindowMetadata
 from agentfluent.core.parser import parse_session
 from agentfluent.core.session import SessionMessage
@@ -129,6 +130,14 @@ class AnalysisResult(BaseModel):
     otherwise. Surfaced so consumers can verify scope at a glance: when
     set, every metric and diagnostic in this envelope reflects exactly
     one session. Stamped by :mod:`agentfluent.cli.commands.analyze` (#357)."""
+
+    warnings: list[EnvironmentWarning] = Field(default_factory=list)
+    """Non-fatal warnings about the analysis *environment* (not the
+    agent's config) — e.g., Claude Code's ``cleanupPeriodDays`` silently
+    truncating the session corpus (#481). Populated at discovery time by
+    :mod:`agentfluent.cli.commands.analyze`; additive field, empty on
+    legacy envelopes. Rendered as a banner above the normal output and
+    carried in the JSON envelope."""
 
     @computed_field  # type: ignore[prop-decorator]
     @property

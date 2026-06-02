@@ -14,11 +14,16 @@ from agentfluent import __version__
 from agentfluent.analytics.pipeline import AnalysisResult, analyze_sessions
 from agentfluent.cli._time_args import parse_time_window
 from agentfluent.cli.exit_codes import EXIT_NO_DATA, EXIT_USER_ERROR
-from agentfluent.cli.formatters.helpers import format_cost, format_tokens
+from agentfluent.cli.formatters.helpers import (
+    format_cost,
+    format_tokens,
+    render_environment_warnings,
+)
 from agentfluent.cli.formatters.json_output import format_json_output
 from agentfluent.cli.formatters.table import format_analysis_table
 from agentfluent.config.mcp_discovery import resolve_project_disk_path
 from agentfluent.config.models import SEVERITY_RANK, Severity
+from agentfluent.config.retention import check_cleanup_retention
 from agentfluent.core.discovery import SessionInfo, find_project
 from agentfluent.core.filtering import WindowMetadata, filter_sessions_by_time
 from agentfluent.core.paths import projects_dir_for
@@ -202,6 +207,7 @@ err_console = Console(stderr=True)
 
 def _print_quiet(result: AnalysisResult, project_name: str) -> None:
     """Print a one-line summary."""
+    render_environment_warnings(console, result.warnings)
     tm = result.token_metrics
     am = result.agent_metrics
     signal_count = len(result.diagnostics.signals) if result.diagnostics else 0
@@ -227,6 +233,11 @@ def _print_json(result: AnalysisResult, *, quiet: bool, project_name: str) -> No
             "total_tokens": tm.total_tokens,
             "total_invocations": am.total_invocations,
             "diagnostic_signal_count": signal_count,
+            # Environment warnings ride inside the envelope (never the
+            # stdout banner) so the JSON stays valid; mirror them in the
+            # quiet payload so JSON consumers don't have to use full mode
+            # to see a truncated-corpus warning (#481).
+            "warnings": [w.model_dump(mode="json") for w in result.warnings],
         }
     else:
         payload = result.model_dump(mode="json")
@@ -492,6 +503,16 @@ def analyze(
     project_disk_path = resolve_project_disk_path(
         project_info.slug, claude_config_dir=config_dir,
     )
+
+    # Environment-level retention check: Claude Code's cleanupPeriodDays
+    # silently bounds the corpus by deleting old sessions (#481). Runs
+    # regardless of --diagnostics — it describes the host install, not
+    # agent behavior — so even a --no-diagnostics run surfaces it.
+    retention_warning = check_cleanup_retention(
+        claude_config_dir=config_dir, project_dir=project_disk_path,
+    )
+    if retention_warning is not None:
+        result.warnings.append(retention_warning)
 
     # Tier 3 setup runs whenever the user passed --github (which requires
     # --diagnostics, enforced earlier). Lifted out of the

@@ -5,11 +5,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from rich.console import Console
+from rich.markup import escape
+
 from agentfluent.config.models import Severity
 from agentfluent.diagnostics.models import Axis
 
 if TYPE_CHECKING:
-    from agentfluent.config.models import ConfigScore
+    from agentfluent.config.models import ConfigScore, EnvironmentWarning
 
 SEVERITY_COLORS: dict[Severity, str] = {
     Severity.CRITICAL: "red",
@@ -39,6 +42,22 @@ def severity_cell(severity: Severity) -> str:
     """Rich-markup cell for a ``Severity`` value."""
     color = SEVERITY_COLORS[severity]
     return f"[{color}]{severity.value}[/{color}]"
+
+
+def render_environment_warnings(
+    console: Console, warnings: list[EnvironmentWarning],
+) -> None:
+    """Print environment warnings as a banner above the normal output.
+
+    No-op when ``warnings`` is empty. Each warning renders on its own
+    ``⚠``-prefixed line, colored by severity. The message is escaped so
+    embedded paths/backticks can't be misread as Rich markup. Callers
+    must not invoke this on the JSON path — banner text on stdout would
+    corrupt the envelope (the warnings ride inside it instead).
+    """
+    for warning in warnings:
+        color = SEVERITY_COLORS[warning.severity]
+        console.print(f"[{color}]⚠ {escape(warning.message)}[/{color}]")
 
 
 def axis_label(axis: Axis) -> str:
