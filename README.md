@@ -109,6 +109,20 @@ uvx agentfluent list
 
 - **`agentfluent[clustering]`** — installs `scikit-learn` and enables delegation clustering, which proposes new specialized subagents from recurring `general-purpose` invocations. Without this extra, `agentfluent analyze --diagnostics` still runs all other diagnostics, but `delegation_suggestions` is always empty in JSON output and the "Suggested Subagents" section is omitted from terminal output. Install with `uv tool install 'agentfluent[clustering]'` or `pip install 'agentfluent[clustering]'`.
 
+### Preserve your session history (one-time, recommended)
+
+AgentFluent can only analyze the sessions Claude Code still has on disk — and **Claude Code deletes session files older than 30 days by default.** That default silently bounds every longitudinal analysis (regression detection, baselines, multi-month trends), and the deletion is unrecoverable (Claude Code deletes, it doesn't archive).
+
+Before you accumulate history you'll want later, raise the retention window once by adding `cleanupPeriodDays` to `~/.claude/settings.json`:
+
+```jsonc
+{
+  "cleanupPeriodDays": 3650  // ~10 years; keeps sessions for long-term analysis
+}
+```
+
+`agentfluent analyze` checks this setting at runtime and prints a warning when retention is at or below the default, quoting the exact file path to edit. Raising it does not recover already-deleted sessions — it only protects future ones — so it's worth doing on day one.
+
 ### First run
 
 ```bash

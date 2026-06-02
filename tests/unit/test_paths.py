@@ -13,6 +13,7 @@ from agentfluent.core.paths import (
     XDG_CONFIG_HOME_ENV_VAR,
     agentfluent_cache_dir,
     agentfluent_config_dir,
+    settings_path_for,
     validate_claude_config_dir,
 )
 
@@ -23,6 +24,14 @@ class TestDefaults:
 
     def test_env_var_name(self) -> None:
         assert CLAUDE_CONFIG_DIR_ENV_VAR == "CLAUDE_CONFIG_DIR"
+
+
+class TestSettingsPathFor:
+    def test_default_under_home_dot_claude(self) -> None:
+        assert settings_path_for(None) == Path.home() / ".claude" / "settings.json"
+
+    def test_override_resolves_inside_config_root(self, tmp_path: Path) -> None:
+        assert settings_path_for(tmp_path) == tmp_path / "settings.json"
 
 
 class TestValidateClaudeConfigDir:

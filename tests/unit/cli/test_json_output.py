@@ -77,6 +77,9 @@ class TestAnalyzeJsonEnvelope:
             "total_tokens",
             "total_invocations",
             "diagnostic_signal_count",
+            # #481: environment warnings (e.g., cleanupPeriodDays
+            # truncation) ride in the quiet payload too.
+            "warnings",
         }
 
 

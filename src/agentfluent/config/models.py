@@ -53,6 +53,36 @@ intrinsic ordering, so consumers that need >= / <= comparisons (priority
 scoring, ``--fail-on`` thresholds) look up integers here."""
 
 
+class EnvironmentWarning(BaseModel):
+    """A non-fatal warning about the analysis environment itself.
+
+    Distinct from :class:`ConfigRecommendation` (which targets the
+    *agent's* config) — this flags problems with the host Claude Code
+    install or filesystem state that bound or distort what AgentFluent
+    can analyze (e.g., a low ``cleanupPeriodDays`` silently truncating
+    the session corpus). Surfaced at discovery time, attached to
+    ``AnalysisResult.warnings``, and rendered as a banner above the
+    normal output. A generic shape so future discovery-time warnings
+    reuse it rather than each adding a bespoke field.
+    """
+
+    code: str
+    """Stable machine-readable identifier (e.g.,
+    ``"cleanup_period_truncation"``). Lets JSON consumers branch on the
+    warning kind without parsing ``message``."""
+
+    severity: Severity
+    """How important this warning is. Drives banner color."""
+
+    message: str
+    """Human-readable warning text, ready to render as-is."""
+
+    remediation_path: Path | None = None
+    """Filesystem path the user should edit to resolve the warning
+    (e.g., ``~/.claude/settings.json``). ``None`` when the warning has
+    no single actionable file."""
+
+
 class AgentConfig(BaseModel):
     """Parsed agent definition from a `.md` file.
 
