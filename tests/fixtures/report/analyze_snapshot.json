@@ -66,7 +66,10 @@
           "invocation_count": 6,
           "total_tokens": 78000,
           "total_tool_uses": 42,
-          "total_duration_ms": 510000
+          "total_duration_ms": 510000,
+          "total_active_duration_ms": 90000,
+          "total_wallclock_ms_trace_linked": 510000,
+          "active_duration_invocation_count": 6
         },
         "tester": {
           "agent_type": "tester",
@@ -74,7 +77,10 @@
           "invocation_count": 3,
           "total_tokens": 24000,
           "total_tool_uses": 18,
-          "total_duration_ms": 145000
+          "total_duration_ms": 145000,
+          "total_active_duration_ms": 140000,
+          "total_wallclock_ms_trace_linked": 145000,
+          "active_duration_invocation_count": 3
         }
       }
     },

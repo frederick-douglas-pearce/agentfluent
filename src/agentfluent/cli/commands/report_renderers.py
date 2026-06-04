@@ -20,6 +20,7 @@ from typing import Any
 
 from agentfluent.cli.formatters.helpers import (
     GLOBAL_AGENT_LABEL,
+    format_agent_duration_cell,
     format_cost,
     format_tokens,
 )
@@ -57,12 +58,6 @@ def _avg_tokens_per_invocation(row: dict[str, Any]) -> float | None:
     if count > 0 and tokens > 0:
         return float(tokens) / float(count)
     return None
-
-
-def _fmt_duration_seconds(duration_ms: int) -> str:
-    if duration_ms <= 0:
-        return "—"
-    return f"{duration_ms / 1000:.1f}s"
 
 
 def _md_table(
@@ -184,30 +179,56 @@ def render_agent_metrics(data: dict[str, Any]) -> str:
     if total_invocations == 0 or not by_type:
         return "## Agent Metrics\n\nNo agent invocations.\n"
 
-    headers = ["Agent Type", "Count", "Tokens", "Avg Tokens/Call", "Duration"]
+    headers = ["Agent Type", "Count", "Tokens", "Avg Tokens/Call", "Avg Duration/Call"]
     align = ["l", "r", "r", "r", "r"]
     rows: list[list[str]] = []
+    any_unreliable = False
+    any_partial = False
     for _key, m in sorted(by_type.items()):
         agent_type = m.get("agent_type", "")
         if m.get("is_builtin"):
             agent_type = f"{agent_type} (builtin)"
         avg = _avg_tokens_per_invocation(m)
         avg_label = format_tokens(int(avg)) if avg is not None else "—"
+        cell = format_agent_duration_cell(
+            total_duration_ms=m.get("total_duration_ms", 0),
+            invocation_count=m.get("invocation_count", 0),
+            total_active_duration_ms=m.get("total_active_duration_ms", 0),
+            total_wallclock_ms_trace_linked=m.get("total_wallclock_ms_trace_linked", 0),
+            active_duration_invocation_count=m.get("active_duration_invocation_count", 0),
+        )
+        any_unreliable = any_unreliable or cell.unreliable
+        any_partial = any_partial or cell.partial
+        # No Rich color in Markdown; bold the interactive-pattern cell so
+        # the wall/active divergence is still visible in a PR comment.
+        dur = f"**{cell.text}**" if cell.highlight else cell.text
         rows.append([
             agent_type,
             str(m.get("invocation_count", 0)),
             format_tokens(m.get("total_tokens", 0)),
             avg_label,
-            _fmt_duration_seconds(m.get("total_duration_ms", 0)),
+            dur,
         ])
 
     rows.append(["**Total**", f"**{total_invocations}**", "", "", ""])
 
     agent_pct = am.get("agent_token_percentage", 0.0)
     table = _md_table(headers, rows, align)
+    footnotes = ""
+    if any_partial:
+        footnotes += (
+            "\n† Active duration covers only the trace-linked invocations; "
+            "the average and active/wall split use that subset.\n"
+        )
+    if any_unreliable:
+        footnotes += (
+            "\n\\* Duration estimated from wall-clock; no subagent trace "
+            "available (may include user-wait time).\n"
+        )
     return (
         "## Agent Metrics\n\n"
         + table
+        + footnotes
         + f"\nAgent token share of session total: **{agent_pct}%**\n"
     )
 

@@ -139,3 +139,69 @@ def test_missing_duration_renders_dash() -> None:
     # Look for "interrupted" row's Duration column showing "-"
     rows = [line for line in output.splitlines() if "interrupted" in line]
     assert any(" - " in row or row.rstrip().endswith("-") for row in rows)
+
+
+# ---- Non-verbose summary (Agent Invocations) table, #480 ------------------
+
+
+def _summary_render(invocations: list[AgentInvocation]) -> str:
+    """Render the non-verbose summary table from real invocations so the
+    active-duration aggregates are computed end-to-end."""
+    from agentfluent.analytics.agent_metrics import compute_agent_metrics
+
+    am = compute_agent_metrics(invocations)
+    session = SessionAnalysis(
+        session_path=Path("session-1.jsonl"),
+        token_metrics=TokenMetrics(),
+        tool_metrics=ToolMetrics(),
+        agent_metrics=am,
+        invocations=invocations,
+    )
+    result = AnalysisResult(sessions=[session], agent_metrics=am)
+    console = Console(record=True, width=200, force_terminal=False)
+    format_analysis_table(console, result, verbose=False)
+    return console.export_text()
+
+
+def test_summary_table_shows_active_wall_and_header() -> None:
+    inv = _invocation(
+        "pm",
+        description="interactive",
+        parent_duration_ms=1_834_000,
+        trace=_trace(duration_ms=1_834_000, idle_gap_ms=1_452_000),
+    )
+    output = _summary_render([inv])
+    assert "Avg Duration/Call" in output
+    # 382s active vs 1834s wall per call -> combined cell in the summary.
+    assert "382.0s (1834.0s wall)" in output
+
+
+def test_summary_table_traceless_shows_unreliable_footnote() -> None:
+    inv = _invocation(
+        "pm",
+        description="no-trace",
+        parent_duration_ms=120_000,
+        trace=None,
+    )
+    output = _summary_render([inv])
+    # Wall-only avg per call, marked unreliable.
+    assert "~120.0s*" in output
+    assert "no subagent trace available" in output
+
+
+def test_summary_table_partial_coverage_footnote() -> None:
+    linked = _invocation(
+        "pm",
+        description="linked",
+        parent_duration_ms=1_834_000,
+        trace=_trace(duration_ms=1_834_000, idle_gap_ms=1_452_000),
+    )
+    bare = _invocation(
+        "pm",
+        description="bare",
+        parent_duration_ms=120_000,
+        trace=None,
+    )
+    output = _summary_render([linked, bare])
+    assert "†" in output
+    assert "the average and active/wall split use that subset" in output

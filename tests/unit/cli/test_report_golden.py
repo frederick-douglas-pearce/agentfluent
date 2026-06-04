@@ -104,6 +104,7 @@ def _analyze_envelope_data() -> dict[str, Any]:
             "total_invocations": 17,
             "agent_token_percentage": 38.5,
             "by_agent_type": {
+                # Explore: no trace -> wall-only fallback (unreliable, #480).
                 "Explore": {
                     "agent_type": "Explore",
                     "is_builtin": True,
@@ -112,6 +113,8 @@ def _analyze_envelope_data() -> dict[str, Any]:
                     "total_tool_uses": 56,
                     "total_duration_ms": 320_000,
                 },
+                # pm: interactive pattern -- 15s active / 85s wall per call
+                # (5.7x) -> highlighted combined cell (#480).
                 "pm": {
                     "agent_type": "pm",
                     "is_builtin": False,
@@ -119,7 +122,11 @@ def _analyze_envelope_data() -> dict[str, Any]:
                     "total_tokens": 78_000,
                     "total_tool_uses": 42,
                     "total_duration_ms": 510_000,
+                    "total_active_duration_ms": 90_000,
+                    "total_wallclock_ms_trace_linked": 510_000,
+                    "active_duration_invocation_count": 6,
                 },
+                # tester: trace-linked, negligible idle -> bare active.
                 "tester": {
                     "agent_type": "tester",
                     "is_builtin": False,
@@ -127,6 +134,9 @@ def _analyze_envelope_data() -> dict[str, Any]:
                     "total_tokens": 24_000,
                     "total_tool_uses": 18,
                     "total_duration_ms": 145_000,
+                    "total_active_duration_ms": 140_000,
+                    "total_wallclock_ms_trace_linked": 145_000,
+                    "active_duration_invocation_count": 3,
                 },
             },
         },
