@@ -234,9 +234,9 @@ This section establishes the tracking discipline proposed in D035. AgentFluent i
 | **What the rule-based version does** | Uses token-to-tool ratio as a proxy: high ratio = likely orchestration. Cannot distinguish cases where high intermediate tokens are legitimately needed for reasoning. |
 | **What an LLM call would do** | Given the final output and the intermediate tool results, classify whether each intermediate result materially affected the final output. If not, the intermediate could have been processed in a code-execution sandbox. |
 | **Approximate cost/call** | ~2k input tokens (final output + summarized intermediates) + ~200 output tokens = ~$0.02-0.05 per invocation at Haiku pricing |
-| **Expected precision delta** | Rule-based: estimated 60-70% precision. LLM-augmented: estimated 85-90% precision. The ~20pp lift comes from eliminating false positives where complex reasoning genuinely required all intermediates in context. |
+| **Expected precision delta** | Rule-based: estimated 60-70% precision. LLM-augmented: estimated 85-90% precision. **Measured (#407, 2026-06-02): ~0% precision / ~100% rule-based FP rate** on the agentfluent+codefluent dogfood corpus -- the estimated 60-70% never materialized because the proxy measures whole-invocation token burn, not intermediate-result size, so it fires only on token-heavy reasoning agents (a corpus with no genuine orchestration chains). |
 | **Expected recall delta** | Minimal. Both approaches detect the same candidates; the LLM only reclassifies FPs. |
-| **When to implement** | When dogfood data confirms the rule-based FP rate exceeds 30%, AND AgentFluent has a general-purpose "optional LLM call" infrastructure (env var for API key, cost tracking, opt-in flag). |
+| **When to implement** | The >30% FP-rate trigger is now **met** (#407: ~100%). The deterministic first move is **Tier B** trace-level detection (#499), which measures intermediate-result size directly (summed tool-result tokens vs. final-output size); the LLM call here is the *complement* for residual semantic cases, gated on a general-purpose "optional LLM call" infrastructure (env var for API key, cost tracking, opt-in flag). Per the standing stance (D035 / #402), evaluate a classical-ML path before an LLM judge. |
 
 ### Future candidates (placeholder entries -- detail TBD)
 
@@ -250,7 +250,7 @@ This section establishes the tracking discipline proposed in D035. AgentFluent i
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| TOOL_ORCHESTRATION_CHAIN Tier A precision is low (<60%) | Users dismiss the signal; trust damage | Severity is INFO, not WARNING. Calibration story (#TBD) runs before shipping defaults. FP rate documented in GLOSSARY. LLM-augmentation candidate tracked for future precision lift. |
+| TOOL_ORCHESTRATION_CHAIN Tier A precision is low (<60%) | Users dismiss the signal; trust damage | Severity is INFO, not WARNING. Calibration (#407) measured ~0% precision on the current corpus (a corpus artifact -- no orchestration agents). Mitigated by an explicit low-confidence caveat on every emission (D043); Tier B (#499) is the precision fix; LLM-augmentation (D035) the complement. |
 | PARAMETER_RETRY requires subagent traces (Tier A) | Signal only fires for agents with traces; non-trace agents get no coverage | Tier B metadata fallback (3+ calls to same tool in `toolStats`) provides coarse coverage. Tier A is the high-confidence path; Tier B is additive. |
 | Paste-ready example extraction produces misleading examples | User copies an example that works in one context but not another | Examples are presented as "suggested based on observed successful call" with a caveat. The user is responsible for reviewing. Not auto-applied (D002). |
 | #372 has been parked for a reason -- insufficient data to calibrate | Signal fires on everyone with >30 tools regardless of actual degradation | The utilization ratio gate (uses <50% of declared tools) is the second filter. Combined threshold (30 tools AND low utilization) is conservative. Calibration against real data is a follow-up. |
@@ -263,7 +263,7 @@ v0.9 advanced tool use diagnostics are successful when:
 
 1. **PARAMETER_RETRY fires on genuine parameter-retry patterns.** At least one instance detected in the agentfluent or CodeFluent dogfood corpus where the agent retried a tool with a different input shape after an error.
 2. **Paste-ready example extraction produces a valid `input_examples` entry.** The extracted JSON matches the tool's `input_schema` and is copy-pasteable.
-3. **TOOL_ORCHESTRATION_CHAIN fires on high-tool-count invocations.** The signal triggers on invocations with 10+ tool calls and >2k tokens/call, with calibration showing >=70% precision.
+3. **TOOL_ORCHESTRATION_CHAIN fires on high-tool-count invocations.** The signal triggers on invocations with 10+ tool calls and >2k tokens/call. The >=70% precision target is an **accepted known limitation for v0.9**: the #407 calibration measured ~0% precision on the current dogfood corpus, but this is a corpus artifact (it contains no agents running genuine orchestration chains, so there are no true positives to find) -- not a broken signal. The signal ships live at INFO with an explicit low-confidence caveat (D043); trace-level Tier B detection (#499) is the tracked path to meeting the precision bar. See `.claude/specs/analysis/407-calibration/`.
 4. **TOOL_INVENTORY_OVERSIZED fires on agents with >30 declared tools.** Updated recommendation references the article's benchmarks.
 5. **All three signals contribute to the correct axis.** TOOL_ORCHESTRATION_CHAIN -> cost, PARAMETER_RETRY -> speed, TOOL_INVENTORY_OVERSIZED -> cost.
 6. **LLM-augmentation candidates list is established.** D035 appended to `decisions.md`. Candidate #1 documented with the fields specified above.

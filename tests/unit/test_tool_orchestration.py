@@ -9,6 +9,7 @@ from agentfluent.config.models import AgentConfig, Scope, Severity
 from agentfluent.diagnostics.correlator import correlate
 from agentfluent.diagnostics.models import SignalType
 from agentfluent.diagnostics.tool_orchestration import (
+    _LOW_CONFIDENCE_CAVEAT,
     ESTIMATED_TOKEN_SAVINGS_KEY,
     TOKEN_REDUCTION_FACTOR,
     extract_tool_orchestration_signals,
@@ -163,6 +164,21 @@ def test_recommendation_without_config_cites_article_url() -> None:
     _signal, rec = pairs[0]
     assert "anthropic.com/engineering/advanced-tool-use" in rec.action
     assert rec.config_file == ""
+
+
+def test_signal_message_carries_low_confidence_caveat() -> None:
+    """Every emitted signal flags itself low-confidence (#407: 0% dogfood precision)."""
+    signals = extract_tool_orchestration_signals(_matching_invs(3))
+    assert _LOW_CONFIDENCE_CAVEAT in signals[0].message
+
+
+def test_recommendation_observation_carries_caveat() -> None:
+    """The caveat propagates into the recommendation observation, so the fix
+    text never asserts the orchestration finding as fact."""
+    signals = extract_tool_orchestration_signals(_matching_invs(3))
+    pairs = correlate(signals, {"researcher": _config()})
+    _signal, rec = pairs[0]
+    assert _LOW_CONFIDENCE_CAVEAT in rec.observation
 
 
 def test_builtin_agent_gets_builtin_action() -> None:

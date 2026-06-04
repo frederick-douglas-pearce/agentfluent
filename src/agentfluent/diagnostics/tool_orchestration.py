@@ -19,15 +19,31 @@ average, aggregated to 3+ matching invocations per agent type. Tier B
 **Known precision risk.** The proxy cannot distinguish true orchestration
 chains (intermediate results consumed and discarded) from agents that
 genuinely need each intermediate result in context for reasoning. Severity
-is therefore ``INFO``, not ``WARNING``. This is the first LLM-call
-augmentation candidate (D035): an LLM classifying intermediate-result
-relevance could lift precision from an estimated 60-70% to 85-90%. A
-calibration story validates the thresholds against dogfood data.
+is therefore ``INFO``, not ``WARNING``, and every emitted signal carries an
+explicit low-confidence caveat (``_LOW_CONFIDENCE_CAVEAT``).
 
-**Threshold calibration.** The three thresholds below are the PRD's
-starting defaults, exposed as module-level constants so the calibration
-story can tune them against real session data without touching the
-detection logic.
+**Calibration (v0.9, #407).** On the agentfluent + codefluent dogfood
+corpora (195 matching invocations; seeded stratified sample of 30) the
+signal scored **0% precision (0/30 true positives)**. The corpus contained
+only reasoning/review/scoping subagents (architect, general-purpose, pm,
+explore) whose intermediate results are genuinely consumed -- it had no
+agents running real orchestration chains. The root cause is structural:
+``tokens_per_tool_use`` divides whole-invocation token burn (large cached
+context re-sent each turn + reasoning output) by tool count, not
+intermediate-*result* size, so no threshold band separates the two (every
+band emits the same reasoning agents). The signal nonetheless ships **live
+with the caveat** (decision 2026-06-02): the 0% is a corpus artifact, and
+the detection surface is retained for future corpora that include real
+orchestration-chain agents. Trace-level detection (Tier B: summed
+tool-result tokens vs. final-output size) is the precision fix; D035 (LLM
+relevance classifier) is the complement -- the ~100% rule-based FP rate is
+the measured baseline it would improve upon. See
+``.claude/specs/analysis/407-calibration/`` for the rubric, classification,
+and tuning simulation.
+
+**Thresholds.** The three constants below are the PRD's starting defaults.
+The #407 calibration confirmed no threshold band improves precision on the
+current corpus, so they are unchanged pending Tier B.
 """
 
 from __future__ import annotations
@@ -65,6 +81,18 @@ _MIN_MATCHING_INVOCATIONS = 3
 # complex research tasks. Applied to the summed tokens of the matching
 # invocations as a rough projection, surfaced in the recommendation.
 TOKEN_REDUCTION_FACTOR = 0.37
+
+# Appended to every emitted signal's message. The #407 calibration measured
+# 0% precision on the dogfood corpus (a metadata-only proxy can't tell a real
+# orchestration chain from a token-heavy reasoning agent), so the signal is
+# shipped live but flagged low-confidence rather than presented as a finding.
+# Removed once trace-level (Tier B) detection lifts precision. Kept as a
+# module constant so it's greppable and assertable in tests.
+_LOW_CONFIDENCE_CAVEAT = (
+    "Low-confidence heuristic: this metadata-only proxy cannot yet distinguish "
+    "genuine orchestration chains from token-heavy reasoning agents, so verify "
+    "against the agent's trace before acting on this."
+)
 
 # Producer/consumer contract: this module stores the projected token
 # savings under this key in the signal's ``detail`` dict;
@@ -107,7 +135,8 @@ def _build_signal(
     message = (
         f"Agent '{agent_type}' made {total_tool_calls} tool calls consuming "
         f"{total_tokens:,} tokens across {invocation_count} invocations. "
-        f"Average token cost per tool call: {ratio:,.0f} tokens."
+        f"Average token cost per tool call: {ratio:,.0f} tokens. "
+        f"{_LOW_CONFIDENCE_CAVEAT}"
     )
     return DiagnosticSignal(
         signal_type=SignalType.TOOL_ORCHESTRATION_CHAIN,

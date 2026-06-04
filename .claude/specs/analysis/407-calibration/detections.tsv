@@ -1,0 +1,196 @@
+idx	corpus	session	agent_type	tool_uses	total_tokens	tokens_per_call	has_trace	turns	description
+1	af	02e21310	pm	39	156234	4006	True	21	Plan v0.8 release: PRD + backlog
+2	af	02e21310	architect	22	99892	4541	True	11	Design review of #399 Tier 3 infra
+3	af	083c02d2	Explore	28	89698	3204	True	29	Map diagnostics module structure
+4	af	083c02d2	Explore	15	64363	4291	True	12	Reuse review of #406 diff
+5	af	083c02d2	Explore	15	55936	3729	True	14	Altitude review of #406 diff
+6	af	08b03d83	pm	42	114072	2716	False		Scope C-008 into epic + stories
+7	af	08b03d83	architect	29	83623	2884	False		Architect design review for C-001
+8	af	08b03d83	pm	23	74590	3243	False		Scope C-001 stories under epic #423
+9	af	08b03d83	architect	28	62743	2241	False		Architect design review for C-004
+10	af	08b03d83	pm	26	55657	2141	False		Scope C-004 stories under epic #427
+11	af	08b03d83	architect	33	80066	2426	False		Architect design review for C-006
+12	af	08b03d83	pm	17	64530	3796	False		Scope C-006a Track A stories under #431
+13	af	08b03d83	pm	26	118930	4574	False		Scope C-006b Track B stories under #433
+14	af	08b03d83	architect	20	77783	3889	False		Architect review of Phase 3 PRD
+15	af	08b03d83	pm	17	86925	5113	False		Scope Phase 3 stories under #439
+16	af	08b03d83	architect	15	55062	3671	True	11	Post-merge review of Phase 3 skill body
+17	af	09c92e44	pm	22	94366	4289	True	9	PM scope review for v0.4
+18	af	09c92e44	architect	16	57824	3614	True	6	Architect review wave 2 plan
+19	af	09c92e44	general-purpose	18	37821	2101	True	19	Efficiency review #217 cost
+20	af	1104bcc9	pm	54	168332	3117	True	35	Scope v0.9 PRD and backlog
+21	af	1c0c92ce	architect	22	96145	4370	True	13	Architect review of quality axis epic #268
+22	af	1c0c92ce	architect	21	84610	4029	True	14	Architect review of quality module skeleton #269
+23	af	1c0c92ce	architect	31	88217	2846	True	17	Architect review of date-range epic #293
+24	af	2a7397e4	pm	30	121523	4051	True	11	Draft v0.7 PRD + backlog
+25	af	2b898766	architect	17	57259	3368	True	8	Architect review of #399 implementation plan
+26	af	2b898766	general-purpose	25	88749	3550	True	26	Angle A: line-by-line scan
+27	af	2b898766	general-purpose	35	88366	2525	True	36	Angle B: removed-behavior auditor
+28	af	2b898766	general-purpose	13	77267	5944	True	14	Angle E: wrapper correctness
+29	af	2b898766	general-purpose	33	109284	3312	True	34	Phase 3 sweep: find gaps
+30	af	2b898766	architect	25	57987	2319	True	15	Architect review of #400 plan
+31	af	2b898766	general-purpose	21	84062	4003	True	22	Angle A: line-by-line scan
+32	af	2b898766	general-purpose	39	94190	2415	True	39	Angle B: removed-behavior auditor
+33	af	2b898766	general-purpose	17	64139	3773	True	18	Angle D: language pitfalls
+34	af	2b898766	general-purpose	21	83513	3977	True	22	Angle E: wrapper correctness
+35	af	2b898766	general-purpose	29	103394	3565	True	30	Phase 3 sweep
+36	af	2b898766	architect	19	51724	2722	True	11	Architect review of #401 plan
+37	af	2b898766	general-purpose	15	90369	6025	True	16	Angle A: line-by-line scan
+38	af	2b898766	general-purpose	23	83627	3636	True	24	Angle B: removed-behavior auditor
+39	af	2b898766	general-purpose	11	68305	6210	True	12	Angle D: language pitfalls
+40	af	2b898766	general-purpose	22	86178	3917	True	23	Angle E: wrapper correctness
+41	af	32f70032	pm	22	87434	3974	True	11	Kick off v0.7 planning
+42	af	32f70032	pm	49	185423	3784	True	26	Finalize v0.7 plan + open epics
+43	af	32f70032	architect	18	67690	3761	True	12	Architect review: #344 + #345 design
+44	af	32f70032	general-purpose	17	47659	2803	True	10	Code-reuse review of #344+#345 PR
+45	af	3b79b5de	architect	22	77346	3516	True	10	Architect review: #356 report docs plan
+46	af	3b79b5de	architect	17	53709	3159	True	7	Architect review: #355 report tests + golden fixture plan
+47	af	3b79b5de	general-purpose	10	39523	3952	True	11	Quality review on docs PR
+48	af	3b79b5de	general-purpose	15	59925	3995	True	12	Reuse review on tests PR
+49	af	3b79b5de	architect	18	64790	3599	True	8	Architect review of #357 scoping plan
+50	af	3d70fb77	architect	25	85911	3436	True	17	Architect review of #273 plan
+51	af	3d70fb77	architect	18	52472	2915	True	11	Architect review of #298 plan
+52	af	3d70fb77	general-purpose	60	140850	2348	True	54	Implement #273 axis labels
+53	af	3d70fb77	general-purpose	33	84204	2552	True	34	Implement #298 window metadata
+54	af	3d70fb77	general-purpose	21	56462	2689	True	22	Code reuse review for #315
+55	af	3d70fb77	general-purpose	11	48919	4447	True	12	Efficiency review for #315
+56	af	3d70fb77	general-purpose	14	52944	3782	True	15	Code reuse review for #316
+57	af	3d70fb77	general-purpose	11	46596	4236	True	12	Code quality review for #316
+58	af	5e92c86b	pm	35	154548	4416	True	22	Spec advanced tool-use diagnostics for v0.9
+59	af	5e92c86b	anthropic-research	25	69381	2775	True	13	First smoke test research pass
+60	af	5e92c86b	candidate-promoter	11	39182	3562	True	7	Live run batch 1: GitHub ops only
+61	af	5e92c86b	candidate-promoter	12	47818	3985	True	12	Live run batch 2a: pm-first for C-005
+62	af	5e92c86b	pm	27	100737	3731	True	16	Spec C-005 fork-loop detection
+63	af	5e92c86b	pm	42	114072	2716	True	20	Scope C-008 into epic + stories
+64	af	5e92c86b	architect	29	83623	2884	True	13	Architect design review for C-001
+65	af	5e92c86b	pm	23	74590	3243	True	17	Scope C-001 stories under epic #423
+66	af	5e92c86b	architect	28	62743	2241	True	16	Architect design review for C-004
+67	af	5e92c86b	pm	26	55657	2141	True	17	Scope C-004 stories under epic #427
+68	af	5e92c86b	architect	33	80066	2426	True	17	Architect design review for C-006
+69	af	5e92c86b	pm	17	64530	3796	True	13	Scope C-006a Track A stories under #431
+70	af	5e92c86b	pm	26	118930	4574	True	19	Scope C-006b Track B stories under #433
+71	af	5e92c86b	architect	20	77783	3889	True	11	Architect review of Phase 3 PRD
+72	af	5e92c86b	pm	17	86925	5113	True	12	Scope Phase 3 stories under #439
+73	af	746c02dd	Explore	29	79257	2733	True	30	Map config/warning/discovery code
+74	af	746c02dd	Explore	18	48133	2674	True	17	Reuse review of #481 diff
+75	af	746c02dd	Explore	17	50870	2992	True	12	Simplification review of #481 diff
+76	af	746c02dd	Explore	16	43059	2691	True	17	Efficiency review of #481 diff
+77	af	788b588f	architect	25	82305	3292	True	15	Architect review of #354 renderer plan
+78	af	788b588f	general-purpose	14	48896	3493	True	15	Code reuse review of PR #366
+79	af	788b588f	general-purpose	16	48337	3021	True	8	Code quality review of PR #366
+80	af	788b588f	architect	22	47496	2159	True	9	Architect review of #346 plan
+81	af	788b588f	general-purpose	14	45675	3262	True	15	Reuse review of PR #369
+82	af	788b588f	general-purpose	22	52284	2377	True	23	Quality review of PR #369
+83	af	788b588f	general-purpose	11	37483	3408	True	5	Research RAG-over-tool-descriptions
+84	af	788b588f	claude-code-guide	13	32712	2516	True	6	CC subagent tool-loading mechanics
+85	af	7cdb2e77	architect	27	66738	2472	True	17	Review plans for #321 and #322
+86	af	7cdb2e77	pm	10	63047	6305	True	8	Scope decision on #275
+87	af	7cdb2e77	architect	19	43984	2315	True	12	Review plan for #281
+88	af	7f2b8660	architect	21	61317	2920	True	16	Architect review for #285 plan
+89	af	7f2b8660	architect	24	63739	2656	True	12	Architect review for #274 plan
+90	af	7f2b8660	pm	11	56095	5100	True	7	PM review of #274 implementation plan
+91	af	7f2b8660	architect	13	37900	2915	True	10	Architect re-review of #274 plan
+92	af	812b126d	Explore	14	44240	3160	True	8	Reuse review of diff
+93	af	812b126d	Explore	14	42497	3036	True	13	Simplification review of diff
+94	af	82904b0f	architect	22	92664	4212	True	13	Architect review of #372 design
+95	af	82904b0f	general-purpose	16	58836	3677	True	17	Reuse review of #372 diff
+96	af	9b9b68fd	architect	11	62349	5668	True	7	Review FEAT_FIX_PROXIMITY tuning plan
+97	af	a18a138e	pm	42	136466	3249	True	27	Scope date-range filtering for v0.6
+98	af	a18a138e	pm	43	156505	3640	True	25	Scope v0.6 release
+99	af	a341eff5	architect	18	51226	2846	True	9	Architect review for issue 191
+100	af	a341eff5	Explore	10	27581	2758	True	7	Research uv_build package data inclusion
+101	af	a341eff5	Explore	16	36624	2289	True	6	Hatchling security implications research
+102	af	a341eff5	pm	11	30818	2802	True	6	PM scope review on issue 188
+103	af	b40dbafc	architect	24	102785	4283	True	15	Review #269 implementation plan
+104	af	b40dbafc	general-purpose	22	66097	3004	True	18	Code reuse review of #269 diff
+105	af	b40dbafc	architect	26	91243	3509	True	16	Review #270 implementation plan
+106	af	b40dbafc	architect	15	67432	4495	True	7	Review #294 implementation plan
+107	af	b40dbafc	general-purpose	16	43975	2748	True	7	Reuse review of #294 diff
+108	af	b40dbafc	general-purpose	14	59679	4263	True	9	Reuse review of #270 diff
+109	af	b40dbafc	architect	24	77891	3245	True	12	Review #271 implementation plan
+110	af	b40dbafc	architect	12	74529	6211	True	6	Review #295 implementation plan
+111	af	b40dbafc	general-purpose	17	53228	3131	True	10	Reuse review of #271 diff
+112	af	b40dbafc	general-purpose	17	55091	3241	True	12	Code reuse review for #310
+113	af	b40dbafc	general-purpose	17	35495	2088	True	8	Code reuse review for #311
+114	af	b40dbafc	general-purpose	16	47767	2985	True	7	Code reuse review for #312
+115	af	b40dbafc	general-purpose	17	47438	2790	True	8	Code reuse review for #313
+116	af	b40dbafc	general-purpose	11	36260	3296	True	12	Code quality review for #313
+117	af	bd54bc29	architect	19	122402	6442	True	10	Architect review for #405 PARAMETER_RETRY
+118	af	bd54bc29	Explore	20	55693	2785	True	14	Reuse review of PR493
+119	af	bd54bc29	Explore	20	54796	2740	True	18	Simplification review of PR493
+120	af	bd54bc29	Explore	10	77677	7768	True	7	Altitude review of PR493
+121	af	c266bcf2	pm	36	129505	3597	True	21	Scope quality-axis PRD into epic
+122	af	c266bcf2	architect	34	113535	3339	True	20	Architect review of quality axis epic
+123	af	c266bcf2	pm	44	122419	2782	True	37	PM: D021 formula + resequencing
+124	af	c266bcf2	general-purpose	16	55663	3479	True	17	Reuse review on #279
+125	af	c266bcf2	general-purpose	14	39846	2846	True	15	Quality review on #277
+126	af	ca3d881d	pm	31	125276	4041	True	12	v0.5 release planning
+127	af	ca3d881d	architect	37	106140	2869	True	23	Architect review of #230 and #186
+128	af	ca3d881d	architect	15	60892	4059	True	9	Architect review #2 on #230 with empirical evidence
+129	af	ca3d881d	general-purpose	33	84235	2553	True	34	Code reuse review
+130	af	ca3d881d	general-purpose	17	63686	3746	True	9	Code quality review
+131	af	ca3d881d	general-purpose	16	44012	2751	True	9	Code reuse review
+132	af	ca3d881d	general-purpose	12	46192	3849	True	13	Code quality review
+133	af	ca3d881d	architect	12	60599	5050	True	8	Architect review of #231 fix plan
+134	af	ca3d881d	general-purpose	14	39559	2826	True	15	Code reuse review
+135	af	dada0b20	pm	24	93492	3896	True	22	Re-scope #394 after empirical diagnosis
+136	af	dada0b20	architect	23	68660	2985	True	14	Architect review of #454 threshold-split design
+137	af	dc461ab4	general-purpose	18	37544	2086	True	6	Code reuse review
+138	af	e175c382	Explore	26	52297	2011	True	18	Map parent-thread tool-use extraction
+139	af	e175c382	Plan	20	78800	3940	True	21	Design plan for #189 decomposition
+140	af	e175c382	architect	18	82942	4608	True	11	Architect review of #189 plan
+141	af	e175c382	general-purpose	26	63565	2445	True	9	Code reuse review
+142	af	e175c382	general-purpose	26	88632	3409	True	13	Code reuse review
+143	af	e175c382	general-purpose	12	59858	4988	True	4	Code reuse review
+144	af	e175c382	architect	17	59833	3520	True	10	Architect review of #185 plan + _complexity.py
+145	af	e175c382	general-purpose	14	56737	4053	True	15	Code reuse review
+146	af	e175c382	general-purpose	12	59808	4984	True	13	Code quality review
+147	af	e175c382	architect	13	61140	4703	True	9	Review plan for issue #184
+148	af	e175c382	architect	18	64034	3557	True	9	Review plan for sub-issue D
+149	af	e175c382	architect	15	62833	4189	True	8	Review plan for sub-issue E
+150	af	e175c382	general-purpose	18	48170	2676	True	19	Code reuse review of PR #259
+151	af	e175c382	general-purpose	10	36922	3692	True	6	Code quality review of PR #259
+152	af	e175c382	architect	26	71601	2754	True	13	Review plan for sub-issue F
+153	af	e175c382	general-purpose	15	46193	3080	True	16	Code reuse review of PR #261
+154	af	e175c382	general-purpose	14	43119	3080	True	15	Code quality review of PR #261
+155	af	e175c382	architect	22	71923	3269	True	13	Review plan for #172
+156	af	e175c382	general-purpose	13	45969	3536	True	6	Code reuse review of PR #266
+157	af	e9c28f92	architect	20	71187	3559	True	10	Architect review of #333 proposal
+158	af	ef6f60dc	architect	25	90019	3601	True	12	Review issue #465 implementation plan
+159	af	ef6f60dc	Explore	21	46851	2231	True	15	Reuse review of #465 diff
+160	af	ef6f60dc	Explore	21	50769	2418	True	13	Simplification review of #465 diff
+161	af	ef6f60dc	Explore	12	43738	3645	True	12	Efficiency review of #465 diff
+162	af	ef6f60dc	Explore	11	65269	5934	True	9	Altitude review of #465 diff
+163	af	ef6f60dc	architect	18	62836	3491	True	9	Review #467 design plan
+164	af	f3019fdf	pm	38	105859	2786	True	23	PM brief: model-turn count metric
+165	af	f3019fdf	architect	35	97077	2774	True	15	Architect review: turn-count metrics
+166	af	f3019fdf	pm	24	79095	3296	True	13	PM follow-up: turn metrics batch
+167	af	fd25efb7	architect	15	53287	3552	True	9	Architect review of #199 diff plan
+168	af	fd25efb7	general-purpose	18	49802	2767	True	19	Code reuse review
+169	cf	0cb255a7	architect	35	71958	2056	True	19	Architect review of v1.3 render refactor
+170	cf	0cb255a7	architect	20	58680	2934	True	17	Architect review of PR 302 release tooling
+171	cf	0cb255a7	Explore	12	38092	3174	True	5	Verify renderer + test-infra state for v1.2.1 plan
+172	cf	0cb255a7	Plan	26	66614	2562	True	9	Plan v1.2.1 fix implementation
+173	cf	13607e2a	Explore	22	69431	3156	True	18	Investigate #217 fork patterns
+174	cf	13607e2a	Explore	25	70400	2816	True	22	Map #245 data structures
+175	cf	13607e2a	pm	24	99856	4161	True	14	PM agent roadmap review
+176	cf	13607e2a	general-purpose	22	55196	2509	True	9	Research code review agents
+177	cf	13607e2a	architect	19	54927	2891	True	11	Test architect agent on v1.2 plan
+178	cf	13607e2a	Explore	24	81080	3378	True	14	Explore error recovery frontend state
+179	cf	13607e2a	general-purpose	17	34982	2058	True	13	Code quality review (round 2)
+180	cf	13607e2a	Explore	16	80250	5016	True	10	Explore #218 data readiness
+181	cf	13607e2a	Explore	17	93459	5498	True	4	Explore scoring prompt + schema
+182	cf	13607e2a	Explore	15	57643	3843	True	9	Explore issue #128 agreement data
+183	cf	13607e2a	general-purpose	11	41461	3769	True	7	README and metadata review
+184	cf	13607e2a	pm	15	44109	2941	True	10	Scope secret-handling issue
+185	cf	13607e2a	Explore	29	68268	2354	True	10	Survey agentfluent project
+186	cf	13607e2a	pm	32	104916	3279	True	9	v1.2 vs v1.3 scope decision review
+187	cf	4646f62d	architect	13	79811	6139	True	9	Architect review of #238 implementation plan
+188	cf	4646f62d	architect	14	56880	4063	True	7	Architect review of #246 plan
+189	cf	5fa5f6f8	pm	41	143162	3492	True	14	Scope and prioritize v1.3 release
+190	cf	5fa5f6f8	pm	18	81883	4549	True	9	Resolve v1.3 PRD open questions
+191	cf	5fa5f6f8	pm	22	82780	3763	True	14	Scope E2E automation for v1.3
+192	cf	5fa5f6f8	architect	23	75099	3265	True	15	Review #312 E2E automation design
+193	cf	5fa5f6f8	Explore	18	47226	2624	True	19	Code reuse review of Phase A
+194	cf	c43f3149	general-purpose	10	53871	5387	True	5	Code reuse review
+195	cf	c43f3149	general-purpose	12	44765	3730	True	5	Efficiency review
