@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 from rich.console import Console
 from rich.markup import escape
@@ -130,3 +130,89 @@ def average_score(scores: list[ConfigScore]) -> int:
 def truncate(text: str, max_len: int) -> str:
     """Truncate with a trailing ellipsis when the text exceeds max_len."""
     return text if len(text) <= max_len else text[: max_len - 1] + "…"
+
+
+# Wall/active ratio at or above which an agent type's duration cell is
+# flagged as interactive-pattern (#480). The ``pm`` dogfood case sat
+# around 6x (2,918s wall vs ~470s active per call); 3x cleanly separates
+# genuinely interactive agents from the ms-level jitter between the
+# parent-side wall clock and trace-derived active duration.
+DURATION_RATIO_HIGHLIGHT = 3.0
+
+# Minimum wall-over-active gap before the cell shows the combined
+# "active (wall)" form rather than a bare active figure. Below this the
+# two are effectively equal (the ~ms disagreement noted in table.py's
+# verbose path) and a second number would be noise.
+_DURATION_DIVERGENCE = 1.05
+
+
+class DurationCell(NamedTuple):
+    """Rendered agent-type duration cell plus the flags a caller needs to
+    style it and decide which footnotes to print (#480).
+
+    ``text`` is plain (no Rich markup) so both the analyze table and the
+    Markdown report share it. ``highlight`` is set when the wall/active
+    ratio crosses :data:`DURATION_RATIO_HIGHLIGHT`. ``unreliable`` marks
+    the wall-only fallback (no invocation of this type had a linked
+    trace). ``partial`` marks partial trace coverage (the active/wall
+    averages reflect only the trace-linked subset)."""
+
+    text: str
+    highlight: bool
+    unreliable: bool
+    partial: bool
+
+
+def format_agent_duration_cell(
+    *,
+    total_duration_ms: int,
+    invocation_count: int,
+    total_active_duration_ms: int,
+    total_wallclock_ms_trace_linked: int,
+    active_duration_invocation_count: int,
+) -> DurationCell:
+    """Format an agent type's summary-table duration as active (wall) per call.
+
+    Renders the idle-subtracted active duration next to raw wall-clock so
+    an interactive agent (whose wall-clock includes user-wait time) does
+    not read as a duration problem -- the misread #480 exists to fix.
+
+    Both per-call averages are taken over the *same* trace-linked subset
+    (denominator ``active_duration_invocation_count``) so the wall/active
+    ratio measures only idle subtraction, not trace-coverage skew. When no
+    invocation of this type had a trace, falls back to a bare wall-only
+    average over all invocations, marked unreliable.
+    """
+    if total_duration_ms <= 0 or invocation_count <= 0:
+        return DurationCell("-", highlight=False, unreliable=False, partial=False)
+
+    if active_duration_invocation_count <= 0:
+        # No trace anywhere in this agent type: only parent-side
+        # wall-clock is available, and it silently includes user-wait.
+        avg_wall = total_duration_ms / invocation_count
+        return DurationCell(
+            f"~{avg_wall / 1000:.1f}s*",
+            highlight=False,
+            unreliable=True,
+            partial=False,
+        )
+
+    active_avg = total_active_duration_ms / active_duration_invocation_count
+    wall_avg = total_wallclock_ms_trace_linked / active_duration_invocation_count
+    partial = active_duration_invocation_count < invocation_count
+
+    if active_avg > 0 and wall_avg > active_avg * _DURATION_DIVERGENCE:
+        text = f"{active_avg / 1000:.1f}s ({wall_avg / 1000:.1f}s wall)"
+        ratio = wall_avg / active_avg
+    else:
+        text = f"{active_avg / 1000:.1f}s"
+        ratio = 1.0
+    if partial:
+        text += "†"
+
+    return DurationCell(
+        text,
+        highlight=ratio >= DURATION_RATIO_HIGHLIGHT,
+        unreliable=False,
+        partial=partial,
+    )

@@ -135,6 +135,91 @@ class TestAverages:
         assert pm.avg_tokens_per_tool_use is None
 
 
+def _trace_linked_invocation(
+    agent_type: str = "pm",
+    duration_ms: int = 60000,
+    idle_gap_ms: int = 56000,
+    tool_uses: int = 5,
+) -> AgentInvocation:
+    """Invocation whose linked trace yields an active duration
+    (``duration_ms - idle_gap_ms``). ``inv.active_duration_ms`` reads
+    the trace; ``inv.duration_ms`` is the parent-side wall-clock summed
+    into ``total_wallclock_ms_trace_linked``."""
+    inv = AgentInvocation(
+        agent_type=agent_type,
+        description="test",
+        prompt="do something",
+        tool_use_id="toolu_active",
+        tool_uses=tool_uses,
+        duration_ms=duration_ms,
+    )
+    inv.trace = SubagentTrace(
+        agent_id="a",
+        delegation_prompt="x",
+        duration_ms=duration_ms,
+        idle_gap_ms=idle_gap_ms,
+    )
+    return inv
+
+
+class TestActiveDuration:
+    """#480: active-duration aggregates on AgentTypeMetrics."""
+
+    def test_trace_linked_invocations_accumulate_active_totals(self) -> None:
+        # Two trace-linked pm invocations: 4s active / 60s wall each.
+        invocations = [
+            _trace_linked_invocation(duration_ms=60000, idle_gap_ms=56000),
+            _trace_linked_invocation(duration_ms=60000, idle_gap_ms=56000),
+        ]
+        pm = compute_agent_metrics(invocations).by_agent_type["pm"]
+        assert pm.total_active_duration_ms == 8000
+        assert pm.total_wallclock_ms_trace_linked == 120000
+        assert pm.active_duration_invocation_count == 2
+
+    def test_traceless_invocations_excluded_from_active_totals(self) -> None:
+        # One trace-linked, one trace-less: only the linked one counts
+        # toward active aggregates, but both count toward total_duration.
+        invocations = [
+            _trace_linked_invocation(duration_ms=60000, idle_gap_ms=56000),
+            _invocation(duration_ms=30000),  # no trace
+        ]
+        pm = compute_agent_metrics(invocations).by_agent_type["pm"]
+        assert pm.active_duration_invocation_count == 1
+        assert pm.total_active_duration_ms == 4000
+        assert pm.total_wallclock_ms_trace_linked == 60000
+        # total_duration_ms spans all invocations (the misleading number).
+        assert pm.total_duration_ms == 90000
+
+    def test_active_per_invocation_properties(self) -> None:
+        invocations = [
+            _trace_linked_invocation(duration_ms=60000, idle_gap_ms=56000),
+            _trace_linked_invocation(duration_ms=60000, idle_gap_ms=56000),
+        ]
+        pm = compute_agent_metrics(invocations).by_agent_type["pm"]
+        assert pm.avg_active_duration_per_invocation == 4000.0
+        assert pm.avg_wallclock_per_trace_linked_invocation == 60000.0
+        assert pm.wallclock_active_ratio == 15.0
+
+    def test_ratio_none_without_active_data(self) -> None:
+        pm = compute_agent_metrics([_invocation(duration_ms=30000)]).by_agent_type["pm"]
+        assert pm.active_duration_invocation_count == 0
+        assert pm.avg_active_duration_per_invocation is None
+        assert pm.wallclock_active_ratio is None
+
+    def test_active_fields_serialize_into_json(self) -> None:
+        # Stored fields (not properties) so they survive model_dump into
+        # the JSON envelope (AC#2).
+        import dataclasses
+
+        pm = compute_agent_metrics(
+            [_trace_linked_invocation()],
+        ).by_agent_type["pm"]
+        dumped = dataclasses.asdict(pm)
+        assert dumped["total_active_duration_ms"] == 4000
+        assert dumped["total_wallclock_ms_trace_linked"] == 60000
+        assert dumped["active_duration_invocation_count"] == 1
+
+
 class TestAgentTokenPercentage:
     def test_percentage_of_session(self) -> None:
         invocations = [_invocation(total_tokens=30000)]

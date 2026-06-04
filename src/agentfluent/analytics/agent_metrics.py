@@ -58,6 +58,36 @@ class AgentTypeMetrics:
     avg_tokens_per_tool_use: float | None = None
     avg_duration_per_tool_use: float | None = None
 
+    # Active-duration aggregates (#480). ``total_duration_ms`` above is
+    # raw wall-clock summed over *all* invocations and silently includes
+    # user-wait time (the IDE sitting on an approval prompt while the user
+    # is AFK). The three fields below let the summary table show the
+    # idle-subtracted "active" duration next to wall-clock so an
+    # interactive agent like ``pm`` doesn't read as a duration problem.
+    #
+    # Honesty constraint (#480, architect review): active duration only
+    # exists for trace-linked invocations (~80% of the dogfood corpus).
+    # To make the wall/active ratio measure *only* idle subtraction --
+    # not trace-coverage skew -- ``total_wallclock_ms_trace_linked``
+    # sums wall-clock over the SAME subset that contributed active
+    # duration, so both averages share ``active_duration_invocation_count``
+    # as their denominator.
+    total_active_duration_ms: int = 0
+    """Sum of ``active_duration_ms`` over invocations that had a linked
+    trace (idle gaps subtracted)."""
+
+    total_wallclock_ms_trace_linked: int = 0
+    """Sum of raw ``duration_ms`` over the *same* trace-linked invocations
+    that contributed ``total_active_duration_ms``. The wall-clock
+    numerator for a coverage-matched wall/active ratio."""
+
+    active_duration_invocation_count: int = 0
+    """Count of invocations contributing to the two active totals
+    (``active_duration_ms is not None``). Shared denominator for the
+    active and trace-linked-wall per-call averages, and the coverage
+    figure against ``invocation_count``. Mirrors the
+    ``invocations_with_turns`` pattern."""
+
     total_model_turns: int = 0
     """Sum of ``model_turns`` across this agent type's invocations,
     counting only invocations where ``model_turns is not None`` (a
@@ -97,6 +127,38 @@ class AgentTypeMetrics:
     def estimated_avg_cost_per_invocation_usd(self) -> float | None:
         if self.invocation_count > 0 and self.estimated_total_cost_usd > 0:
             return self.estimated_total_cost_usd / self.invocation_count
+        return None
+
+    @property
+    def avg_active_duration_per_invocation(self) -> float | None:
+        """Average idle-subtracted duration (ms) per invocation, over the
+        trace-linked subset. ``None`` when no invocation had a trace."""
+        if self.active_duration_invocation_count > 0 and self.total_active_duration_ms > 0:
+            return self.total_active_duration_ms / self.active_duration_invocation_count
+        return None
+
+    @property
+    def avg_wallclock_per_trace_linked_invocation(self) -> float | None:
+        """Average raw wall-clock (ms) per invocation over the *same*
+        trace-linked subset as :attr:`avg_active_duration_per_invocation`,
+        so the two are directly comparable. ``None`` when no invocation
+        had a trace."""
+        if (
+            self.active_duration_invocation_count > 0
+            and self.total_wallclock_ms_trace_linked > 0
+        ):
+            return self.total_wallclock_ms_trace_linked / self.active_duration_invocation_count
+        return None
+
+    @property
+    def wallclock_active_ratio(self) -> float | None:
+        """Wall-clock / active over the coverage-matched trace-linked
+        subset. >1 means idle (user-wait) time inflated wall-clock;
+        a large ratio marks an interactive-pattern agent whose headline
+        wall-clock duration would otherwise mislead. ``None`` when no
+        active duration is available."""
+        if self.total_active_duration_ms > 0 and self.total_wallclock_ms_trace_linked > 0:
+            return self.total_wallclock_ms_trace_linked / self.total_active_duration_ms
         return None
 
 
@@ -158,6 +220,17 @@ def compute_agent_metrics(
             metrics.total_tool_uses += inv.tool_uses
         if inv.duration_ms is not None:
             metrics.total_duration_ms += inv.duration_ms
+        # Active duration exists only for trace-linked invocations. Sum
+        # active and its coverage-matched wall-clock over the same subset
+        # (#480) so a downstream wall/active ratio reflects idle
+        # subtraction, not which invocations happened to have a trace.
+        # ``duration_ms`` is guaranteed present here: a linked trace
+        # implies parent toolUseResult metadata, but guard anyway so a
+        # degenerate trace can't desync the two sums from their count.
+        if inv.active_duration_ms is not None and inv.duration_ms is not None:
+            metrics.total_active_duration_ms += inv.active_duration_ms
+            metrics.total_wallclock_ms_trace_linked += inv.duration_ms
+            metrics.active_duration_invocation_count += 1
         # ``is not None`` (not truthiness): a 0-turn trace still has turn
         # data, so it counts toward invocations_with_turns and yields a
         # legitimate 0.0 average, distinct from a trace-missing gap.

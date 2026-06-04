@@ -63,6 +63,12 @@ def _data(**overrides: Any) -> dict[str, Any]:
                     "total_tokens": 12000,
                     "total_tool_uses": 20,
                     "total_duration_ms": 60_000,
+                    # All 4 trace-linked, heavily idle-inflated: 2.0s
+                    # active / 15.0s wall per call (7.5x) -> highlighted
+                    # interactive-pattern row.
+                    "total_active_duration_ms": 8_000,
+                    "total_wallclock_ms_trace_linked": 60_000,
+                    "active_duration_invocation_count": 4,
                 },
                 "explore": {
                     "agent_type": "Explore",
@@ -71,6 +77,7 @@ def _data(**overrides: Any) -> dict[str, Any]:
                     "total_tokens": 5000,
                     "total_tool_uses": 8,
                     "total_duration_ms": 15_000,
+                    # No active fields -> wall-only fallback (unreliable).
                 },
             },
             "total_invocations": 6,
@@ -168,9 +175,28 @@ class TestRenderAgentMetrics:
         assert "pm" in out
         assert "Explore (builtin)" in out
         assert "12,000" in out
-        assert "60.0s" in out
+        # Per-call active (wall) duration, bolded because the wall/active
+        # ratio (7.5x) crosses the interactive-pattern highlight (#480).
+        assert "**2.0s (15.0s wall)**" in out
+        # Explore had no trace -> wall-only fallback + unreliable footnote.
+        assert "~7.5s*" in out
+        assert "no subagent trace available" in out
         # Footer line with agent token share.
         assert "42.5%" in out
+
+    def test_partial_coverage_marks_cell_and_footnote(self) -> None:
+        d = _data()
+        # 4 invocations, only 3 trace-linked -> partial coverage dagger.
+        d["agent_metrics"]["by_agent_type"]["pm"][
+            "active_duration_invocation_count"
+        ] = 3
+        d["agent_metrics"]["by_agent_type"]["pm"]["total_active_duration_ms"] = 6_000
+        d["agent_metrics"]["by_agent_type"]["pm"][
+            "total_wallclock_ms_trace_linked"
+        ] = 45_000
+        out = render_agent_metrics(d)
+        assert "†" in out
+        assert "trace-linked invocations" in out
 
     def test_zero_invocations_emits_fallback(self) -> None:
         out = render_agent_metrics(

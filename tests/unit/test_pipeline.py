@@ -179,3 +179,38 @@ class TestMergeAgentMetricsTurns:
         pm = _merge_agent_metrics([self._metrics(6, 2, 12)]).by_agent_type["pm"]
         assert pm.total_model_turns == 6
         assert pm.invocations_with_turns == 2
+
+
+class TestMergeAgentMetricsActiveDuration:
+    """#480: _merge_agent_metrics carries active-duration aggregates
+    across sessions through both the first-seen and accumulate branches."""
+
+    @staticmethod
+    def _metrics(active_ms: int, wall_linked_ms: int, linked: int) -> AgentMetrics:
+        t = AgentTypeMetrics(
+            agent_type="pm",
+            is_builtin=False,
+            invocation_count=linked,
+            total_active_duration_ms=active_ms,
+            total_wallclock_ms_trace_linked=wall_linked_ms,
+            active_duration_invocation_count=linked,
+        )
+        return AgentMetrics(by_agent_type={"pm": t}, total_invocations=linked)
+
+    def test_active_fields_summed_across_sessions(self) -> None:
+        merged = _merge_agent_metrics(
+            [self._metrics(4000, 60000, 1), self._metrics(8000, 120000, 2)],
+        ).by_agent_type["pm"]
+        assert merged.total_active_duration_ms == 12000
+        assert merged.total_wallclock_ms_trace_linked == 180000
+        assert merged.active_duration_invocation_count == 3
+        # Ratio computed from merged totals.
+        assert merged.wallclock_active_ratio == 15.0
+
+    def test_first_seen_branch_preserves_active_fields(self) -> None:
+        pm = _merge_agent_metrics(
+            [self._metrics(4000, 60000, 1)],
+        ).by_agent_type["pm"]
+        assert pm.total_active_duration_ms == 4000
+        assert pm.total_wallclock_ms_trace_linked == 60000
+        assert pm.active_duration_invocation_count == 1

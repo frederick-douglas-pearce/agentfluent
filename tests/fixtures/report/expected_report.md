@@ -20,12 +20,14 @@
 
 ## Agent Metrics
 
-| Agent Type | Count | Tokens | Avg Tokens/Call | Duration |
+| Agent Type | Count | Tokens | Avg Tokens/Call | Avg Duration/Call |
 | :--- | ---: | ---: | ---: | ---: |
-| Explore (builtin) | 8 | 42,000 | 5,250 | 320.0s |
-| pm | 6 | 78,000 | 13,000 | 510.0s |
-| tester | 3 | 24,000 | 8,000 | 145.0s |
+| Explore (builtin) | 8 | 42,000 | 5,250 | ~40.0s* |
+| pm | 6 | 78,000 | 13,000 | **15.0s (85.0s wall)** |
+| tester | 3 | 24,000 | 8,000 | 46.7s |
 | **Total** | **17** |  |  |  |
+
+\* Duration estimated from wall-clock; no subagent trace available (may include user-wait time).
 
 Agent token share of session total: **38.5%**
 

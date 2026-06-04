@@ -20,6 +20,7 @@ from agentfluent.cli.formatters.helpers import (
     SEVERITY_COLORS,
     average_score,
     axis_label,
+    format_agent_duration_cell,
     format_cost,
     format_date,
     format_size,
@@ -201,7 +202,9 @@ def format_analysis_table(
         agent_table.add_column("Avg Turns", justify="right")
         agent_table.add_column("Tokens", justify="right")
         agent_table.add_column("Avg Tokens/Call", justify="right")
-        agent_table.add_column("Duration", justify="right")
+        agent_table.add_column("Avg Duration/Call", justify="right")
+        any_dur_unreliable = False
+        any_dur_partial = False
         for _key, m in sorted(am.by_agent_type.items()):
             label = f"{m.agent_type} {'(builtin)' if m.is_builtin else ''}"
             avg_turns = (
@@ -214,7 +217,16 @@ def format_analysis_table(
                 if m.avg_tokens_per_invocation
                 else "-"
             )
-            duration = f"{m.total_duration_ms / 1000:.1f}s" if m.total_duration_ms else "-"
+            cell = format_agent_duration_cell(
+                total_duration_ms=m.total_duration_ms,
+                invocation_count=m.invocation_count,
+                total_active_duration_ms=m.total_active_duration_ms,
+                total_wallclock_ms_trace_linked=m.total_wallclock_ms_trace_linked,
+                active_duration_invocation_count=m.active_duration_invocation_count,
+            )
+            any_dur_unreliable = any_dur_unreliable or cell.unreliable
+            any_dur_partial = any_dur_partial or cell.partial
+            duration = f"[yellow]{cell.text}[/yellow]" if cell.highlight else cell.text
             agent_table.add_row(
                 label.strip(),
                 str(m.invocation_count),
@@ -234,6 +246,22 @@ def format_analysis_table(
             "",
         )
         console.print(agent_table)
+        # Duration column shows active (idle-subtracted) wall-clock per
+        # call; the parenthetical raw wall-clock and yellow highlight mark
+        # interactive agents whose wall-clock would otherwise mislead
+        # (#480). Footnotes mirror the verbose Per-Invocation table.
+        if any_dur_partial:
+            console.print(
+                "† Active duration covers only the trace-linked invocations; "
+                "the average and active/wall split use that subset.",
+                style="dim",
+            )
+        if any_dur_unreliable:
+            console.print(
+                "* Duration estimated from wall-clock; no subagent trace available "
+                "(may include user-wait time).",
+                style="dim",
+            )
 
     if verbose and len(result.sessions) > 1:
         session_table = Table(title="Per-Session Breakdown", show_header=True)

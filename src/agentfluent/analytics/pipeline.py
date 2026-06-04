@@ -345,6 +345,9 @@ def _merge_agent_metrics(
                     estimated_total_cost_usd=m.estimated_total_cost_usd,
                     total_model_turns=m.total_model_turns,
                     invocations_with_turns=m.invocations_with_turns,
+                    total_active_duration_ms=m.total_active_duration_ms,
+                    total_wallclock_ms_trace_linked=m.total_wallclock_ms_trace_linked,
+                    active_duration_invocation_count=m.active_duration_invocation_count,
                 )
             else:
                 existing.invocation_count += m.invocation_count
@@ -354,6 +357,11 @@ def _merge_agent_metrics(
                 existing.estimated_total_cost_usd += m.estimated_total_cost_usd
                 existing.total_model_turns += m.total_model_turns
                 existing.invocations_with_turns += m.invocations_with_turns
+                existing.total_active_duration_ms += m.total_active_duration_ms
+                existing.total_wallclock_ms_trace_linked += m.total_wallclock_ms_trace_linked
+                existing.active_duration_invocation_count += (
+                    m.active_duration_invocation_count
+                )
 
     # estimated_total_cost_usd is summed at each session's blended rate
     # so the per-invocation average property reads correctly. Tool-use

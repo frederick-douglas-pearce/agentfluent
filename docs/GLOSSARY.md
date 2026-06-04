@@ -1518,6 +1518,48 @@ Token Usage
 
 **Related:** [`output`](#output), [`total_cost`](#total_cost)
 
+### `active_duration`
+
+**Short:** Wall-clock duration with detected idle (user-wait) gaps subtracted --
+an estimate of time the agent was actually working.
+
+**Detail:** Added in v0.9 (#480; the underlying subtraction shipped in #230).
+Two duration measures exist for an agent invocation:
+
+- **wall-clock** (`duration_ms`) -- raw elapsed time from the parent's
+  `toolUseResult` metadata. It silently includes any stretch where a
+  tool call sat pending user approval while the user was away (the IDE
+  prompting to allow a `Write`, an MCP call, etc.).
+- **active** (`active_duration_ms`) -- wall-clock minus detected idle
+  gaps. AgentFluent flags a gap when it exceeds
+  `max(10 × median, 5 minutes)` within a subagent trace and subtracts
+  it. Available only when a subagent trace is linked (~80% of the
+  dogfood corpus); without one, only wall-clock exists.
+
+Why the distinction matters: for an interactive agent like `pm`, the
+wall-clock average can be tens of minutes per call while the active
+time is seconds -- almost all of the gap is the user thinking, not the
+agent working. The `analyze` summary table renders
+`active (wall)` per call over the trace-linked subset and highlights
+rows whose wall/active ratio exceeds 3×, so a high wall-clock number
+no longer reads as a duration problem.
+
+Note the denominator: the summary table reports duration **per call**,
+whereas `duration_outlier` detection operates on
+`active_duration_per_tool_use` -- active time **per tool call** -- a
+finer-grained basis that isolates slow individual tool calls. The two
+are not interchangeable; a high per-call active duration with a normal
+per-tool_use figure just means the invocation made many tool calls.
+
+**Example:**
+
+```
+Agent Invocations
+  pm   ...   470.0s (2918.0s wall)†   <- active 470s/call, wall 2918s/call
+```
+
+**Related:** [`model_turns`](#model_turns), [`duration_outlier`](#duration_outlier)
+
 
 ---
 
