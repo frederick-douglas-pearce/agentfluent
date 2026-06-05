@@ -852,6 +852,22 @@ malformed JSON), that PR is skipped and
 `DiagnosticsResult.tier3_degraded` is set to True. Other PRs
 still produce signals; the run still exits 0.
 
+Zero signals can be healthy. A `--github` run that fires no
+`pr_review_comment_density` signals is a valid, healthy outcome --
+not evidence the signal is broken. The threshold is built around
+external (non-author) inline review comments, so workflows that
+don't generate that density legitimately stay silent: solo-author
+PRs, PRs reviewed only by bots or agent-side reviewers (whose
+comments are agents, not the human reviewers the density was tuned
+for), and any repo where review happens out-of-band (pairing,
+pre-PR review). The load-bearing "did the enrichment actually run"
+flag is `tier3_degraded`: when it is False, the GitHub fetch
+completed cleanly and silence means "nothing crossed the
+threshold," not "diagnostics failed to compute." Distinguish "the
+signal didn't fire" (a finding about the workflow) from
+"enrichment degraded" (`tier3_degraded: true`, a finding about the
+fetch).
+
 **Example:**
 
 ```
@@ -895,6 +911,18 @@ Rate-limit handling: if any `gh api` call returns 403/429 with a
 rate-limit signature, that PR is skipped and
 `DiagnosticsResult.tier3_degraded` is set to True. Other PRs
 still produce signals; the run still exits 0.
+
+Zero signals can be healthy. A `--github` run that fires no
+`ci_failure_first_push` signals is a valid, healthy outcome -- not
+evidence the signal is broken. A "push only when local CI is
+green" workflow genuinely produces few or zero first-push CI
+failures, so a careful operator should expect silence here. The
+load-bearing "did the enrichment actually run" flag is
+`tier3_degraded`: when it is False, the GitHub fetch completed
+cleanly and silence means "no PR's first push failed CI," not
+"diagnostics failed to compute." Distinguish "the signal didn't
+fire" (a finding about the workflow) from "enrichment degraded"
+(`tier3_degraded: true`, a finding about the fetch).
 
 **Example:**
 
