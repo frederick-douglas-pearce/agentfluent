@@ -270,10 +270,10 @@ AgentFluent's "configuration" is CLI flags — no config file, no environment va
       "since": "2026-05-01T00:00:00Z", "until": null,
       "session_count_before_filter": 42, "session_count_after_filter": 12
     },
+    "total_model_turns": 312,
     "token_metrics": {
       "total_cost": 41.11,
       "total_tokens": 54019983,
-      "total_model_turns": 312,
       "by_model": [
         {"model": "claude-opus-4-7", "origin": "parent",   "cost": 30.68, "input_tokens": 6829, ...},
         {"model": "claude-opus-4-7", "origin": "subagent", "cost":  1.50, "input_tokens": 1213, ...},
@@ -311,7 +311,7 @@ AgentFluent's "configuration" is CLI flags — no config file, no environment va
 
 **Schema v2 additions (v0.7, additive — no version bump):** `analyze --json` output carries a top-level `scope_session: string | null` field — populated with the filename when `--session` constrained the run, `null` otherwise. Lets consumers verify scope at a glance without re-counting sessions. `diagnostics_version` (the AgentFluent version that produced the envelope) is also stamped at the top level so `agentfluent diff` can warn on detector-sensitivity drift between baseline and current. `agentfluent diff` reads pre-v0.7 envelopes cleanly — the absent fields are treated as `null` / unknown, preserving comparison semantics.
 
-**Schema v2 additions (v0.9, additive — no version bump):** `token_metrics.total_model_turns` (model turns aggregated across all analyzed sessions) joins the existing `total_cost` / `total_tokens` rollups, and each session carries a per-session `model_turns`. Per-agent-type rows under `agent_metrics.by_agent_type` gain `avg_turns_per_invocation`, `avg_tool_calls_per_turn`, `avg_tokens_per_turn`, and `estimated_avg_cost_per_turn_usd` efficiency ratios. `agentfluent diff` reports model-turn deltas per agent type and at the parent-session level; pre-turn-era envelopes (pre-v0.9) degrade gracefully — the absent counts read as `0`, so a diff against an old baseline still runs without crashing.
+**Schema v2 additions (v0.9, additive — no version bump):** a top-level `total_model_turns` (model turns aggregated across all analyzed sessions) sits alongside `session_count` in `data` — *not* nested under `token_metrics` — and each entry in `data.sessions` carries a per-session `model_turns`. Per-agent-type rows under `agent_metrics.by_agent_type` gain `avg_turns_per_invocation`, `avg_tool_calls_per_turn`, `avg_tokens_per_turn`, and `estimated_avg_cost_per_turn_usd` efficiency ratios. `agentfluent diff` reports model-turn deltas per agent type and at the parent-session level; pre-turn-era envelopes (pre-v0.9) degrade gracefully — the absent counts read as `0`, so a diff against an old baseline still runs without crashing.
 
 No ANSI escapes in JSON output, guaranteed. The key `total_cost` is the pay-per-token equivalent; subscribers on Pro/Max/Team/Enterprise plans see a flat monthly charge regardless.
 
