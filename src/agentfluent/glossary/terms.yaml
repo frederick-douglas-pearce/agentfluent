@@ -1354,13 +1354,13 @@
   category: session_metric
   short: |
     The number of model turns in a session -- one merged assistant
-    message (one API round-trip).
+    message. Counts every assistant message, so it is the superset of
+    (>=) `api_call_count`.
   long: |
     Added in v0.9 (#465). A *model turn* is one merged assistant
-    message: a single API round-trip the model took. The parser's
-    fragment-merging step can combine several raw JSONL lines into one
-    logical assistant message, so a turn is **not** "one JSONL line" --
-    it is the merged message.
+    message. The parser's fragment-merging step can combine several raw
+    JSONL lines into one logical assistant message, so a turn is **not**
+    "one JSONL line" -- it is the merged message.
 
     Distinct from `tool_uses` and from tokens:
 
@@ -1375,17 +1375,40 @@
     fixed task while holding quality steady drops both cost and latency
     more than any single other change.
 
-    Surfaced in the Token Usage table ("Model turns" row), in the
-    verbose Per-Session Breakdown table ("Turns" column), and in
-    `analyze --json` as `model_turns` per session plus
+    **Model turns vs. API calls.** Both count parent-thread assistant
+    messages, but `model_turns` counts *every* one, while the "API
+    calls" metric (`api_call_count`) counts only assistant messages that
+    represent a real billed round-trip -- those carrying a `usage` block
+    and a non-synthetic model. `model_turns` is therefore the superset:
+    **`model_turns >= api_call_count`, never less.** The gap is the
+    count of assistant messages that are turns but not API calls --
+    principally Claude Code's `<synthetic>`-model messages (e.g. the
+    "No response requested." filler emitted after a local slash-command
+    or any user message that needs no model reply; zero usage, no
+    price), plus any rare `usage: null` assistant message. On a typical
+    corpus the gap is small (well under 1%), but it means a model turn
+    is *approximately*, not exactly, one API round-trip.
+
+    Surfaced in the Token Usage table ("Model turns" row, directly below
+    "API calls"), in the verbose Per-Session Breakdown table ("Turns"
+    column), and in `analyze --json` as `model_turns` per session plus
     `total_model_turns` aggregated across sessions at the envelope top
     level. Backed by the session's `assistant_message_count` field,
     which stays in the JSON output for backward compatibility.
+
+    Note on per-turn ratios: the v0.9 efficiency ratios
+    (`avg_tokens_per_turn`, `avg_tool_calls_per_turn`,
+    `estimated_avg_cost_per_turn_usd`) divide by `model_turns`, so their
+    denominator includes any synthetic/zero-cost turns. The separate
+    "Avg Tokens/Call" column in the Agent Invocations table is *per
+    invocation* (`avg_tokens_per_invocation`), not per turn or per API
+    call -- "Call" there means one subagent invocation.
   example: |
     Token Usage
       ...
-      API calls      42
-      Model turns    20
+      API calls      350
+      Model turns    352   <- >= API calls; the 2 extra are <synthetic>
+                              "No response requested." turns (not billed)
   related: [output, total_cost]
 
 - name: active_duration
