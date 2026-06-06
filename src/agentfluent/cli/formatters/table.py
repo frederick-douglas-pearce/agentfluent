@@ -159,6 +159,17 @@ def format_analysis_table(
     token_table.add_row("Cache efficiency", f"{tm.cache_efficiency}%")
     token_table.add_row("API calls", str(tm.api_call_count))
     token_table.add_row("Model turns", str(result.total_model_turns))
+    # Both API calls and Model turns exclude <synthetic> ghost responses
+    # (#507), so they match unless a real-model turn is missing its usage
+    # block (the null-usage edge case). This row tallies the excluded
+    # ghosts -- reconciling Model turns against the total assistant-
+    # message count so the netted-out turns are visible, not silently
+    # dropped. Always shown (incl. 0) so "0" reads as "none", not "not
+    # computed".
+    token_table.add_row(
+        "Synthetic responses",
+        f"[dim]{result.total_synthetic_messages}[/dim]",
+    )
     console.print(token_table)
 
     if tm.by_model and (verbose or len(tm.by_model) > 1):
