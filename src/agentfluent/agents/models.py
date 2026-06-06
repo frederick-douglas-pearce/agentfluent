@@ -159,7 +159,8 @@ class AgentInvocation(BaseModel):
     @property
     def model_turns(self) -> int | None:
         """Number of model turns in this invocation's subagent trace --
-        one merged assistant message (one API round-trip) (#466).
+        one merged, non-synthetic assistant message (#466; synthetic
+        exclusion #507).
 
         ``None`` when no trace is linked (~20% of invocations in the
         dogfood corpus, see #468): turns can't be counted without the

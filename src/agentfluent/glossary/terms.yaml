@@ -1353,14 +1353,14 @@
 - name: model_turns
   category: session_metric
   short: |
-    The number of model turns in a session -- one merged assistant
-    message (one API round-trip).
+    The number of model turns in a session -- one merged, non-synthetic
+    assistant message (a real model response).
   long: |
-    Added in v0.9 (#465). A *model turn* is one merged assistant
-    message: a single API round-trip the model took. The parser's
-    fragment-merging step can combine several raw JSONL lines into one
-    logical assistant message, so a turn is **not** "one JSONL line" --
-    it is the merged message.
+    Added in v0.9 (#465; synthetic exclusion #507). A *model turn* is
+    one merged assistant message that the model actually produced. The
+    parser's fragment-merging step can combine several raw JSONL lines
+    into one logical assistant message, so a turn is **not** "one JSONL
+    line" -- it is the merged message.
 
     Distinct from `tool_uses` and from tokens:
 
@@ -1375,17 +1375,35 @@
     fixed task while holding quality steady drops both cost and latency
     more than any single other change.
 
+    **Synthetic responses are excluded (#507, D044).** Claude Code emits
+    `<synthetic>`-model assistant messages -- locally fabricated filler
+    (e.g. "No response requested.") with zero usage and no API
+    round-trip -- to keep user/assistant alternation valid when a turn
+    needs no model reply. The model did not turn, so these are NOT
+    counted; they are tallied separately as `synthetic_message_count`
+    (per session) and `total_synthetic_messages` (aggregate), and shown
+    on a "Synthetic responses" row in the Token Usage table.
+
+    **Relationship to `api_call_count` ("API calls").** Both exclude
+    synthetic messages, so they are equal in the common case. They
+    diverge only on the (so far unobserved) edge case of a real-model
+    assistant message carrying no `usage` block: it counts as a model
+    turn but not as an API call, making `model_turns >= api_call_count`.
+    Keeping both metrics surfaces exactly that case if it ever occurs.
+
     Surfaced in the Token Usage table ("Model turns" row), in the
     verbose Per-Session Breakdown table ("Turns" column), and in
-    `analyze --json` as `model_turns` per session plus
-    `total_model_turns` aggregated across sessions at the envelope top
-    level. Backed by the session's `assistant_message_count` field,
-    which stays in the JSON output for backward compatibility.
+    `analyze --json` as `model_turns` per session plus a top-level
+    `total_model_turns` aggregated across sessions. Computed as
+    `assistant_message_count - synthetic_message_count`; the
+    all-inclusive `assistant_message_count` stays in the JSON output for
+    backward compatibility.
   example: |
     Token Usage
       ...
-      API calls      42
-      Model turns    20
+      API calls            350
+      Model turns          350   <- == API calls (both exclude synthetic)
+      Synthetic responses    2   <- ghost turns netted out, tallied here
   related: [output, total_cost]
 
 - name: active_duration

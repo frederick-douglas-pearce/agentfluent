@@ -109,6 +109,25 @@ class TestToolCallPairing:
         assert len(trace.tool_calls) == 1
         assert trace.tool_calls[0].tool_name == "Bash"
 
+    def test_model_turns_excludes_synthetic(self, write_jsonl: WriteJSONL) -> None:
+        # #507: <synthetic> ghost responses are not model turns. Two real
+        # assistant messages + one synthetic -> model_turns == 2.
+        path = write_jsonl(
+            "agent-x.jsonl",
+            [
+                _user("go"),
+                _assistant([_tool_use("t1", "Read")], message_id="m1"),
+                _user([_tool_result("t1")]),
+                _assistant([{"type": "text", "text": "done"}], message_id="m2"),
+                _assistant(
+                    [{"type": "text", "text": "No response requested."}],
+                    message_id="m3",
+                    model="<synthetic>",
+                ),
+            ],
+        )
+        assert parse_subagent_trace(path).model_turns == 2
+
     def test_multiple_tool_use_in_one_message(self, write_jsonl: WriteJSONL) -> None:
         path = write_jsonl(
             "agent-x.jsonl",

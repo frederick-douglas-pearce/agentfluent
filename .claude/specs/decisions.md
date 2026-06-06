@@ -937,3 +937,27 @@ primary_axis = max(AXIS_TIEBREAKER, key=lambda a: axis_scores[a])
 **Reference:** `.claude/specs/analysis/407-calibration/calibration.md`; #407 (calibration) and its disposition comment; #499 (Tier B); #406 (signal); epic #403; PRD `prd-advanced-tool-use-diagnostics.md` §9 / §11.
 
 ---
+
+## D044: model_turns excludes <synthetic> ghost responses; tally them separately (Option A)
+
+**Date:** 2026-06-05
+**Context:** The v0.9 `model_turns` metric (#465, #466) was implemented as a raw count of `type:"assistant"` messages. Dogfooding the #483 docs PR surfaced that this includes Claude Code's `<synthetic>`-model assistant messages -- locally fabricated filler (observed payload: `"No response requested."`, `stop_reason: stop_sequence`, zero usage) emitted to keep user/assistant alternation valid when a user-role turn needs no model reply (local slash-commands, `!`-bash output, hook injection, resume preambles). On the agentfluent dogfood corpus this made `model_turns` (e.g. 7412) exceed `api_call_count` (7387) by exactly the synthetic count (25), even though `api_call_count` already excludes synthetic (`tokens.py`: requires `usage is not None` AND `model not in SYNTHETIC_MODELS`). The model did not take a turn for a synthetic message, so counting it as one is wrong. Filed as #507 (release blocker for v0.9.0, which is unreleased).
+
+**Decision:** Exclude `<synthetic>`-model assistant messages from `model_turns` and tally them separately. Specifically (**Option A**):
+- `model_turns = assistant_message_count - synthetic_message_count` -- every assistant message the model actually produced, with `<synthetic>` ghosts netted out. Applied at both count sites: parent session (`pipeline.py`) and subagent trace (`traces/parser.py`).
+- Keep `assistant_message_count` at its original all-inclusive meaning (it backs the integration invariant `message_count >= user + assistant` and is already in the JSON envelope).
+- Add `synthetic_message_count` (per session) and a computed `total_synthetic_messages` (aggregate, top-level), surfaced on a "Synthetic responses" row in the Token Usage table and in JSON.
+- Filter on the `SYNTHETIC_MODELS` sentinel, not on zero-token usage: a real turn always carries a real model name, so the sentinel is the robust discriminator.
+
+**Option A vs Option B:** Option B was to define `model_turns` as exactly `api_call_count` (usage-bearing non-synthetic messages), collapsing the two metrics. **Rejected.** Under Option A the two metrics are equal in the common case but diverge on the (so-far-unobserved) edge case of a real-model assistant message carrying no `usage` block -- which counts as a model turn (the model responded) but not as an API call (no billing recorded). Keeping both metrics distinct surfaces that case if it ever occurs; collapsing them would hide it. Semantically, "model turn" = "the model produced a response," which is not the same predicate as "Claude Code recorded usage."
+
+**Rationale:**
+- **Correctness of the headline metric.** `model_turns` is v0.9's headline efficiency metric and the denominator of the per-agent ratios (`avg_tokens_per_turn`, `avg_tool_calls_per_turn`, `estimated_avg_cost_per_turn_usd`). Inflating it with zero-cost ghost turns biases every ratio down by the synthetic fraction.
+- **Pre-ship, so no migration cost.** v0.9 is unreleased (release PR #486 open); fixing now means no user ever sees the inflated definition. `diff` reads turn fields with tolerant `.get(..., 0)`, and no pre-fix v0.9 baseline exists in any user's hands.
+- **Blast radius is small.** The per-agent ratio chain is additive off `inv.model_turns -> trace.model_turns`, so the single `traces/parser.py` fix auto-corrects all rollups; `diff` needs no change.
+
+**Follow-ups:** #508 (research) investigates the full taxonomy of `<synthetic>` scenarios and whether any sub-category warrants its own metric. The architect review on #507 endorsed Option A and this data-model shape (keep `assistant_message_count` all-inclusive, derive `model_turns` by subtraction) over redefining the field or storing `model_turns` directly.
+
+**Reference:** #507 (fix), #508 (synthetic taxonomy research), #465/#466 (model-turn introduction), #467 (efficiency ratios); architect review comment on #507. Supersedes the "(one API round-trip)" phrasing in the #465/#466 docstrings and the original `model_turns` glossary entry.
+
+---
