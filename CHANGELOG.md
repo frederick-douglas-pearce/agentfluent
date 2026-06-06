@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.9.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.8.0...v0.9.0) (2026-06-06) — "Count Every Turn"
+
+The release theme adds the missing foundational metric — **model turns** — at every level of the analytics stack, and pairs it with **Advanced Tool Use diagnostics** that explain *why* an agent's round-trips are wasteful.
+
+A model turn is one merged assistant message — a real model response. It is distinct from tool calls (actions within a turn) and tokens (the cost of each turn) — an agent that calls 10 tools in 3 turns batches its work; one that calls 10 tools in 10 turns serializes it, and the difference was invisible in prior output. v0.9 surfaces `model_turns` in the Token Usage table and `total_model_turns` on the JSON envelope (#465), reconstructs turn counts from subagent traces (#466), rolls them up per agent type with efficiency ratios — `avg_turns_per_invocation`, `avg_tool_calls_per_turn`, `avg_tokens_per_turn`, `estimated_avg_cost_per_turn_usd` (#467), and integrates model-turn deltas into `agentfluent diff` (#470). Pre-turn-era baselines degrade gracefully to a 0 fallback. Claude Code's `<synthetic>` ghost responses (locally fabricated filler like "No response requested.", with no API round-trip) are excluded from the count and tallied separately as `total_synthetic_messages` (#507/#509), so `model_turns` reflects only real model responses. The headline insight: reducing turns for a fixed task while holding quality steady drops both cost and latency more than any single other change.
+
+The Advanced Tool Use stream (epic #403) lands three signals grounded in Anthropic's "Advanced Tool Use" engineering research, each pointing at a platform feature that fixes the pattern: `PARAMETER_RETRY` (#405) flags a tool retried with a changed parameter shape after a validation error and extracts a paste-ready `input_examples` entry from a later successful call (Tool Use Examples, 72% → 90% on complex parameter handling); `TOOL_INVENTORY_OVERSIZED` (#372, #404) flags an agent that declares >30 tools but exercises under half (Tool Search Tool, 79.5% → 88.1% accuracy); and `TOOL_ORCHESTRATION_CHAIN` (#406, #407) flags long tool-call chains whose large intermediate results pass through context, recommending Programmatic Tool Calling. The orchestration signal ships **live-with-caveat** at INFO (#498, D043): its metadata-only proxy measured 0% precision on the current dogfood corpus — a corpus artifact (no orchestration agents present yet, so no true positives to find), not a broken signal — so the message carries an explicit low-confidence caveat, with trace-level precision tracked as #499.
+
+A third stream lands the v0.8 dogfood follow-ups: `active_duration` shown alongside wall-clock in the agent summary table so user-approval waits no longer read as slow agents (#480), a warning when Claude Code's default 30-day `cleanupPeriodDays` is truncating the analyzed corpus (#481), Tier 3 healthy-silence documentation (#478), and agent-config cleanup — the never-invoked `tester` agent removed (#477) and the architect prompt tightened (#479).
+
+**No breaking changes.** All additions are additive: `total_model_turns`, `total_synthetic_messages`, and the per-agent turn ratios join the existing JSON rollups without a version bump, the new signals fire only when their patterns match, and `diff` reads pre-v0.9 envelopes cleanly (absent turn counts read as 0).
+
+See the README v0.9 roadmap entry, [`prd-v0.9.md`](.claude/specs/prd-v0.9.md), and [`prd-advanced-tool-use-diagnostics.md`](.claude/specs/prd-advanced-tool-use-diagnostics.md) for the full design context. Decisions D040–D044 in [`.claude/specs/decisions.md`](.claude/specs/decisions.md).
+
+
+### Features
+
+* add model-turn count to SubagentTrace and AgentInvocation ([#466](https://github.com/frederick-douglas-pearce/agentfluent/issues/466)) ([#487](https://github.com/frederick-douglas-pearce/agentfluent/issues/487)) ([c08c873](https://github.com/frederick-douglas-pearce/agentfluent/commit/c08c873a08ad9a88e09b9beee18671d6397cfbea))
+* add PARAMETER_RETRY diagnostic signal (Tier A) with paste-ready input_examples ([#493](https://github.com/frederick-douglas-pearce/agentfluent/issues/493)) ([204b759](https://github.com/frederick-douglas-pearce/agentfluent/commit/204b75930d78cb085c80542a93ac5e8915778cd1))
+* add TOOL_INVENTORY_OVERSIZED diagnostic signal ([#372](https://github.com/frederick-douglas-pearce/agentfluent/issues/372), [#404](https://github.com/frederick-douglas-pearce/agentfluent/issues/404)) ([#495](https://github.com/frederick-douglas-pearce/agentfluent/issues/495)) ([2496ecc](https://github.com/frederick-douglas-pearce/agentfluent/commit/2496ecc34760893ecba2c1b0e872af578212535b))
+* add TOOL_ORCHESTRATION_CHAIN diagnostic signal (Tier A) ([#491](https://github.com/frederick-douglas-pearce/agentfluent/issues/491)) ([75238df](https://github.com/frederick-douglas-pearce/agentfluent/commit/75238df3d3d8cb70233d60f245021a75449250b7))
+* integrate model-turn metrics into `agentfluent diff` ([#470](https://github.com/frederick-douglas-pearce/agentfluent/issues/470)) ([#490](https://github.com/frederick-douglas-pearce/agentfluent/issues/490)) ([d1794fa](https://github.com/frederick-douglas-pearce/agentfluent/commit/d1794faa58b7f3f3aef8dcf56607b579cb6682cf))
+* per-agent-type model-turn rollup and efficiency ratios ([#467](https://github.com/frederick-douglas-pearce/agentfluent/issues/467)) ([#489](https://github.com/frederick-douglas-pearce/agentfluent/issues/489)) ([b516e53](https://github.com/frederick-douglas-pearce/agentfluent/commit/b516e531b54ca7b1c85b14788a726bae26b66b50))
+* surface active duration alongside wall-clock in agent summary table ([#480](https://github.com/frederick-douglas-pearce/agentfluent/issues/480)) ([#502](https://github.com/frederick-douglas-pearce/agentfluent/issues/502)) ([b042976](https://github.com/frederick-douglas-pearce/agentfluent/commit/b042976f0cbdf3f9f620a160092bf370af22c649))
+* surface parent-session model-turn count in CLI and JSON ([#465](https://github.com/frederick-douglas-pearce/agentfluent/issues/465)) ([#485](https://github.com/frederick-douglas-pearce/agentfluent/issues/485)) ([158dfb8](https://github.com/frederick-douglas-pearce/agentfluent/commit/158dfb82afa95aeccb47686009ed3531c1b199d3))
+* warn when Claude Code cleanupPeriodDays truncates the session corpus ([#481](https://github.com/frederick-douglas-pearce/agentfluent/issues/481)) ([#496](https://github.com/frederick-douglas-pearce/agentfluent/issues/496)) ([2b5737e](https://github.com/frederick-douglas-pearce/agentfluent/commit/2b5737ecd7e557fd1db59f8672403cbb03a9ff7c))
+
+
+### Bug Fixes
+
+* exclude &lt;synthetic&gt; ghost responses from model_turns, tally separately ([#509](https://github.com/frederick-douglas-pearce/agentfluent/issues/509)) ([8d28836](https://github.com/frederick-douglas-pearce/agentfluent/commit/8d28836c21b2e0f5341b68e5d4ab8fdccee8a61d))
+* TOOL_ORCHESTRATION_CHAIN low-confidence caveat from [#407](https://github.com/frederick-douglas-pearce/agentfluent/issues/407) calibration + cwd-independent hook paths ([#498](https://github.com/frederick-douglas-pearce/agentfluent/issues/498)) ([b66ce39](https://github.com/frederick-douglas-pearce/agentfluent/commit/b66ce3956c4bd12777e6edb67c1d06f6227af088))
+
 ## [0.8.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.7.0...v0.8.0) (2026-05-30) — "Quality Axis: Tier 3"
 
 The release theme pairs two streams: **fix the dogfood signals that mislead** and **add the signals that prove quality** by extending the diagnostics pipeline into its first external data source.
