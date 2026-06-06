@@ -19,6 +19,7 @@ from agentfluent.analytics.agent_metrics import (
     _recompute_turn_ratios,
     compute_agent_metrics,
 )
+from agentfluent.analytics.pricing import SYNTHETIC_MODELS
 from agentfluent.analytics.tokens import (
     ModelTokenBreakdown,
     TokenMetrics,
@@ -81,24 +82,40 @@ class SessionAnalysis(BaseModel):
     message_count: int = 0
     user_message_count: int = 0
     assistant_message_count: int = 0
+    """All ``type:"assistant"`` messages in the session, INCLUDING
+    Claude Code's ``<synthetic>`` ghost responses. Kept at its original
+    all-inclusive meaning for backward compat (the integration invariant
+    ``message_count >= user + assistant`` depends on it); ``model_turns``
+    nets out the synthetic subset (#507)."""
+
+    synthetic_message_count: int = 0
+    """``<synthetic>``-model assistant messages -- Claude Code-fabricated
+    filler (e.g. "No response requested.") emitted with zero usage and
+    no API round-trip, to keep user/assistant alternation valid when a
+    turn needs no model reply. Tallied separately and excluded from
+    ``model_turns`` because the model did not actually turn (#507, D044).
+    What populates this bucket is under investigation in #508."""
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def model_turns(self) -> int:
-        """Number of model turns in this session.
+        """Number of model turns in this session (#465, corrected in #507).
 
-        A *model turn* is one merged assistant message -- one API
-        round-trip. Fragment-merging in the parser may combine several
-        raw JSONL lines into one logical assistant message, so this is
-        the merged-message count, not the raw-line count. Distinct from
+        A *model turn* is one merged, **non-synthetic** assistant
+        message. Fragment-merging in the parser may combine several raw
+        JSONL lines into one logical assistant message, so this is the
+        merged-message count, not the raw-line count. Distinct from
         ``tool_uses`` (actions within a turn) and tokens (cost per turn).
 
-        Aliases the backing ``assistant_message_count`` field: the
-        semantic name communicates intent to downstream consumers while
-        the existing field stays in the JSON output for backward compat
-        (#465). Emitted in ``model_dump`` output as a computed field.
+        Computed as ``assistant_message_count - synthetic_message_count``
+        (D044, Option A): every assistant message the model actually
+        produced, with Claude Code's ``<synthetic>`` ghost responses
+        netted out. This equals ``api_call_count`` except on the (so far
+        unobserved) edge case of a real-model response carrying no
+        ``usage`` block -- see the ``model_turns`` glossary entry.
+        Emitted in ``model_dump`` output as a computed field.
         """
-        return self.assistant_message_count
+        return self.assistant_message_count - self.synthetic_message_count
 
 
 class AnalysisResult(BaseModel):
@@ -154,6 +171,20 @@ class AnalysisResult(BaseModel):
         #470 (diff integration) reads it from the top level."""
         return sum(s.model_turns for s in self.sessions)
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def total_synthetic_messages(self) -> int:
+        """Aggregate ``<synthetic>`` ghost-response count across all
+        analyzed sessions (#507, D044).
+
+        Mirrors ``total_model_turns``: summed from each session's
+        ``synthetic_message_count``, recomputed-not-stored so it survives
+        JSON rehydration, ``0`` for an empty result. Surfaced at the
+        envelope top level (and in the Token Usage table) so the gap
+        between ``api_call_count`` and ``model_turns`` is explained
+        rather than mysterious. Additive field; ``diff`` ignores it."""
+        return sum(s.synthetic_message_count for s in self.sessions)
+
 
 def analyze_session(
     path: Path,
@@ -204,6 +235,7 @@ def analyze_session(
         message_count=len(messages),
         user_message_count=_count_type(messages, "user"),
         assistant_message_count=_count_type(messages, "assistant"),
+        synthetic_message_count=_count_synthetic(messages),
     )
 
 
@@ -445,3 +477,19 @@ def _link_subagent_traces(
 def _count_type(messages: list[SessionMessage], msg_type: str) -> int:
     """Count messages of a given type."""
     return sum(1 for m in messages if m.type == msg_type)
+
+
+def _count_synthetic(messages: list[SessionMessage]) -> int:
+    """Count ``<synthetic>``-model assistant messages (#507).
+
+    These are Claude Code-fabricated ghost responses (zero usage, no API
+    round-trip) that are netted out of ``model_turns``. Filters on the
+    ``SYNTHETIC_MODELS`` sentinel rather than zero-token usage: a real
+    turn always carries a real model name, so the sentinel is the robust
+    discriminator. Mirrors the same exclusion ``api_call_count`` applies
+    in :mod:`agentfluent.analytics.tokens`."""
+    return sum(
+        1
+        for m in messages
+        if m.type == "assistant" and m.model in SYNTHETIC_MODELS
+    )

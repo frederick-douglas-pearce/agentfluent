@@ -27,6 +27,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from agentfluent.analytics.pricing import SYNTHETIC_MODELS
 from agentfluent.core.parser import parse_session
 from agentfluent.core.session import ContentBlock, SessionMessage, Usage
 from agentfluent.diagnostics.signals import detect_is_error_from_text
@@ -258,7 +259,11 @@ def parse_subagent_trace(path: Path) -> SubagentTrace:
         retry_sequences=retry_sequences,
         total_errors=sum(1 for tc in tool_calls if tc.is_error),
         total_retries=sum(seq.attempts - 1 for seq in retry_sequences),
-        model_turns=sum(1 for m in messages if m.type == "assistant"),
+        model_turns=sum(
+            1
+            for m in messages
+            if m.type == "assistant" and m.model not in SYNTHETIC_MODELS
+        ),
         usage=_sum_usage(messages),
         duration_ms=_compute_duration_ms(messages),
         idle_gap_ms=_compute_idle_gap_ms(tool_calls),

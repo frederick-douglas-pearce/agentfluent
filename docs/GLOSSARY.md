@@ -1506,14 +1506,14 @@ cleanly and skips the warning.
 
 ### `model_turns`
 
-**Short:** The number of model turns in a session -- one merged assistant
-message. Counts every assistant message, so it is the superset of
-(>=) `api_call_count`.
+**Short:** The number of model turns in a session -- one merged, non-synthetic
+assistant message (a real model response).
 
-**Detail:** Added in v0.9 (#465). A *model turn* is one merged assistant
-message. The parser's fragment-merging step can combine several raw
-JSONL lines into one logical assistant message, so a turn is **not**
-"one JSONL line" -- it is the merged message.
+**Detail:** Added in v0.9 (#465; synthetic exclusion #507). A *model turn* is
+one merged assistant message that the model actually produced. The
+parser's fragment-merging step can combine several raw JSONL lines
+into one logical assistant message, so a turn is **not** "one JSONL
+line" -- it is the merged message.
 
 Distinct from `tool_uses` and from tokens:
 
@@ -1528,43 +1528,38 @@ tools in 10 turns serializes it (wasteful). Reducing turns for a
 fixed task while holding quality steady drops both cost and latency
 more than any single other change.
 
-**Model turns vs. API calls.** Both count parent-thread assistant
-messages, but `model_turns` counts *every* one, while the "API
-calls" metric (`api_call_count`) counts only assistant messages that
-represent a real billed round-trip -- those carrying a `usage` block
-and a non-synthetic model. `model_turns` is therefore the superset:
-**`model_turns >= api_call_count`, never less.** The gap is the
-count of assistant messages that are turns but not API calls --
-principally Claude Code's `<synthetic>`-model messages (e.g. the
-"No response requested." filler emitted after a local slash-command
-or any user message that needs no model reply; zero usage, no
-price), plus any rare `usage: null` assistant message. On a typical
-corpus the gap is small (well under 1%), but it means a model turn
-is *approximately*, not exactly, one API round-trip.
+**Synthetic responses are excluded (#507, D044).** Claude Code emits
+`<synthetic>`-model assistant messages -- locally fabricated filler
+(e.g. "No response requested.") with zero usage and no API
+round-trip -- to keep user/assistant alternation valid when a turn
+needs no model reply. The model did not turn, so these are NOT
+counted; they are tallied separately as `synthetic_message_count`
+(per session) and `total_synthetic_messages` (aggregate), and shown
+on a "Synthetic responses" row in the Token Usage table.
 
-Surfaced in the Token Usage table ("Model turns" row, directly below
-"API calls"), in the verbose Per-Session Breakdown table ("Turns"
-column), and in `analyze --json` as `model_turns` per session plus
-`total_model_turns` aggregated across sessions at the envelope top
-level. Backed by the session's `assistant_message_count` field,
-which stays in the JSON output for backward compatibility.
+**Relationship to `api_call_count` ("API calls").** Both exclude
+synthetic messages, so they are equal in the common case. They
+diverge only on the (so far unobserved) edge case of a real-model
+assistant message carrying no `usage` block: it counts as a model
+turn but not as an API call, making `model_turns >= api_call_count`.
+Keeping both metrics surfaces exactly that case if it ever occurs.
 
-Note on per-turn ratios: the v0.9 efficiency ratios
-(`avg_tokens_per_turn`, `avg_tool_calls_per_turn`,
-`estimated_avg_cost_per_turn_usd`) divide by `model_turns`, so their
-denominator includes any synthetic/zero-cost turns. The separate
-"Avg Tokens/Call" column in the Agent Invocations table is *per
-invocation* (`avg_tokens_per_invocation`), not per turn or per API
-call -- "Call" there means one subagent invocation.
+Surfaced in the Token Usage table ("Model turns" row), in the
+verbose Per-Session Breakdown table ("Turns" column), and in
+`analyze --json` as `model_turns` per session plus a top-level
+`total_model_turns` aggregated across sessions. Computed as
+`assistant_message_count - synthetic_message_count`; the
+all-inclusive `assistant_message_count` stays in the JSON output for
+backward compatibility.
 
 **Example:**
 
 ```
 Token Usage
   ...
-  API calls      350
-  Model turns    352   <- >= API calls; the 2 extra are <synthetic>
-                          "No response requested." turns (not billed)
+  API calls            350
+  Model turns          350   <- == API calls (both exclude synthetic)
+  Synthetic responses    2   <- ghost turns netted out, tallied here
 ```
 
 **Related:** [`output`](#output), [`total_cost`](#total_cost)

@@ -1,6 +1,8 @@
 """Tests for the analytics pipeline orchestration."""
 
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from agentfluent.analytics.agent_metrics import AgentMetrics, AgentTypeMetrics
 from agentfluent.analytics.pipeline import (
@@ -12,16 +14,24 @@ from agentfluent.analytics.pipeline import (
 )
 from agentfluent.analytics.tokens import TokenMetrics
 from agentfluent.analytics.tools import ToolMetrics
+from tests._builders import assistant_message, user_message
+
+WriteJSONL = Callable[[str, list[dict[str, Any]]], Path]
 
 
-def _session(assistant_count: int) -> SessionAnalysis:
-    """Build a minimal SessionAnalysis with a given assistant-message count."""
+def _session(assistant_count: int, synthetic_count: int = 0) -> SessionAnalysis:
+    """Build a minimal SessionAnalysis with given assistant + synthetic counts.
+
+    ``assistant_count`` is the all-inclusive assistant-message count
+    (including synthetics); ``synthetic_count`` is the subset netted out
+    of ``model_turns`` (#507)."""
     return SessionAnalysis(
         session_path=Path("s.jsonl"),
         token_metrics=TokenMetrics(),
         tool_metrics=ToolMetrics(),
         agent_metrics=AgentMetrics(),
         assistant_message_count=assistant_count,
+        synthetic_message_count=synthetic_count,
     )
 
 
@@ -56,6 +66,41 @@ class TestAnalyzeSession:
         assert result.token_metrics.total_tokens == 0
         assert result.tool_metrics.total_tool_calls == 0
         assert result.agent_metrics.total_invocations == 0
+
+    def test_synthetic_excluded_from_model_turns(
+        self, write_jsonl: WriteJSONL,
+    ) -> None:
+        # #507: a <synthetic> ghost response is counted in
+        # assistant_message_count but excluded from model_turns and
+        # tallied in synthetic_message_count.
+        path = write_jsonl(
+            "session_synthetic.jsonl",
+            [
+                user_message("do a thing"),
+                assistant_message(
+                    [{"type": "text", "text": "working"}],
+                    message_id="m1",
+                    usage={"input_tokens": 10, "output_tokens": 5},
+                ),
+                assistant_message(
+                    [{"type": "text", "text": "done"}],
+                    message_id="m2",
+                    usage={"input_tokens": 8, "output_tokens": 4},
+                ),
+                assistant_message(
+                    [{"type": "text", "text": "No response requested."}],
+                    message_id="m3",
+                    model="<synthetic>",
+                ),
+            ],
+        )
+        result = analyze_session(path)
+        assert result.assistant_message_count == 3
+        assert result.synthetic_message_count == 1
+        assert result.model_turns == 2
+        # Both metrics exclude synthetic, and the two real turns carry
+        # usage, so model_turns == api_call_count (the common case).
+        assert result.model_turns == result.token_metrics.api_call_count
 
     def test_streaming_dupes_session(self, streaming_dupes_session_path: Path) -> None:
         result = analyze_session(streaming_dupes_session_path)
@@ -106,10 +151,15 @@ class TestAnalyzeSessions:
 
 
 class TestModelTurns:
-    """#465: model_turns aliases assistant_message_count; total_model_turns sums."""
+    """#465 + #507: model_turns = assistant_message_count - synthetic; the
+    synthetic subset is excluded and tallied separately; totals sum."""
 
-    def test_model_turns_aliases_assistant_count(self) -> None:
+    def test_model_turns_no_synthetic_equals_assistant_count(self) -> None:
         assert _session(5).model_turns == 5
+
+    def test_model_turns_excludes_synthetic(self) -> None:
+        # #507: 5 assistant messages, 2 of them <synthetic> ghosts -> 3 turns.
+        assert _session(5, synthetic_count=2).model_turns == 3
 
     def test_model_turns_empty_session(self) -> None:
         assert _session(0).model_turns == 0
@@ -118,14 +168,25 @@ class TestModelTurns:
         self, basic_session_path: Path,
     ) -> None:
         result = analyze_session(basic_session_path)
-        assert result.model_turns == result.assistant_message_count
+        assert result.model_turns == (
+            result.assistant_message_count - result.synthetic_message_count
+        )
 
     def test_total_model_turns_sums_sessions(self) -> None:
         result = AnalysisResult(sessions=[_session(5), _session(3), _session(0)])
         assert result.total_model_turns == 8
 
+    def test_total_model_turns_nets_out_synthetic(self) -> None:
+        # 5+3 assistant messages, 1+2 synthetic -> (5-1)+(3-2) = 5 turns.
+        result = AnalysisResult(
+            sessions=[_session(5, synthetic_count=1), _session(3, synthetic_count=2)],
+        )
+        assert result.total_model_turns == 5
+        assert result.total_synthetic_messages == 3
+
     def test_total_model_turns_empty_result(self) -> None:
         assert AnalysisResult().total_model_turns == 0
+        assert AnalysisResult().total_synthetic_messages == 0
 
     def test_total_model_turns_via_analyze_sessions(
         self, basic_session_path: Path, agent_session_path: Path,
@@ -136,10 +197,14 @@ class TestModelTurns:
         )
 
     def test_model_turns_in_json_dump(self) -> None:
-        dumped = AnalysisResult(sessions=[_session(5)]).model_dump(mode="json")
-        assert dumped["total_model_turns"] == 5
-        assert dumped["sessions"][0]["model_turns"] == 5
-        # Backing field stays for backward compat.
+        dumped = AnalysisResult(
+            sessions=[_session(5, synthetic_count=2)],
+        ).model_dump(mode="json")
+        assert dumped["total_model_turns"] == 3
+        assert dumped["total_synthetic_messages"] == 2
+        assert dumped["sessions"][0]["model_turns"] == 3
+        assert dumped["sessions"][0]["synthetic_message_count"] == 2
+        # Backing field stays all-inclusive for backward compat.
         assert dumped["sessions"][0]["assistant_message_count"] == 5
 
 
