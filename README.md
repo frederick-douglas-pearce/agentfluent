@@ -170,10 +170,10 @@ agentfluent analyze --project codefluent --format json \
   > ~/.claude/agents/new-agent.md
 ```
 
-Produces a token-usage table, per-model cost breakdown (labeled as API rate — subscription plans differ), tool usage concentration, and an Agent Invocations table summarizing each subagent's token, duration, and tool-use count. The Cost by Model table breaks out parent vs subagent rows (a model used in both shows two rows with `Origin` distinguishing them), and the top-line `Total cost` / `Total tokens` are comprehensive — parent thread + linked subagent runs combined. Behavior diagnostics run by default and surface signals across three layers (pass `--no-diagnostics` to skip):
+Produces a token-usage table — including **model turns** (`model_turns`, one merged, non-synthetic assistant message — a real model response; v0.9), the headline agent-efficiency metric, with a `Synthetic responses` row breaking out Claude Code's local ghost turns (e.g. "No response requested.") that are netted out of the count — a per-model cost breakdown (labeled as API rate — subscription plans differ), tool usage concentration, and an Agent Invocations table summarizing each subagent's token, duration, and tool-use count. Per-agent-type rows show average turns per invocation alongside efficiency ratios (`avg_tool_calls_per_turn`, `avg_tokens_per_turn`), and the duration column reports **active** time per call with raw wall-clock in parentheses (`470.0s (2918.0s wall)`; v0.9), so an interactive agent whose wall-clock is inflated by user-approval waits no longer reads as slow. The Cost by Model table breaks out parent vs subagent rows (a model used in both shows two rows with `Origin` distinguishing them), and the top-line `Total cost` / `Total tokens` are comprehensive — parent thread + linked subagent runs combined. Behavior diagnostics run by default and surface signals across three layers (pass `--no-diagnostics` to skip):
 
-- **Metadata-level** (from invocation summaries): tool-error keywords, token-per-tool-use outliers, duration outliers.
-- **Trace-level** (from `~/.claude/projects/<session>/subagents/`): retry loops, stuck patterns, permission failures, consecutive tool-error sequences — each with per-tool-call evidence.
+- **Metadata-level** (from invocation summaries): tool-error keywords, token-per-tool-use outliers, duration outliers, `TOOL_ORCHESTRATION_CHAIN` (long tool-call chains whose large intermediate results pass through context — v0.9, INFO with a low-confidence caveat), and `TOOL_INVENTORY_OVERSIZED` (an agent declares >30 tools but exercises under half — v0.9).
+- **Trace-level** (from `~/.claude/projects/<session>/subagents/`): retry loops, stuck patterns, permission failures, consecutive tool-error sequences, and `PARAMETER_RETRY` (a tool retried with a changed parameter shape after a validation error — v0.9, surfacing a paste-ready `input_examples` fix) — each with per-tool-call evidence.
 - **Aggregate**: model mismatch (complexity class wrong for declared/observed model), delegation clustering (recurring `general-purpose` patterns → proposed specialized subagents), MCP server audit (configured-but-unused, observed-but-missing).
 - **Quality (v0.6)**: parent's mid-flight corrections (`USER_CORRECTION`), file rework density (`FILE_REWORK`), and reviewer-caught rate with `parent_acted` attribution (`REVIEWER_CAUGHT`). Recommendations carry a `[quality]` axis label and per-recommendation `axis_scores` annotations.
 - **Quality Tier 2 (v0.7, opt-in via `--git`)**: local-git `FEAT_FIX_PROXIMITY` — pairs `feat:` commits with subsequent `fix:` commits on shared files and correlates back to whether the originating session used a review-style subagent.
@@ -199,7 +199,7 @@ agentfluent diff baseline.json current.json --fail-on critical    # CI gate: exi
 agentfluent diff baseline.json current.json --json | jq '.data.regression_detected'
 ```
 
-Compares two `analyze --json` envelopes and surfaces new, resolved, and persisting recommendations (keyed by `(agent_type, target, signal_types)`), token / cost deltas, and per-agent invocation deltas. The `--fail-on {info|warning|critical|off}` flag gates exit code 3 on new findings at or above the chosen severity, so `agentfluent diff` slots into a PR check the same way a test runner does. Baselines are user-managed files — no internal cache — so re-running against an older snapshot at any time is just `agentfluent diff old.json new.json`.
+Compares two `analyze --json` envelopes and surfaces new, resolved, and persisting recommendations (keyed by `(agent_type, target, signal_types)`), token / cost deltas, per-agent invocation deltas, and (v0.9) model-turn deltas — both at the parent-session level and per agent type, so a prompt change that cuts the turns an agent takes for the same task shows up as a measurable delta. The `--fail-on {info|warning|critical|off}` flag gates exit code 3 on new findings at or above the chosen severity, so `agentfluent diff` slots into a PR check the same way a test runner does. Baselines are user-managed files — no internal cache — so re-running against an older snapshot at any time is just `agentfluent diff old.json new.json`.
 
 ### `agentfluent report` — render an analyze snapshot as Markdown
 
@@ -270,6 +270,8 @@ AgentFluent's "configuration" is CLI flags — no config file, no environment va
       "since": "2026-05-01T00:00:00Z", "until": null,
       "session_count_before_filter": 42, "session_count_after_filter": 12
     },
+    "total_model_turns": 312,
+    "total_synthetic_messages": 4,
     "token_metrics": {
       "total_cost": 41.11,
       "total_tokens": 54019983,
@@ -309,6 +311,8 @@ AgentFluent's "configuration" is CLI flags — no config file, no environment va
 **Schema v2 additions (v0.6, additive — no version bump):** Each `aggregated_recommendations` row carries `axis_scores: {cost, speed, quality}` and `primary_axis: "cost" | "speed" | "quality"`. The composite `priority_score` formula gains a `quality_evidence_factor * W_QUALITY` term that fires when a recommendation's signals map to the `quality` axis (per D021). `analyze --json` output also carries a top-level `window: {since, until}` block when `--since`/`--until` is set on the invocation (`null` for either bound when not specified). `agentfluent diff` reads pre-v0.6 envelopes without these annotations cleanly — the absence is treated as zeros / `cost`-primary, which preserves the existing comparison semantics.
 
 **Schema v2 additions (v0.7, additive — no version bump):** `analyze --json` output carries a top-level `scope_session: string | null` field — populated with the filename when `--session` constrained the run, `null` otherwise. Lets consumers verify scope at a glance without re-counting sessions. `diagnostics_version` (the AgentFluent version that produced the envelope) is also stamped at the top level so `agentfluent diff` can warn on detector-sensitivity drift between baseline and current. `agentfluent diff` reads pre-v0.7 envelopes cleanly — the absent fields are treated as `null` / unknown, preserving comparison semantics.
+
+**Schema v2 additions (v0.9, additive — no version bump):** a top-level `total_model_turns` (model turns aggregated across all analyzed sessions) sits alongside `session_count` in `data` — *not* nested under `token_metrics` — and each entry in `data.sessions` carries a per-session `model_turns`. A model turn is one merged, non-synthetic assistant message; Claude Code's `<synthetic>` ghost responses are excluded and tallied separately as a top-level `total_synthetic_messages` (and per-session `synthetic_message_count`), so `model_turns` equals `token_metrics.api_call_count` except on the rare case of a real-model turn with no usage block. Per-agent-type rows under `agent_metrics.by_agent_type` gain `avg_turns_per_invocation`, `avg_tool_calls_per_turn`, `avg_tokens_per_turn`, and `estimated_avg_cost_per_turn_usd` efficiency ratios. `agentfluent diff` reports model-turn deltas per agent type and at the parent-session level; pre-turn-era envelopes (pre-v0.9) degrade gracefully — the absent counts read as `0`, so a diff against an old baseline still runs without crashing.
 
 No ANSI escapes in JSON output, guaranteed. The key `total_cost` is the pay-per-token equivalent; subscribers on Pro/Max/Team/Enterprise plans see a flat monthly charge regardless.
 
@@ -366,11 +370,12 @@ Everything runs locally. No outbound network calls. No API key needed.
 ## Features
 
 - **Project and Session Discovery** — Enumerates `~/.claude/projects/`, groups sessions by project, shows per-project session count, total size, and last-modified timestamp. Handles Claude Code subagent sidechain files and Agent SDK sessions uniformly.
-- **Execution Analytics** — Token usage, API-rate cost, cache efficiency, per-model breakdown, tool-call concentration, and per-agent invocation metrics (tokens, duration, tool-use count). Cache creation and cache read tokens are tracked separately so you can see where your prompt caching is working.
+- **Execution Analytics** — Token usage, **model turns** (one merged, non-synthetic assistant message — a real model response; v0.9, with `<synthetic>` ghost turns excluded and tallied separately), API-rate cost, cache efficiency, per-model breakdown, tool-call concentration, and per-agent invocation metrics (tokens, active + wall-clock duration, tool-use count). Cache creation and cache read tokens are tracked separately so you can see where your prompt caching is working. Model turns surface at every level — parent session, subagent invocation, and per-agent-type rollup with efficiency ratios (`avg_tool_calls_per_turn`, `avg_tokens_per_turn`) — because reducing turns for a fixed task is the dominant lever on both cost and latency.
 - **Comprehensive Cost Attribution** — Top-line `total_cost` and `total_tokens` reflect parent + subagent runs combined. The per-model breakdown decomposes by `(model, origin)` so a user who sees "100% Opus" can tell whether their Haiku-routed Explore subagent contributed cost, and whether Opus spend lives in the parent thread or a delegated agent. JSON envelope is at schema v2.
 - **Agent Config Assessment** — 4-dimension rubric (description, tools, model, prompt) applied to every `.md` file in `~/.claude/agents/` and `./.claude/agents/`. Produces a 0–100 score plus ranked, specific recommendations ("Prompt body doesn't mention error handling"). Catches agents that are technically valid but miss well-known best practices.
 - **Subagent Trace Parsing** — Parses the internal tool-call sequences Claude Code emits under `~/.claude/projects/<session>/subagents/agent-<agentId>.jsonl`, links them back to the delegating invocation, and detects retry sequences. Gives diagnostics per-call evidence (which tool, which attempt, which error) instead of just an invocation-level summary.
 - **Behavior Diagnostics** — `--diagnostics` emits signals across three layers. *Metadata*: tool-error keywords, token-per-tool-use outliers, duration outliers. *Trace-level*: retry loops, stuck patterns (same call repeated with no progress), permission failures, consecutive tool-error sequences. *Aggregate*: model mismatch (declared/observed model wrong for the workload's complexity), MCP server audit (configured-but-unused, observed-but-missing). Near-duplicate recommendations collapse into one row per `(agent, target, signal)` shape with an occurrence `Count` and metric range. Recommendations for built-in agents (Explore, general-purpose, Plan, code-reviewer, etc.) use concern-specific action text since built-ins have no user-editable config. Each signal routes to a `target` config surface — prompt, tools, model, or mcp — and the recommendation names the file to edit and the specific change to make.
+- **Advanced Tool Use Diagnostics (v0.9)** — Three signals grounded in Anthropic's [Advanced Tool Use](https://www.anthropic.com/engineering/advanced-tool-use) engineering research, each pointing at a specific platform feature that fixes the pattern. `PARAMETER_RETRY` (trace-level): a tool retried with a *changed parameter shape* after a validation error — the agent is guessing at the input format; when a later call succeeds, AgentFluent extracts it as a paste-ready `input_examples` entry (the Tool Use Examples fix lifts complex-parameter accuracy 72%→90%). `TOOL_INVENTORY_OVERSIZED`: an agent declares >30 tools but exercises fewer than half — a tool-selection-accuracy cliff the Tool Search Tool addresses. `TOOL_ORCHESTRATION_CHAIN`: long tool-call chains whose large intermediate results flow through the context window, where Programmatic Tool Calling (`allowed_callers: ["code_execution_20250825"]`) keeps intermediates out of context — shipped at `INFO` with an explicit low-confidence caveat (the metadata-only proxy can't yet distinguish a true chain from an agent that legitimately needs each intermediate; trace-level precision is tracked as [#499](https://github.com/frederick-douglas-pearce/agentfluent/issues/499)).
 - **Quality Axis (v0.6 → v0.8)** — A third diagnostics axis alongside cost and speed, surfacing gaps that look "free" by token math but produce quality debt. Built out in three tiers, each adding a new data source on top of the previous one:
   - **Tier 1 (v0.6, always on with `--diagnostics`)** — JSONL-only signals: `USER_CORRECTION` (parent's mid-flight corrections like "no, do X instead"), `FILE_REWORK` (same file edited at or above the calibrated threshold within a session), and `REVIEWER_CAUGHT` (substantive findings from architect/security-review/tester subagents, with `parent_acted` attribution and a healthy-band interpretation that recognizes legitimate rejection as collaboration, not a defect).
   - **Tier 2 (v0.7, opt-in via `--git`)** — Local-git `FEAT_FIX_PROXIMITY`: pairs `feat:` commits with subsequent `fix:` commits sharing at least 2 code files (`.md`/`.yaml`/`.yml` excluded) and correlates back to whether the originating session used a review-style subagent.
@@ -398,7 +403,7 @@ AgentFluent is designed so data stays on your machine. The attack surface is sma
 | Input validation | Pydantic models with strict type constraints | Malformed JSONL crashing the parser |
 | Safe YAML loading | `yaml.safe_load` only | Arbitrary code execution via frontmatter |
 | CI security review | Claude-powered review when `needs-security-review` label is added | New vulnerabilities |
-| Automated testing | 1500+ unit tests incl. security-focused cases | Regressions |
+| Automated testing | 1600+ unit tests incl. security-focused cases | Regressions |
 
 ### Secrets handling
 
@@ -419,7 +424,7 @@ See [`docs/SECURITY.md`](docs/SECURITY.md) for the full policy: leak vector, def
 - **[Typer](https://typer.tiangolo.com) + [Rich](https://rich.readthedocs.io)** — CLI framework and terminal formatting
 - **[Pydantic v2](https://docs.pydantic.dev)** — data models across module boundaries
 - **[PyYAML](https://pyyaml.org)** — agent definition frontmatter parsing (`safe_load` only)
-- **[pytest](https://pytest.org) + pytest-cov** — 730+ tests
+- **[pytest](https://pytest.org) + pytest-cov** — 1600+ tests
 - **[mypy](https://mypy.readthedocs.io) strict mode** — full type coverage
 - **[ruff](https://docs.astral.sh/ruff/)** — linting and formatting
 - **[uv](https://docs.astral.sh/uv/)** — package and dependency management
@@ -452,7 +457,7 @@ uv run agentfluent --help
 ### Testing
 
 ```bash
-uv run pytest -m "not integration"            # 730+ unit tests (CI default)
+uv run pytest -m "not integration"            # 1600+ unit tests (CI default)
 uv run pytest                                 # Full suite incl. integration tests against your real ~/.claude/projects/
 uv run pytest --cov=agentfluent               # With coverage
 ```
@@ -480,7 +485,7 @@ Five GitHub Actions workflows run automatically:
 
 ## Roadmap
 
-Current release: **v0.8.0 — "Quality Axis: Tier 3"** (Tier 3 GitHub enrichment + dogfood-driven diagnostics hardening). Next: **v0.9** — additional GitHub-derived quality signals on top of the v0.8 infrastructure.
+Current release: **v0.9.0 — "Count Every Turn"** (model-turn metrics across the analytics stack + Advanced Tool Use diagnostics + v0.8 dogfood fixes). Next: **v0.10** — per-turn diagnostic ratios pending dogfood validation, and trace-level precision for the Advanced Tool Use signals.
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full version history (release themes, headline features, design context per release) and [`CHANGELOG.md`](CHANGELOG.md) for the commit-level log. Browse [open issues](https://github.com/frederick-douglas-pearce/agentfluent/issues) for the full backlog.
 
