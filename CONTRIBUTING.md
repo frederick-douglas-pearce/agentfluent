@@ -33,6 +33,24 @@ The CLI entry point is `agentfluent` (via `src/agentfluent/cli/main.py`). Comman
 - `agentfluent analyze --project <slug>` — token/cost/tool/agent analytics + diagnostics
 - `agentfluent config-check` — score agent definitions in `~/.claude/agents/` and `.claude/agents/`
 
+## Claude Code plugins
+
+This repo enables Claude Code plugins via the tracked `.claude/settings.json` (`enabledPlugins`). Enabling a plugin in settings does **not** install it for you — each contributor must install it once, then it activates automatically for this project. If you work on the repo with Claude Code, install the plugins below.
+
+| Plugin | Marketplace | What it does here | How it's configured |
+| --- | --- | --- | --- |
+| `security-guidance` | `claude-plugins-official` | Inline, in-session vulnerability detection. Flags dangerous patterns (e.g. `eval`, `yaml.load`, `pickle.load`) the moment Claude writes them — shifting detection left of the PR-time CI security review. | **Pattern-only** (`ENABLE_CODE_SECURITY_REVIEW=0`): runs the free, deterministic pattern layer only; the token-costing LLM review layers are off. Model pins (`SECURITY_REVIEW_MODEL`, `SG_AGENTIC_MODEL`) default to Sonnet for if/when those layers are enabled. The shared threat model lives in `.claude/claude-security-guidance.md`. |
+
+Install:
+
+```bash
+# inside a Claude Code session
+/plugin install security-guidance@claude-plugins-official
+/reload-plugins   # or restart the session
+```
+
+This is a convenience layer, not a merge gate — the authoritative security check remains the CI workflow (`.github/workflows/security-review.yml`, run via the `needs-security-review` label). See [`docs/SECURITY.md`](docs/SECURITY.md) for the full defense model.
+
 ## Project layout
 
 ```
