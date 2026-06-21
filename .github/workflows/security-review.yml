@@ -48,7 +48,10 @@ jobs:
           custom-security-scan-instructions: |
             AgentFluent is a local-first Python CLI that reads user session data and
             agent definitions from `~/.claude/projects/` and `~/.claude/agents/`.
-            It does NOT make network requests, store credentials, or transmit user data.
+            It stores no credentials and transmits no user data. Its only network
+            egress and subprocess use is the `gh`/`git` CLI (the Tier 3 GitHub-signals
+            feature in `src/agentfluent/github/` and `diagnostics/`), invoked list-form
+            with shell=False; no in-process HTTP client is imported elsewhere.
 
             Attack surfaces to focus on:
             1. JSONL parser (`src/agentfluent/core/parser.py`) — reads arbitrary user
@@ -64,5 +67,9 @@ jobs:
             4. CLI argument parsing (`src/agentfluent/cli/`) — user strings from
                `--project`, `--agent`, `--session` are matched against discovered
                data. Ensure none are passed to shell, subprocess, or eval-like APIs.
+            5. Subprocess/network boundary (`src/agentfluent/github/`,
+               `diagnostics/_git_helpers.py`) — shells out to `gh`/`git`. Verify
+               list-form argv (never shell=True), no f-string/concatenated commands,
+               and that no in-process HTTP client is introduced outside `github/`.
 
             Low priority (non-issues): no web server, no HTML rendering, no webview.
