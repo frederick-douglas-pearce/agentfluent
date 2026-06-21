@@ -1,0 +1,40 @@
+{
+  "_comment": "Project-specific custom patterns for the security-guidance plugin's free pattern layer. Complements (does not duplicate) the 25 built-in rules. Authored from the architect review on issue #524. JSON (not YAML) so the plugin's hook runtime never needs PyYAML. Globs use a leading wildcard because the hook matches against the absolute path with its leading slash stripped (file_path.lstrip('/') in check_patterns), and fnmatch anchors at the start.",
+  "patterns": [
+    {
+      "rule_name": "no-shell-true",
+      "regex": "shell\\s*=\\s*True",
+      "paths": ["*src/agentfluent/*.py"],
+      "exclude_paths": ["*/tests/*"],
+      "reminder": "AgentFluent never invokes a shell. Use list-form subprocess.run([...], shell=False); never shell=True. CLI args (--project/--agent/--session) must not reach a shell."
+    },
+    {
+      "rule_name": "no-dynamic-subprocess-args",
+      "regex": "subprocess\\.(run|Popen|call|check_output|check_call)\\(\\s*f[\"']",
+      "paths": ["*src/agentfluent/*.py"],
+      "exclude_paths": ["*/tests/*"],
+      "reminder": "Pass subprocess args as a list of literals/typed values, never an f-string or string-concatenated command. Building the command from interpolated input reintroduces injection even with shell=False."
+    },
+    {
+      "rule_name": "no-inprocess-http-client",
+      "regex": "(?:^|\\n)\\s*(import|from)\\s+(requests|httpx|urllib\\.request|urllib3|http\\.client|socket|aiohttp|ftplib|smtplib)\\b",
+      "paths": ["*src/agentfluent/*.py"],
+      "exclude_paths": ["*/tests/*", "*src/agentfluent/github/*"],
+      "reminder": "AgentFluent's only network egress is the gh CLI (Tier 3 GitHub signals). Do not import an in-process HTTP client. If you are adding a network feature, route it through the gh subprocess path or open a design discussion first."
+    },
+    {
+      "rule_name": "no-archive-extractall",
+      "substrings": [".extractall(", "tarfile.open(", "zipfile.ZipFile("],
+      "paths": ["*src/agentfluent/*.py"],
+      "exclude_paths": ["*/tests/*"],
+      "reminder": "AgentFluent reads JSONL, never archives. extractall() is a zip-slip / tar-slip path-traversal sink. If you genuinely need extraction, validate every member path stays within the target dir."
+    },
+    {
+      "rule_name": "no-render-secret-shaped-values",
+      "regex": "(print|log(ger)?\\.\\w+|console\\.print)\\([^)]*(api_key|api-key|secret|password)",
+      "paths": ["*src/agentfluent/*.py"],
+      "exclude_paths": ["*/tests/*"],
+      "reminder": "Session transcripts can contain secret-shaped values. Never print/log a variable named api_key/secret/password un-redacted. Redact at the boundary; see docs/SECURITY.md."
+    }
+  ]
+}
