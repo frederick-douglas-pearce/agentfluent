@@ -13,9 +13,13 @@ LLM-backed review layers (end-of-turn diff review and commit/push review).
 ## What AgentFluent is
 
 A local-first Python CLI that reads user session data and agent definitions
-from `~/.claude/projects/` and `~/.claude/agents/`. It does **not** make network
-requests, store credentials, or transmit user data. There is no web server, no
-HTML rendering, and no webview.
+from `~/.claude/projects/` and `~/.claude/agents/`. It stores no credentials and
+transmits no user data, and runs no web server, HTML rendering, or webview. Its
+**only** network egress and subprocess use is the `gh` / `git` CLI (the Tier 3
+GitHub-signals feature in `src/agentfluent/github/` and `diagnostics/`), invoked
+list-form with `shell=False`. No in-process HTTP client
+(`requests`/`httpx`/`urllib`/`socket`) is imported anywhere outside
+`src/agentfluent/github/`.
 
 ## Attack surfaces to focus on
 
@@ -46,9 +50,10 @@ HTML rendering, and no webview.
 
 ## Low priority (typically non-issues here)
 
-No web server, no HTML rendering, no webview, no authentication surface, no
-outbound network calls. Findings that assume a web/network attack surface are
-almost certainly false positives for this project — note them but rank low.
+No web server, no HTML rendering, no webview, no authentication surface. The only
+sanctioned network egress is the `gh` / `git` CLI (`src/agentfluent/github/`,
+`diagnostics/`); findings that assume an in-process HTTP or web attack surface
+elsewhere are almost certainly false positives — note them but rank low.
 
 ## Review checklist
 
