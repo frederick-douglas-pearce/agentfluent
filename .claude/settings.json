@@ -32,5 +32,13 @@
         ]
       }
     ]
+  },
+  "enabledPlugins": {
+    "security-guidance@claude-plugins-official": true
+  },
+  "env": {
+    "ENABLE_CODE_SECURITY_REVIEW": "0",
+    "SECURITY_REVIEW_MODEL": "claude-sonnet-4-6",
+    "SG_AGENTIC_MODEL": "claude-sonnet-4-6"
   }
 }
