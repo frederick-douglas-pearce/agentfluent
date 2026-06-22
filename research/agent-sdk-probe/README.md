@@ -6,15 +6,31 @@ This is **not** part of the published `agentfluent` package.
 
 ## What this is
 
-A ~15-line hello-world Claude Agent SDK script (`probe.py`) that spins up an
-agent, makes **exactly one** tool call (a single `Read` of a synthetic,
-secret-free `fixture.txt`), and exits. The goal is not the agent -- it is to
-learn, **with real bytes on disk**, where the SDK writes its session file and
-what an SDK session looks like, before investing in the representative
-data-generation agent ([#522](https://github.com/frederick-douglas-pearce/agentfluent/issues/522)).
+Two throwaway Claude Agent SDK scripts:
+
+- **`probe.py`** (#518) -- a ~15-line hello-world: spins up an agent, makes
+  **exactly one** tool call (a single `Read` of a synthetic, secret-free
+  `fixture.txt`), and exits. Answered where the SDK writes sessions and what an
+  SDK session looks like.
+- **`agent.py`** (#522) -- the representative **data-generation** agent, chosen
+  purely to maximize the JSONL **format surface** later stories inspect. Its
+  *answer* is irrelevant; we grade the bytes it emits. Three variants:
+
+  | Variant | What it exercises | Run |
+  |---------|-------------------|-----|
+  | `flat` | multi-tool (Glob/Grep/Read/Bash), multi-turn, one natural `is_error: true` | `uv run --group research python research/agent-sdk-probe/agent.py flat` |
+  | `subagent` | forces a delegation -> `<id>/subagents/agent-*.jsonl` + `isSidechain` + `agentId` linkage | `... agent.py subagent` |
+  | `large` | oversized tool result -> `<id>/tool-results/` spill subfolder | `... agent.py large` |
+
+  Each run prints a machine-readable `RESULT variant=... session_id=... file=...`
+  line so #519 can build its config->file manifest mechanically. `agent.py` is a
+  **pure** SDK agent (`setting_sources=[]`, no MCP, web tools disallowed) so its
+  corpus is trivially anonymizable. The synthetic targets live in `sampledata/`
+  (committed; secret-free).
 
 See [`FINDINGS.md`](./FINDINGS.md) for the recorded answers to #112's three open
-questions (location, discriminator, options metadata).
+questions (#518) and the representative-agent format findings (#522: subagent
+layout, parent->child linkage, large-output spill).
 
 ## Dependency isolation
 
@@ -27,11 +43,17 @@ wheel's `Requires-Dist` (no `claude-agent-sdk` entry).
 ## Run
 
 ```bash
+# #518 hello-world probe
 uv run --group research python research/agent-sdk-probe/probe.py
+
+# #522 representative agent -- one variant per run
+uv run --group research python research/agent-sdk-probe/agent.py flat
+uv run --group research python research/agent-sdk-probe/agent.py subagent
+uv run --group research python research/agent-sdk-probe/agent.py large
 ```
 
 Requires an authenticated `claude` CLI on `PATH` (the SDK drives it under the
-hood; `apiKeySource` was `none` in the captured run -- it used the CLI's own
+hood; `apiKeySource` was `none` in the captured runs -- it used the CLI's own
 auth).
 
 ## Corpus is never committed

@@ -115,3 +115,139 @@ captured SDK session.
   this single-call probe).
 - **Downstream parser story (unticketed):** add the three SDK line types to
   `SKIP_TYPES`, version-pinned to SDK 0.2.106.
+
+---
+
+# Representative-agent findings (#522)
+
+Captured from `agent.py` (three variants) on the **same versions pinned above**
+(`claude-agent-sdk==0.2.106`, CLI `2.1.185`, model `claude-haiku-4-5-20251001`).
+The agent is a **pure** SDK agent: `setting_sources=[]`, `mcp_servers={}`,
+`disallowed_tools=["WebFetch","WebSearch"]` -> corpus is trivially anonymizable.
+
+> **`setting_sources=[]` caveat (architect review):** only reliably suppresses
+> `~/.claude` env inheritance on Python SDK > 0.1.59 (older builds treated `[]`
+> as "omitted"). Verified clean on 0.2.106 -- the init event showed no inherited
+> subagents/skills/plugins/MCP. The env-*inheriting* representativeness run is a
+> #519 config-matrix axis, deliberately not captured here.
+
+## Delegation tool is `Agent`, not `Task` (and the init event mislabels it)
+
+The probe's `SystemMessage(init)` advertised `Task` in its `tools` array, but the
+model actually emitted `tool_use` blocks named **`Agent`** (with
+`input.subagent_type`). `Agent` matches CLAUDE.md's documented delegation block,
+so AgentFluent's existing assumption holds. **Takeaway:** key on the emitted
+`tool_use.name == "Agent"`, *not* on the init event's tool list (which advertises
+`Task`). The probe allowed both names to avoid betting wrong.
+
+**Backwards-compat aliasing, not a bug (verified).** With enforced permissions
+(`permission_mode="default"`, `Task` allow-listed but *not* `Agent`), the
+delegation runs with **zero permission denials** -- allow-listing the
+*advertised* name (`Task`) permits the *emitted* `Agent`. So `Task`/`Agent` are
+aliased, almost certainly for backwards compatibility (cf. the TS SDK's
+`Options.toolAliases` and Python SDK request
+`anthropics/claude-agent-sdk-python#980`). **Not worth an upstream bug report**;
+recorded here only as a parser caveat (analysis tools that read `init.tools` must
+map `Task` -> `Agent` when matching emitted `tool_use` blocks).
+
+## Subagent layout -- SDK reproduces Claude Code's, plus a new sidecar
+
+A forced delegation produced, under the parent session dir:
+
+```
+<session-id>/subagents/agent-<agentId>.jsonl        # full child trace
+<session-id>/subagents/agent-<agentId>.meta.json    # NEW sidecar (see below)
+```
+
+- **Child trace matches CC:** `isSidechain: true`, `entrypoint: "sdk-py"`,
+  `userType: "external"`; same `user`/`assistant` schema as the main session.
+- **`.meta.json` sidecar** (`{"agentType","description","toolUseId"}`) -- a CC
+  format evolution (not SDK-specific), **already documented in the
+  `claude-code-sessions` reference** (`reference/subagent-traces.md`,
+  `reference/data-dictionary.md`). It simply postdates agentfluent's CLAUDE.md
+  JSONL snapshot, which should be synced (downstream item below). A parser can
+  use it as a direct `toolUseId -> agentId` map without scanning the parent JSONL.
+- **Parent->child linkage holds three ways** (capture all, per architect):
+  - parent `tool_use.id` (`toolu_...`) == `tool_result.tool_use_id` == sidecar `toolUseId`
+  - `toolUseResult.agentId` (e.g. `a561d5c531c5f37cb`) == the `agent-<agentId>.jsonl` filename
+  - `toolUseResult` also carries `agentType`, `prompt`, `status`, `totalTokens`,
+    `totalToolUseCount`, `totalDurationMs`, `toolStats`, `usage`, **plus a new
+    `resolvedModel`** field (the concrete model the child ran).
+  AgentFluent's existing `agentId` indexing works unchanged.
+
+## Large tool result -- the `tool-results/` spill subfolder
+
+Forcing an oversized Bash result (`seq 1 500000`, ~3.2 MB stdout) triggered the
+spill layout **already documented in `claude-code-sessions`**
+(`reference/data-dictionary.md`) but absent from agentfluent's CLAUDE.md snapshot
+(sync it -- downstream item below):
+
+```
+<session-id>/tool-results/<rand9>.txt    # full output verbatim (3,388,895 bytes)
+```
+
+- The main JSONL line does **not** inline the full output. Instead:
+  - `tool_result.content` becomes a `<persisted-output>` block: a header
+    (`Output too large (3.2MB). Full output saved to: <abs path>`) + a ~2 KB
+    preview + `...`.
+  - `toolUseResult.stdout` is **truncated to 30,000 chars**.
+  - `toolUseResult` gains **`persistedOutputPath`** (absolute path to the spill
+    file) and **`persistedOutputSize`** (full byte count).
+- **Parser implication (downstream):** any content/token analysis that reads
+  `tool_result.content` or `toolUseResult.stdout` sees only a truncated view of
+  large results. To get the full bytes, follow `persistedOutputPath`. AgentFluent
+  does not need full content for current metrics, but a signal that keys on tool
+  *output size* must read `persistedOutputSize`, not `len(stdout)`.
+- **#521 anonymization landmine (architect flagged, now concrete):**
+  `persistedOutputPath` and the `<persisted-output>` header embed an **absolute
+  filesystem path** (`/home/<user>/.claude/projects/<slug>/<id>/tool-results/...`).
+  Fixtures must scrub these before committing. **Solved by the
+  `claude-code-sessions` `ccs-sanitize` tool** -- validated against this corpus:
+  it rewrote the home path *and* the dash-encoded project slug
+  (`-home-<user>-...`) to `/home/user` (15 -> 0 username occurrences). #521
+  fixtures run through `ccs-sanitize` rather than bespoke scrubbing.
+
+## Parser-assumptions delta vs #518
+
+Everything in #518's parser section still holds. New downstream items the
+representative corpus surfaces (documented, not fixed -- per epic scope):
+
+| Artifact | Where | In `claude-code-sessions`? | Parser action (downstream) |
+|---|---|---|---|
+| `agent-<id>.meta.json` sidecar | `<id>/subagents/` | yes (`subagent-traces.md`) | enumerate/skip; optional `toolUseId->agentId` shortcut |
+| `tool-results/<rand>.txt` spill | `<id>/tool-results/` | yes (`data-dictionary.md`) | follow `persistedOutputPath` only if full content needed |
+| `persistedOutputPath`/`persistedOutputSize` | `toolUseResult` | yes | use for output-size signals; absorbed by `extra="ignore"` today |
+| `resolvedModel` | `toolUseResult` | **no (as of 2026-06-22)** | concrete child model; useful for #112 model routing |
+
+The first three are already documented upstream; agentfluent's CLAUDE.md JSONL
+snapshot is simply **stale** and should be synced. `resolvedModel` was **not
+found** in `claude-code-sessions` -- a candidate for a brief issue there (or it
+will surface on a routine format scan).
+
+## Net result for the roadmap
+
+- **#522 AC fully met:** multi-tool/multi-turn run with a natural `is_error`;
+  forced subagent delegation with the `<id>/subagents/` layout + `agentId`
+  linkage confirmed; large-output spill subfolder captured; no MCP/network/secret
+  surface; SDK version pinned; variants documented in the README; SDK dep stays
+  dev-only.
+- **#519 (corpus matrix)** can drive `agent.py` repeatably -- each run emits a
+  `RESULT ...` manifest line. Suggested added axes: an env-*inheriting* run
+  (`setting_sources` populated) and a non-default `model`.
+- **#520/#521 (diff + fixtures)** inherit a concrete, version-pinned list of
+  format deltas (above) and the explicit anonymization landmine (absolute paths
+  in persisted-output references), now solved via `ccs-sanitize`.
+
+## Upstream / cross-repo follow-ups
+
+- **Sync agentfluent's CLAUDE.md JSONL snapshot** with the three artifacts above
+  (subagent `.meta.json` sidecar, `tool-results/` spill, `persistedOutputPath`/
+  `persistedOutputSize`). They are documented in `claude-code-sessions` but the
+  agentfluent reference predates them. Downstream doc task, not this epic.
+- **`resolvedModel`** on `toolUseResult` is not yet in `claude-code-sessions` --
+  candidate for a brief format-watch issue there.
+- **Fixture anonymization (#521)** uses `claude-code-sessions`' `ccs-sanitize`
+  CLI (validated here). It is a standalone tool invoked ad-hoc against captured
+  corpus files; agentfluent does **not** take it as a packaged dependency (it is
+  an unpublished sibling-repo CLI, and a local-path dep would break
+  reproducibility for CI/other contributors).
