@@ -1,0 +1,7 @@
+AgentFluent Agent SDK probe fixture.
+
+This file exists only so the probe agent has a known, synthetic, secret-free
+file to Read in a single tool call. Its contents are intentionally boring so the
+captured SDK session is trivially safe to inspect and (later) anonymize.
+
+The magic string the probe asks the agent to echo back: PROBE-OK-518
