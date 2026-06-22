@@ -53,6 +53,9 @@ dev = [
     "matplotlib>=3.8",
     "pandas>=2.0",
 ]
+research = [
+    "claude-agent-sdk>=0.2.106",
+]
 
 [build-system]
 requires = ["hatchling>=1.27,<2"]
