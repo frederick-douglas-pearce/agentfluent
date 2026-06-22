@@ -1,0 +1,6 @@
+id,tool,turns,is_error
+1,Read,2,false
+2,Grep,1,false
+3,Glob,1,false
+4,Bash,3,true
+5,Task,2,false

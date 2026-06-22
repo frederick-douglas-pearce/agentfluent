@@ -1,0 +1,12 @@
+Project notes for the Agent SDK data-generation agent (#522).
+
+These files are synthetic and secret-free. They exist only to give the
+representative SDK agent real targets for Read / Grep / Glob / Bash so the
+captured JSONL exercises a realistic tool-use surface.
+
+MARKER: the agent is asked to grep for this line.
+
+Roadmap thoughts:
+- the corpus must be trivially anonymizable
+- no network, no MCP, no real credentials anywhere
+- the agent's answer does not matter; only the bytes it emits matter
