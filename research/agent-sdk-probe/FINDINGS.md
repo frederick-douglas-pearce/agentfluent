@@ -242,8 +242,10 @@ will surface on a routine format scan).
 
 - **Sync agentfluent's CLAUDE.md JSONL snapshot** with the three artifacts above
   (subagent `.meta.json` sidecar, `tool-results/` spill, `persistedOutputPath`/
-  `persistedOutputSize`). They are documented in `claude-code-sessions` but the
-  agentfluent reference predates them. Downstream doc task, not this epic.
+  `persistedOutputSize`) **plus the four line types missing from "Types to skip"**
+  (`queue-operation`, `attachment`, `last-prompt`, `ai-title` -- see #519 below).
+  Tracked in [#528](https://github.com/frederick-douglas-pearce/agentfluent/issues/528)
+  so all CLAUDE.md updates land in one pass. Downstream doc task, not this epic.
 - **`resolvedModel`** on `toolUseResult` is not yet in `claude-code-sessions` --
   candidate for a brief format-watch issue there.
 - **Fixture anonymization (#521)** uses `claude-code-sessions`' `ccs-sanitize`
@@ -251,3 +253,106 @@ will surface on a routine format scan).
   corpus files; agentfluent does **not** take it as a packaged dependency (it is
   an unpublished sibling-repo CLI, and a local-path dep would break
   reproducibility for CI/other contributors).
+
+---
+
+# Corpus matrix findings (#519)
+
+Captured by `run_matrix.py` on the **same versions pinned above**
+(`claude-agent-sdk==0.2.106`, CLI `2.1.185`, captured 2026-06-22). The runner
+drives `agent.py` across a 3-run matrix (one axis toggled per run -- the
+cross-product is gold-plating, per architect review), copies each run's raw
+session file(s) out of `~/.claude/projects/<slug>/` into the gitignored
+`corpus/`, and writes `corpus/manifest.json` (the config->file index #520
+consumes).
+
+| run | variant  | main model | subagent model | isolates |
+|-----|----------|------------|----------------|----------|
+| a | `flat` | haiku | -- | full `tool_use` / error surface |
+| b | `subagent` | **sonnet** | **haiku** | delegation + parent!=child model |
+| c | `flat` | sonnet | -- | model recording (2nd model value) |
+
+Satisfies the ACs: >=1 delegation run (b) + 2 without (a, c); 2 distinct models
+(haiku, sonnet). Variant 1 (#518 hello-world) and the #522 `large` spill are not
+re-run -- they are carried as `pre_existing` manifest entries so the manifest is
+the single index of all SDK corpus.
+
+## Model divergence is recorded three ways (the #112 artifact)
+
+Run (b) ran a **sonnet parent delegating to a haiku child** -- a genuine
+divergence sample. The split is recoverable from the bytes, three independent
+ways:
+
+- parent `message.model` on every assistant line == `claude-sonnet-4-6`
+- child trace `message.model` == `claude-haiku-4-5-20251001`
+- **`toolUseResult.resolvedModel` == the *child's* resolved model**
+  (`claude-haiku-4-5-20251001`), i.e. `resolvedModel` reports what the *subagent*
+  ran, not the parent. So #112 model-routing can verify a configured
+  `subagent_model` against `resolvedModel` with no JSONL cross-referencing. The
+  subagent model **must** be a threaded, recorded input for this to work -- it is
+  (architect-flagged; `agent.py` no longer hardcodes the child model).
+
+## Line type `ai-title` -- another stale-snapshot type, not a novel find
+
+The richer multi-turn sessions surfaced a line type the #518 single-call probe
+did not exercise: **`ai-title`** (`{"type","sessionId","aiTitle"}` -- the
+auto-generated session title). Like the `.meta.json` sidecar and the
+`tool-results/` spill, it is **already documented upstream in
+`claude-code-sessions`** (`reference/data-dictionary.md`,
+`reference/subagent-traces.md`) -- agentfluent's CLAUDE.md snapshot is simply
+stale, not missing a new discovery. The same is true of the three #518 already
+found absent from `SKIP_TYPES` (`queue-operation`, `attachment`, `last-prompt`):
+all four are upstream-documented. All four:
+
+- **do not crash the production parser** -- they fall through to the `else` branch
+  and are debug-logged as "Unknown message type" (verified: `parse_session` ran on
+  all three new sessions, 0 crashes).
+- should be added to `SKIP_TYPES` (`session.py`) **and** to CLAUDE.md's
+  "Types to skip" list. The CLAUDE.md doc edit is folded into
+  [#528](https://github.com/frederick-douglas-pearce/agentfluent/issues/528); the
+  `SKIP_TYPES` code change is a separate downstream parser item (unticketed, noted
+  in #518).
+
+**No *new persisted* `user`/`assistant` format fields** beyond what #522 already
+recorded -- #519 widens line-type and model coverage, it does not surface new
+`toolUseResult`/message schema.
+
+## Manifest schema (`corpus/manifest.json`, gitignored)
+
+Per architect review, each run entry carries enough to correlate format deltas to
+inputs **and** to hand #521 a scrub worklist:
+
+- `variant`, `main_model`, `subagent_model`, `session_id`
+- `source_jsonl` (absolute) **and** `corpus_jsonl` (corpus-relative) -- both paths
+- `sdk_version`, `cli_version` (read from the trace's `version` field), `prompt`,
+  and the full `config` snapshot (`allowed_tools`, `disallowed_tools`,
+  `setting_sources`, `permission_mode`, `max_turns`, `cwd`, `agents`)
+- `subagent_files` / `tool_results_files` lists
+- `files[]`: per-file `sha256`, `bytes`, `lines`, and a **`contains_abs_paths`**
+  flag (true when the real home path or dash-slug appears in the bytes -- #521's
+  mechanical scrub worklist). Observed: every `.jsonl` (main + child) is `true`;
+  the `.meta.json` sidecar is `false`.
+- `init`: the runtime-only `SystemMessage(init)` payload (keys include `tools`,
+  `mcp_servers`, `agents`, `skills`, `plugins`, `permissionMode`, `cwd`,
+  `apiKeySource`, `model`) -- the only place the non-model options surface, since
+  they are **not** persisted to the JSONL (reaffirms #518 Q3). With
+  `setting_sources=[]` the `agents`/`skills`/`plugins`/`mcp_servers` lists are
+  empty -- the pure-SDK isolation holds on 0.2.106.
+
+A **completeness post-condition** guards the copy: a `subagent` run that yields no
+`subagents/*.jsonl` raises rather than writing a misleading (empty-child) manifest
+entry. The copy runs after the subprocess exits, so the lazily-created sibling
+dirs are fully flushed.
+
+## Net result for the roadmap
+
+- **#519 AC met:** raw corpus across the matrix exists under the gitignored
+  `corpus/`; >=1 delegation + 2 non-delegation runs; 2 models; every file's
+  on-disk location recorded; `manifest.json` maps config -> file for #520.
+- **#520 (diff)** inherits the manifest as its correlation key and a confirmed
+  model-divergence sample.
+- **#521 (fixtures)** inherits the `contains_abs_paths` worklist (every `.jsonl`
+  needs scrubbing; `ccs-sanitize` already validated in #522).
+- **#528 (CLAUDE.md sync)** gains the four upstream-documented skip-types
+  (`ai-title`, `queue-operation`, `attachment`, `last-prompt`) for the
+  "Types to skip" list -- same stale-snapshot category as meta.json/spill.
