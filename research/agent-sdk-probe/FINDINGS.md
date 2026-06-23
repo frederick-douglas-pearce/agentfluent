@@ -356,3 +356,107 @@ dirs are fully flushed.
 - **#528 (CLAUDE.md sync)** gains the four upstream-documented skip-types
   (`ai-title`, `queue-operation`, `attachment`, `last-prompt`) for the
   "Types to skip" list -- same stale-snapshot category as meta.json/spill.
+
+---
+
+# Nested (multi-level) subagent findings (#530)
+
+Captured by `agent.py nested` on the **same versions pinned above**
+(`claude-agent-sdk==0.2.106`, CLI `2.1.185`). The `nested` variant runs
+`main -> delegator -> leaf-summarizer`: the middle agent is granted the
+`Agent`/`Task` tool so it can itself delegate. Claude Code forbids subagents from
+delegating, so this layout is **unobservable there** -- the SDK is the only way
+to learn how a second-level trace is recorded. This resolves the last open layout
+question (also `claude-code-sessions` `reference/subagent-traces.md` **open-item
+#1**: flat-with-reconstruction vs nested `subagents/<id>/subagents/...`).
+
+> **Validated against a realistic middle agent.** A first pass used a
+> delegate-only middle agent; a second pass made the middle agent do its own
+> `Grep`/`Bash`/`Read` work *before* delegating. Both passes gave the same
+> conclusions, ruling out the "degenerate delegate-only agent" confound on
+> finding 5.
+
+## 1. The layout is FLAT (open-item #1: resolved)
+
+Every subagent, **at every depth**, is a sibling file under one `subagents/` dir:
+
+```
+<session-id>/subagents/agent-<delegatorId>.jsonl   # level 1
+<session-id>/subagents/agent-<delegatorId>.meta.json
+<session-id>/subagents/agent-<leafId>.jsonl        # level 2 -- SAME folder
+<session-id>/subagents/agent-<leafId>.meta.json
+```
+
+There are **no** nested `subagents/<agentId>/subagents/...` directories. This
+confirms the production parser's existing flat, non-recursive
+`discover_session_subagents()` is **correct** for nesting, not lucky -- a deeper
+chain just yields more siblings. `sessionId` is shared across all levels;
+`entrypoint: sdk-py` throughout.
+
+## 2. Parent linkage is by-data, not by-path
+
+The directory shape carries **no** depth information. The call tree is
+reconstructed from the bytes:
+
+- Each subagent's `.meta.json` sidecar carries `toolUseId` -- the `Agent`
+  `tool_use` that spawned it.
+- That `tool_use` is emitted **in the parent's trace**. The grandchild's
+  spawning `toolUseId` was found in the *delegator's* trace file, not the main
+  session. So: index `tool_use.id -> (containing_trace, agentId)` across **all**
+  files, then resolve each child's `meta.toolUseId` into that index. Parent =
+  "the agent whose trace emitted my spawning `tool_use`."
+- `attributionAgent` is the agent's **own** type name (a self-label, not a parent
+  pointer); `sourceToolAssistantUUID` / `parentUuid` are **intra-file** message
+  threading only. None of them is a cross-file parent link.
+
+> **Downstream linker note:** the existing single-level linker (#105) assumes
+> parent == main session. A multi-level linker must do the cross-file
+> `toolUseId` join above and gains an optional derived `parent_invocation_id`
+> (None = root). Getting the join wrong silently flattens a 3-level tree to 2.
+
+## 3. Rollup metadata (`toolUseResult`) is top-level only
+
+The rich `toolUseResult` object (`totalTokens`, `totalToolUseCount`,
+`resolvedModel`, ...) is attached **only** on the main session's user message
+carrying a *level-1* result. At depth >= 2 the spawning `Agent` `tool_result`
+block has **no** `toolUseResult` sibling -- only an inline `subagent_tokens: N`
+text trailer. Clean same-session contrast (realistic-middle-agent pass):
+
+| Spawn | Where the `tool_result` lives | `toolUseResult`? |
+|---|---|---|
+| main -> worker (level 1) | main `<session-id>.jsonl` | **yes** (`totalTokens=11486`, `totalToolUseCount=5`) |
+| worker -> leaf (level 2) | `agent-<workerId>.jsonl` | **no** |
+
+**Parser implication (downstream):** grandchild-level metrics cannot be read off
+the parent's `toolUseResult` the way level-1 metrics can -- they must be derived
+from the grandchild's own trace (or the inline trailer).
+
+## 4. Counter / token semantics
+
+- `totalToolUseCount` is **own-direct, not cumulative**: the worker reported `5`
+  (its `Grep, Grep, Bash, Read, Agent` calls) and **excluded** the leaf's `Read`.
+- `totalTokens` reads as **cumulative/inclusive** of descendants *directionally*
+  (delegate-only pass: the middle agent did negligible direct work yet reported
+  5495 vs the leaf's ~3925), but the figure differs from a raw usage sum (cache
+  accounting). **Noted residual:** settle the exact inclusivity formula against
+  this corpus before the multi-level linker double-counts tokens.
+
+## Fixture
+
+An anonymized, hand-crafted version of this layout is committed at
+`tests/fixtures/nested_session/` (parent + 2 sibling traces + 2 `.meta.json`
+sidecars) and locked by `tests/unit/test_traces_nested_fixture.py`. It encodes
+findings 1-3 as executable assertions for the downstream linker work.
+
+## Net result for the roadmap
+
+- **Open-item #1 resolved:** SDK nested delegation records a **flat** layout;
+  reconstruct the tree from `toolUseId`, never from path shape. Worth feeding
+  back to the `claude-code-sessions` reference (upstream contribution is out of
+  scope per #517).
+- **Downstream (separate stories, not #517 -- discovery-only):** a multi-level
+  trace-to-invocation linker (cross-file `toolUseId` join + `parent_invocation_id`
+  + the token-inclusivity decision), and a regression test that
+  `discover_session_subagents()` ignores `.meta.json` sidecars.
+- The `.meta.json` sidecar itself is already in the #528 CLAUDE.md-sync scope
+  (documented in the #522 section above) -- no new docs issue needed.

@@ -20,6 +20,17 @@ Three variants:
                  whether the SDK spills large tool output to a separate on-disk
                  location (the "tool output subfolder") and how the JSONL line
                  references it.
+* ``nested``   -- main -> ``delegator`` subagent (granted the Agent/Task tool) ->
+                 ``leaf-summarizer`` sub-subagent, i.e. agent->subagent->subagent.
+                 Claude Code forbids subagents from delegating, so this layout is
+                 unobservable there; the SDK permits nesting (depth cap 5), making
+                 this the only way to learn how a second-level trace is recorded.
+                 Open question (claude-code-sessions ref, open item #1): does the
+                 grandchild trace land FLAT in ``<id>/subagents/agent-*.jsonl``
+                 alongside the child, or NESTED under
+                 ``<id>/subagents/<child>/subagents/...``, and what field carries
+                 the child->grandchild parent link? This variant emits the bytes
+                 that answer it.
 
 Pure SDK agent: ``setting_sources=[]`` (no inherited config/MCP/skills/agents),
 no MCP servers, web tools disallowed -> corpus is trivially anonymizable. The
@@ -88,6 +99,30 @@ filtering -- the full multi-megabyte output must come back as the tool result:
 seq 1 500000
 After it runs, reply with just the word DONE."""
 
+# Two-layer delegation: main delegates to 'delegator', which must itself delegate
+# to 'leaf-summarizer'. The middle prompt is explicit that it may NOT read the
+# file itself -- it has to spawn the leaf -- so the trace exercises a genuine
+# child->grandchild invocation, not just the middle agent doing the work.
+NESTED_PROMPT = """\
+Delegate to the 'delegator' subagent and ask it to produce a summary of the file
+sampledata/notes.txt. Report whatever the 'delegator' subagent returns, verbatim."""
+
+# A REALISTIC middle agent: it does its own tool work (Grep/Bash/Read, including
+# one natural error) AND delegates a sub-task to the leaf. This is the case the
+# trivial delegate-only middle agent could not validate -- we need a level-1
+# subagent whose trace contains BOTH its own tool_result blocks and an Agent-spawn
+# tool_result, to test whether the leaf-spawn result carries a `toolUseResult`
+# rollup at depth >= 2 (or whether rollup metadata is genuinely top-level-only).
+DELEGATOR_PROMPT = """\
+You are a research worker. Do these steps in order, one tool call at a time:
+1. Grep for the line containing 'MARKER' in sampledata/notes.txt.
+2. Run Bash: wc -l sampledata/does-not-exist.txt (intentionally missing -- note
+   the error and continue).
+3. Read sampledata/data.csv.
+Then delegate to the 'leaf-summarizer' subagent: ask it to summarize the file
+sampledata/notes.txt. Finally, reply with a short report that combines your own
+findings from steps 1-3 with the leaf-summarizer's summary."""
+
 def make_summarizer(model: str) -> AgentDefinition:
     # The subagent's model is a #519 matrix axis, NOT a frozen constant -- the
     # child's `toolUseResult.resolvedModel` is the #112 model-routing artifact, so
@@ -104,7 +139,28 @@ def make_summarizer(model: str) -> AgentDefinition:
     )
 
 
-PROMPTS = {"flat": FLAT_PROMPT, "subagent": SUBAGENT_PROMPT, "large": LARGE_PROMPT}
+def make_delegator(model: str) -> AgentDefinition:
+    # The middle agent of the nested chain. It is granted the delegation tool
+    # (Task/Agent) -- the property Claude Code subagents lack -- so it can spawn
+    # the leaf. Whether the SDK actually honors a subagent's delegation tool is
+    # itself part of what this variant verifies.
+    return AgentDefinition(
+        description="Researches a file with its own tools, then delegates a summary.",
+        prompt=DELEGATOR_PROMPT,
+        # Realistic mix: own work tools + the delegation tool (renamed across CLI
+        # versions, so allow both). The middle agent must be able to BOTH act and
+        # delegate for finding #5 to be validly tested.
+        tools=["Read", "Grep", "Bash", "Task", "Agent"],
+        model=model,
+    )
+
+
+PROMPTS = {
+    "flat": FLAT_PROMPT,
+    "subagent": SUBAGENT_PROMPT,
+    "large": LARGE_PROMPT,
+    "nested": NESTED_PROMPT,
+}
 
 
 def build_options(
@@ -117,6 +173,15 @@ def build_options(
     if variant == "subagent":
         allowed += ["Task", "Agent"]  # tool renamed across CLI versions; allow both
         agents = {"file-summarizer": make_summarizer(subagent_model)}
+    elif variant == "nested":
+        allowed += ["Task", "Agent"]  # main must be able to spawn 'delegator'
+        # Both nested agents share the subagent_model so the chain is a single
+        # controllable model axis. 'delegator' is granted the delegation tool;
+        # 'leaf-summarizer' is the grandchild that does the actual Read.
+        agents = {
+            "delegator": make_delegator(subagent_model),
+            "leaf-summarizer": make_summarizer(subagent_model),
+        }
     options = ClaudeAgentOptions(
         model=model,
         allowed_tools=allowed,
@@ -173,7 +238,7 @@ async def run_one(variant: str, model: str, subagent_model: str) -> dict:
     return {
         "variant": variant,
         "main_model": model,
-        "subagent_model": subagent_model if variant == "subagent" else None,
+        "subagent_model": subagent_model if variant in ("subagent", "nested") else None,
         "session_id": session_id,
         "source_jsonl": str(resolved_path(session_id)),
         "prompt": PROMPTS[variant],
@@ -198,7 +263,7 @@ if __name__ == "__main__":
     args = sys.argv[1:]
     variant = args[0] if args else "flat"
     if variant not in PROMPTS:
-        sys.exit("usage: agent.py [flat|subagent|large] [model] [subagent_model]")
+        sys.exit("usage: agent.py [flat|subagent|large|nested] [model] [subagent_model]")
     cli_model = args[1] if len(args) > 1 else MODEL
     cli_subagent_model = args[2] if len(args) > 2 else cli_model
     asyncio.run(main(variant, cli_model, cli_subagent_model))

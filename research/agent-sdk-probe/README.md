@@ -21,6 +21,7 @@ Three throwaway Claude Agent SDK scripts:
   | `flat` | multi-tool (Glob/Grep/Read/Bash), multi-turn, one natural `is_error: true` | `uv run --group research python research/agent-sdk-probe/agent.py flat` |
   | `subagent` | forces a delegation -> `<id>/subagents/agent-*.jsonl` + `isSidechain` + `agentId` linkage | `... agent.py subagent` |
   | `large` | oversized tool result -> `<id>/tool-results/` spill subfolder | `... agent.py large` |
+  | `nested` | `main -> delegator -> leaf` (middle agent granted the `Agent` tool) -> validates the **flat** multi-level `subagents/` layout + by-data linkage (#530) | `... agent.py nested` |
 
   Each run prints a human `RESULT ...` line and a machine-readable `RESULT_JSON
   {...}` line so `run_matrix.py` can build the config->file manifest mechanically.
@@ -77,6 +78,7 @@ uv run --group research python research/agent-sdk-probe/probe.py
 uv run --group research python research/agent-sdk-probe/agent.py flat
 uv run --group research python research/agent-sdk-probe/agent.py subagent
 uv run --group research python research/agent-sdk-probe/agent.py large
+uv run --group research python research/agent-sdk-probe/agent.py nested
 
 # #519 full corpus matrix (runs agent.py x3, writes corpus/manifest.json)
 uv run --group research python research/agent-sdk-probe/run_matrix.py
