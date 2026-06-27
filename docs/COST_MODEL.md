@@ -11,16 +11,16 @@ This file keeps only what is **AgentFluent-specific**: how our pricing implement
 
 AgentFluent prices sessions on top of [pydantic/genai-prices](https://github.com/pydantic/genai-prices) (MIT). For Anthropic it models only `input_mtok`, `output_mtok`, `cache_read_mtok`, a single `cache_write_mtok` (5m-equivalent), context-length `tiers`, and dated `constraint`s. The levers it does **not** model — which AgentFluent must supply via a local pricing overlay, and/or request upstream — are our coverage ledger:
 
-| Gap | Cost impact for users | Status |
-|---|---|---|
-| 1-hour cache write (2×) | **High** (commonly the dominant TTL) | Local overlay — #534 |
-| Fast mode premium rates | High *if used* | Local overlay |
-| Batch (0.5×) / Priority tier | Medium | Local overlay |
-| Data residency US (1.1×) | Low–Medium | Local overlay |
-| Web search ($10 / 1k) | Medium *if used* | Local overlay (counts present in JSONL) |
-| Code execution ($/hr) | Partial (duration not in single-session JSONL) | Document limitation; surface count |
+| Gap | Cost impact for users | Local status | Upstream (genai-prices) |
+|---|---|---|---|
+| 1-hour cache write (2×) | **High** (commonly the dominant TTL) | Overlay — #534 | [pydantic/genai-prices#295](https://github.com/pydantic/genai-prices/issues/295) (shape proposed, PR offered) |
+| Fast mode premium rates | High *if used* | Overlay | [pydantic/genai-prices#429](https://github.com/pydantic/genai-prices/issues/429) (filed) |
+| Batch (0.5×) / Priority tier | Medium | Overlay | [pydantic/genai-prices#429](https://github.com/pydantic/genai-prices/issues/429) (filed) |
+| Data residency US (1.1×) | Low–Medium | Overlay | [pydantic/genai-prices#429](https://github.com/pydantic/genai-prices/issues/429) (filed) |
+| Web search ($10 / 1k) | Medium *if used* | Overlay (counts present in JSONL) | [pydantic/genai-prices#288](https://github.com/pydantic/genai-prices/pull/288) (PR in flight — retire overlay once merged + pin bumped) |
+| Code execution ($/hr) | Partial (duration not in single-session JSONL) | Document limitation; surface count | not modeled |
 
-The rates, multipliers, and field mappings behind this table are in the canonical doc; this is only AgentFluent's coverage status against it.
+The rates, multipliers, and field mappings behind this table are in the canonical doc; this is only AgentFluent's coverage status against it. The **Upstream** column tracks getting each lever modeled in the shared dataset — as those land and we bump the pinned genai-prices slice, the matching local overlay can be retired.
 
 ---
 
