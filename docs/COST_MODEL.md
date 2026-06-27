@@ -13,7 +13,7 @@ AgentFluent prices sessions on top of [pydantic/genai-prices](https://github.com
 
 | Gap | Cost impact for users | Local status | Upstream (genai-prices) |
 |---|---|---|---|
-| 1-hour cache write (2×) | **High** (commonly the dominant TTL) | Overlay — #534 | [pydantic/genai-prices#295](https://github.com/pydantic/genai-prices/issues/295) (shape proposed, PR offered) |
+| 1-hour cache write (2×) | **High** (commonly the dominant TTL) | Overlay — landed (#534): parser splits `usage.cache_creation` into 5m/1h, priced separately | [pydantic/genai-prices#295](https://github.com/pydantic/genai-prices/issues/295) (shape proposed, PR offered) |
 | Fast mode premium rates | High *if used* | Overlay | [pydantic/genai-prices#429](https://github.com/pydantic/genai-prices/issues/429) (filed) |
 | Batch (0.5×) / Priority tier | Medium | Overlay | [pydantic/genai-prices#429](https://github.com/pydantic/genai-prices/issues/429) (filed) |
 | Data residency US (1.1×) | Low–Medium | Overlay | [pydantic/genai-prices#429](https://github.com/pydantic/genai-prices/issues/429) (filed) |

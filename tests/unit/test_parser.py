@@ -497,6 +497,94 @@ class TestToolUseResultOnUserMessage:
         assert by_id["toolu_missing"].is_error is None
 
 
+class TestCacheCreationTtlSplit:
+    """#534: the parser reconciles `usage.cache_creation` into 5m/1h buckets,
+    keeping `cache_creation_input_tokens` (the sum) authoritative."""
+
+    def _write_assistant(self, tmp_path: Path, usage: dict) -> Path:
+        path = tmp_path / "session.jsonl"
+        line = {
+            "type": "assistant",
+            "message": {
+                "model": "claude-opus-4-6",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "hi"}],
+                "usage": usage,
+            },
+            "timestamp": "2026-04-14T08:00:00.000Z",
+        }
+        path.write_text(json.dumps(line) + "\n")
+        return path
+
+    def test_subobject_present_splits_5m_and_1h(self, tmp_path: Path) -> None:
+        path = self._write_assistant(
+            tmp_path,
+            {
+                "input_tokens": 3,
+                "output_tokens": 2,
+                "cache_creation_input_tokens": 19117,
+                "cache_read_input_tokens": 100,
+                "cache_creation": {
+                    "ephemeral_5m_input_tokens": 117,
+                    "ephemeral_1h_input_tokens": 19000,
+                },
+            },
+        )
+        usage = parse_session(path)[0].usage
+        assert usage is not None
+        assert usage.cache_creation_input_tokens == 19117
+        assert usage.cache_creation_5m_input_tokens == 117
+        assert usage.cache_creation_1h_input_tokens == 19000
+
+    def test_1h_only(self, tmp_path: Path) -> None:
+        path = self._write_assistant(
+            tmp_path,
+            {
+                "cache_creation_input_tokens": 5000,
+                "cache_creation": {
+                    "ephemeral_5m_input_tokens": 0,
+                    "ephemeral_1h_input_tokens": 5000,
+                },
+            },
+        )
+        usage = parse_session(path)[0].usage
+        assert usage is not None
+        assert usage.cache_creation_5m_input_tokens == 0
+        assert usage.cache_creation_1h_input_tokens == 5000
+
+    def test_subobject_absent_falls_back_to_5m(self, tmp_path: Path) -> None:
+        # Legacy sessions: no `cache_creation` sub-object -> whole sum is 5m.
+        path = self._write_assistant(
+            tmp_path,
+            {"cache_creation_input_tokens": 8000},
+        )
+        usage = parse_session(path)[0].usage
+        assert usage is not None
+        assert usage.cache_creation_input_tokens == 8000
+        assert usage.cache_creation_5m_input_tokens == 8000
+        assert usage.cache_creation_1h_input_tokens == 0
+
+    def test_partial_subobject_residual_to_5m(self, tmp_path: Path) -> None:
+        # Sub-object accounts for less than the total: residual goes to 5m,
+        # preserving 5m + 1h == cache_creation_input_tokens.
+        path = self._write_assistant(
+            tmp_path,
+            {
+                "cache_creation_input_tokens": 1000,
+                "cache_creation": {"ephemeral_1h_input_tokens": 600},
+            },
+        )
+        usage = parse_session(path)[0].usage
+        assert usage is not None
+        assert usage.cache_creation_1h_input_tokens == 600
+        assert usage.cache_creation_5m_input_tokens == 400
+        assert (
+            usage.cache_creation_5m_input_tokens
+            + usage.cache_creation_1h_input_tokens
+            == usage.cache_creation_input_tokens
+        )
+
+
 class TestTimestamps:
     def test_timestamps_parsed(self, basic_session_path: Path) -> None:
         messages = parse_session(basic_session_path)

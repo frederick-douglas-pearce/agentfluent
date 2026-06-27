@@ -36,16 +36,24 @@ def _assistant(
     output_tokens: int = 50,
     cache_creation: int = 0,
     cache_read: int = 0,
+    cache_creation_1h: int = 0,
 ) -> SessionMessage:
-    """Helper to create an assistant message with usage."""
+    """Helper to create an assistant message with usage.
+
+    ``cache_creation`` is treated as 5-minute writes (the parser's
+    fallback); pass ``cache_creation_1h`` for 1-hour writes. The
+    authoritative total is their sum.
+    """
     return SessionMessage(
         type="assistant",
         model=model,
         usage=Usage(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
-            cache_creation_input_tokens=cache_creation,
+            cache_creation_input_tokens=cache_creation + cache_creation_1h,
             cache_read_input_tokens=cache_read,
+            cache_creation_5m_input_tokens=cache_creation,
+            cache_creation_1h_input_tokens=cache_creation_1h,
         ),
         content_blocks=[ContentBlock(type="text", text="response")],
     )
@@ -158,6 +166,30 @@ class TestCostComputation:
         # Sonnet: 1M * 3/1M = 3.0, Opus 4.6: 1M * 5/1M = 5.0
         assert abs(metrics.total_cost - 8.0) < 0.001
         assert len(metrics.by_model) == 2
+
+    def test_cache_write_1h_priced_above_5m(self) -> None:
+        # #534: a session whose writes are all 1h costs 2x base, not 1.25x.
+        # Opus 4.6: 1M 1h writes -> 10.0; the old (all-5m) path billed 6.25.
+        messages = [_assistant(
+            model="claude-opus-4-6",
+            input_tokens=0, output_tokens=0,
+            cache_creation_1h=1_000_000,
+        )]
+        metrics = compute_token_metrics(messages)
+        assert metrics.cache_creation_input_tokens == 1_000_000
+        assert abs(metrics.total_cost - 10.0) < 0.001
+
+    def test_cache_write_mixed_ttl_cost(self) -> None:
+        # #534: 5m and 1h buckets each billed at their own rate.
+        messages = [_assistant(
+            model="claude-opus-4-6",
+            input_tokens=0, output_tokens=0,
+            cache_creation=1_000_000,       # 5m -> 6.25
+            cache_creation_1h=1_000_000,    # 1h -> 10.0
+        )]
+        metrics = compute_token_metrics(messages)
+        assert metrics.cache_creation_input_tokens == 2_000_000
+        assert abs(metrics.total_cost - 16.25) < 0.001
 
 
 class TestSyntheticFiltering:
@@ -279,6 +311,7 @@ def _trace(
     output_tokens: int = 0,
     cache_creation: int = 0,
     cache_read: int = 0,
+    cache_creation_1h: int = 0,
 ) -> SubagentTrace:
     return SubagentTrace(
         agent_id="ag",
@@ -288,8 +321,10 @@ def _trace(
         usage=Usage(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
-            cache_creation_input_tokens=cache_creation,
+            cache_creation_input_tokens=cache_creation + cache_creation_1h,
             cache_read_input_tokens=cache_read,
+            cache_creation_5m_input_tokens=cache_creation,
+            cache_creation_1h_input_tokens=cache_creation_1h,
         ),
     )
 

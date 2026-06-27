@@ -14,12 +14,22 @@ from pydantic import BaseModel, Field
 
 
 class Usage(BaseModel):
-    """Token usage from an assistant message."""
+    """Token usage from an assistant message.
+
+    ``cache_creation_input_tokens`` is the authoritative total of cache-write
+    tokens (used by ``total_tokens`` and all display/efficiency math). The
+    ``5m``/``1h`` fields are the TTL split of that total, supplied by the
+    parser from ``usage.cache_creation`` for cost attribution (see #534). The
+    parser enforces ``5m + 1h == cache_creation_input_tokens`` (residual to
+    5m), so summing either form gives the same total.
+    """
 
     input_tokens: int = 0
     output_tokens: int = 0
     cache_creation_input_tokens: int = 0
     cache_read_input_tokens: int = 0
+    cache_creation_5m_input_tokens: int = 0
+    cache_creation_1h_input_tokens: int = 0
 
     @property
     def total_tokens(self) -> int:
@@ -39,6 +49,14 @@ class Usage(BaseModel):
             ),
             cache_read_input_tokens=(
                 self.cache_read_input_tokens + other.cache_read_input_tokens
+            ),
+            cache_creation_5m_input_tokens=(
+                self.cache_creation_5m_input_tokens
+                + other.cache_creation_5m_input_tokens
+            ),
+            cache_creation_1h_input_tokens=(
+                self.cache_creation_1h_input_tokens
+                + other.cache_creation_1h_input_tokens
             ),
         )
 
