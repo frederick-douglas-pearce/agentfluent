@@ -198,6 +198,37 @@ def _parse_user_message(data: dict[str, Any]) -> SessionMessage:
     )
 
 
+def _split_cache_creation(usage_data: dict[str, Any]) -> tuple[int, int, int]:
+    """Reconcile cache-write tokens into ``(total, 5m, 1h)``.
+
+    ``cache_creation_input_tokens`` (the top-level sum) is authoritative.
+    The optional ``usage.cache_creation`` sub-object splits it by TTL into
+    ``ephemeral_5m_input_tokens`` / ``ephemeral_1h_input_tokens``. Any
+    residual the sub-object fails to account for — because it is absent
+    (older sessions), partial, or disagrees with the sum — is attributed
+    to the 5-minute bucket, the conservative (cheaper) rate. This single
+    path covers absent / present-full / present-partial uniformly and
+    guarantees ``5m + 1h == total`` for downstream cost attribution.
+    """
+    total = usage_data.get("cache_creation_input_tokens", 0) or 0
+    sub = usage_data.get("cache_creation")
+    if isinstance(sub, dict):
+        tokens_1h = sub.get("ephemeral_1h_input_tokens", 0) or 0
+        tokens_5m = sub.get("ephemeral_5m_input_tokens", 0) or 0
+    else:
+        tokens_1h = 0
+        tokens_5m = 0
+    residual = total - tokens_5m - tokens_1h
+    if residual != 0:
+        logger.debug(
+            "cache_creation split residual %d (total=%d 5m=%d 1h=%d); "
+            "attributing residual to 5m bucket",
+            residual, total, tokens_5m, tokens_1h,
+        )
+    tokens_5m += residual
+    return total, tokens_5m, tokens_1h
+
+
 def _parse_assistant_message(data: dict[str, Any]) -> SessionMessage:
     """Parse an 'assistant' type message."""
     message = data.get("message", {})
@@ -205,11 +236,14 @@ def _parse_assistant_message(data: dict[str, Any]) -> SessionMessage:
 
     usage = None
     if usage_data and isinstance(usage_data, dict):
+        cache_total, cache_5m, cache_1h = _split_cache_creation(usage_data)
         usage = Usage(
             input_tokens=usage_data.get("input_tokens", 0),
             output_tokens=usage_data.get("output_tokens", 0),
-            cache_creation_input_tokens=usage_data.get("cache_creation_input_tokens", 0),
+            cache_creation_input_tokens=cache_total,
             cache_read_input_tokens=usage_data.get("cache_read_input_tokens", 0),
+            cache_creation_5m_input_tokens=cache_5m,
+            cache_creation_1h_input_tokens=cache_1h,
         )
 
     return SessionMessage(

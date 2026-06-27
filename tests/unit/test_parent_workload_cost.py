@@ -37,8 +37,11 @@ def _burst(
     output_tokens: int = 0,
     cache_creation_input_tokens: int = 0,
     cache_read_input_tokens: int = 0,
+    cache_creation_1h_tokens: int = 0,
     model: str = "claude-opus-4-7",
 ) -> ToolBurst:
+    # Mirror the parser fallback: undifferentiated writes land in the 5m
+    # bucket; `cache_creation_1h_tokens` carries the 1h portion (#534).
     return ToolBurst(
         preceding_user_text="",
         assistant_text="",
@@ -46,8 +49,12 @@ def _burst(
         usage=Usage(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
-            cache_creation_input_tokens=cache_creation_input_tokens,
+            cache_creation_input_tokens=(
+                cache_creation_input_tokens + cache_creation_1h_tokens
+            ),
             cache_read_input_tokens=cache_read_input_tokens,
+            cache_creation_5m_input_tokens=cache_creation_input_tokens,
+            cache_creation_1h_input_tokens=cache_creation_1h_tokens,
         ),
         model=model,
     )
@@ -159,7 +166,16 @@ class TestEstimateBurstCost:
         parent_cost, savings = estimate_burst_cost(
             burst, parent_pricing=_OPUS, alt_pricing=_SONNET,
         )
-        assert parent_cost == pytest.approx(6.25)  # Opus cache_creation rate
+        assert parent_cost == pytest.approx(6.25)  # Opus 5m cache-write rate
+        assert savings == pytest.approx(parent_cost)
+
+    def test_parent_cost_uses_1h_cache_write_rate(self) -> None:
+        # #534: 1h writes cost 2x base (Opus 10.0/MTok), not the 5m 6.25.
+        burst = _burst(cache_creation_1h_tokens=1_000_000)
+        parent_cost, savings = estimate_burst_cost(
+            burst, parent_pricing=_OPUS, alt_pricing=_SONNET,
+        )
+        assert parent_cost == pytest.approx(10.0)
         assert savings == pytest.approx(parent_cost)
 
     def test_haiku_to_haiku_negative_savings_from_cache_reclassification(

@@ -294,6 +294,8 @@ def _merge_token_metrics(metrics_list: list[TokenMetrics]) -> TokenMetrics:
                     output_tokens=breakdown.output_tokens,
                     cache_creation_input_tokens=breakdown.cache_creation_input_tokens,
                     cache_read_input_tokens=breakdown.cache_read_input_tokens,
+                    cache_creation_5m_tokens=breakdown.cache_creation_5m_tokens,
+                    cache_creation_1h_tokens=breakdown.cache_creation_1h_tokens,
                     cost=breakdown.cost,
                     origin=breakdown.origin,
                 )
@@ -302,6 +304,8 @@ def _merge_token_metrics(metrics_list: list[TokenMetrics]) -> TokenMetrics:
                 existing.output_tokens += breakdown.output_tokens
                 existing.cache_creation_input_tokens += breakdown.cache_creation_input_tokens
                 existing.cache_read_input_tokens += breakdown.cache_read_input_tokens
+                existing.cache_creation_5m_tokens += breakdown.cache_creation_5m_tokens
+                existing.cache_creation_1h_tokens += breakdown.cache_creation_1h_tokens
                 existing.cost += breakdown.cost
 
     rows = list(merged_models.values())

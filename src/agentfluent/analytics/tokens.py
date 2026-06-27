@@ -35,6 +35,8 @@ class ModelTokenBreakdown:
     output_tokens: int = 0
     cache_creation_input_tokens: int = 0
     cache_read_input_tokens: int = 0
+    cache_creation_5m_tokens: int = 0
+    cache_creation_1h_tokens: int = 0
     cost: float = 0.0
     origin: Origin = "parent"
 
@@ -98,8 +100,9 @@ def _populate_costs(by_model: dict[tuple[str, str], ModelTokenBreakdown]) -> flo
                 pricing,
                 breakdown.input_tokens,
                 breakdown.output_tokens,
-                breakdown.cache_creation_input_tokens,
+                breakdown.cache_creation_5m_tokens,
                 breakdown.cache_read_input_tokens,
+                cache_creation_1h_tokens=breakdown.cache_creation_1h_tokens,
             )
             total += breakdown.cost
     return total
@@ -171,6 +174,8 @@ def compute_token_metrics(messages: list[SessionMessage]) -> TokenMetrics:
         breakdown.output_tokens += usage.output_tokens
         breakdown.cache_creation_input_tokens += usage.cache_creation_input_tokens
         breakdown.cache_read_input_tokens += usage.cache_read_input_tokens
+        breakdown.cache_creation_5m_tokens += usage.cache_creation_5m_input_tokens
+        breakdown.cache_creation_1h_tokens += usage.cache_creation_1h_input_tokens
 
     _populate_costs(by_model)
     rows = list(by_model.values())
@@ -223,6 +228,8 @@ def compute_subagent_token_metrics(
         breakdown.output_tokens += usage.output_tokens
         breakdown.cache_creation_input_tokens += usage.cache_creation_input_tokens
         breakdown.cache_read_input_tokens += usage.cache_read_input_tokens
+        breakdown.cache_creation_5m_tokens += usage.cache_creation_5m_input_tokens
+        breakdown.cache_creation_1h_tokens += usage.cache_creation_1h_input_tokens
 
     _populate_costs(by_model)
     return list(by_model.values())

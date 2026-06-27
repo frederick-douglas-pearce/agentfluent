@@ -333,7 +333,8 @@ def estimate_burst_cost(
     parent_cost = compute_cost(
         parent_pricing,
         u.input_tokens, u.output_tokens,
-        u.cache_creation_input_tokens, u.cache_read_input_tokens,
+        u.cache_creation_5m_input_tokens, u.cache_read_input_tokens,
+        cache_creation_1h_tokens=u.cache_creation_1h_input_tokens,
     )
     # Alt-model has no cache benefit: cache_read becomes fresh input,
     # cache_creation drops out (a delegated subagent would re-fetch its
