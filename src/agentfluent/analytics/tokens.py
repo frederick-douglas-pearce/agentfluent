@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 from agentfluent.analytics.pricing import SYNTHETIC_MODELS, compute_cost, get_pricing
-from agentfluent.core.session import SessionMessage
+from agentfluent.core.session import SessionMessage, Usage
 
 if TYPE_CHECKING:
     from agentfluent.traces.models import SubagentTrace
@@ -88,6 +88,22 @@ class TokenMetrics:
             + self.cache_creation_input_tokens
             + self.cache_read_input_tokens
         )
+
+
+def _accumulate_usage(breakdown: ModelTokenBreakdown, usage: Usage) -> None:
+    """Fold one message/trace ``Usage`` into a per-model breakdown.
+
+    The single population path for both the parent and subagent aggregation
+    loops, so the cache-write TTL split (5m/1h) stays in lockstep with the
+    authoritative total and any future usage field is wired in exactly one
+    place rather than two copy-pasted blocks.
+    """
+    breakdown.input_tokens += usage.input_tokens
+    breakdown.output_tokens += usage.output_tokens
+    breakdown.cache_creation_input_tokens += usage.cache_creation_input_tokens
+    breakdown.cache_read_input_tokens += usage.cache_read_input_tokens
+    breakdown.cache_creation_5m_tokens += usage.cache_creation_5m_input_tokens
+    breakdown.cache_creation_1h_tokens += usage.cache_creation_1h_input_tokens
 
 
 def _populate_costs(by_model: dict[tuple[str, str], ModelTokenBreakdown]) -> float:
@@ -170,12 +186,7 @@ def compute_token_metrics(messages: list[SessionMessage]) -> TokenMetrics:
             breakdown = ModelTokenBreakdown(model=model_name, origin="parent")
             by_model[key] = breakdown
 
-        breakdown.input_tokens += usage.input_tokens
-        breakdown.output_tokens += usage.output_tokens
-        breakdown.cache_creation_input_tokens += usage.cache_creation_input_tokens
-        breakdown.cache_read_input_tokens += usage.cache_read_input_tokens
-        breakdown.cache_creation_5m_tokens += usage.cache_creation_5m_input_tokens
-        breakdown.cache_creation_1h_tokens += usage.cache_creation_1h_input_tokens
+        _accumulate_usage(breakdown, usage)
 
     _populate_costs(by_model)
     rows = list(by_model.values())
@@ -224,12 +235,7 @@ def compute_subagent_token_metrics(
         if breakdown is None:
             breakdown = ModelTokenBreakdown(model=trace.model, origin="subagent")
             by_model[key] = breakdown
-        breakdown.input_tokens += usage.input_tokens
-        breakdown.output_tokens += usage.output_tokens
-        breakdown.cache_creation_input_tokens += usage.cache_creation_input_tokens
-        breakdown.cache_read_input_tokens += usage.cache_read_input_tokens
-        breakdown.cache_creation_5m_tokens += usage.cache_creation_5m_input_tokens
-        breakdown.cache_creation_1h_tokens += usage.cache_creation_1h_input_tokens
+        _accumulate_usage(breakdown, usage)
 
     _populate_costs(by_model)
     return list(by_model.values())

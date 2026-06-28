@@ -121,7 +121,7 @@ class TestComputeCost:
             pricing,
             input_tokens=100_000,
             output_tokens=50_000,
-            cache_creation_input_tokens=200_000,
+            cache_creation_5m_tokens=200_000,
             cache_read_input_tokens=500_000,
         )
         # 100K*3/1M + 50K*15/1M + 200K*3.75/1M + 500K*0.3/1M
@@ -145,7 +145,7 @@ class TestComputeCost:
         assert pricing is not None
         cost = compute_cost(
             pricing, input_tokens=0, output_tokens=0,
-            cache_creation_input_tokens=1_000_000,
+            cache_creation_5m_tokens=1_000_000,
         )
         assert abs(cost - 6.25) < 0.001
 
@@ -165,8 +165,8 @@ class TestComputeCost:
         assert pricing is not None
         cost = compute_cost(
             pricing, input_tokens=0, output_tokens=0,
-            cache_creation_input_tokens=1_000_000,   # 5m -> 6.25
-            cache_creation_1h_tokens=1_000_000,      # 1h -> 10.0
+            cache_creation_5m_tokens=1_000_000,   # 5m -> 6.25
+            cache_creation_1h_tokens=1_000_000,   # 1h -> 10.0
         )
         assert abs(cost - 16.25) < 0.001
 

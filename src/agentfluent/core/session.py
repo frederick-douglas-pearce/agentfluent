@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class Usage(BaseModel):
@@ -19,9 +19,14 @@ class Usage(BaseModel):
     ``cache_creation_input_tokens`` is the authoritative total of cache-write
     tokens (used by ``total_tokens`` and all display/efficiency math). The
     ``5m``/``1h`` fields are the TTL split of that total, supplied by the
-    parser from ``usage.cache_creation`` for cost attribution (see #534). The
-    parser enforces ``5m + 1h == cache_creation_input_tokens`` (residual to
-    5m), so summing either form gives the same total.
+    parser from ``usage.cache_creation`` for cost attribution (see #534).
+
+    The invariant ``5m + 1h == cache_creation_input_tokens`` is enforced by
+    ``_reconcile_cache_creation`` on *every* ``Usage``, regardless of how it
+    was built — the parser, ``__add__``, a fixture, or a future caller. Cost
+    attribution prices the split, so this guarantees the priced buckets can
+    never silently diverge from the displayed total (e.g. a usage carrying a
+    total with a zero split would otherwise price its cache writes at $0).
     """
 
     input_tokens: int = 0
@@ -30,6 +35,34 @@ class Usage(BaseModel):
     cache_read_input_tokens: int = 0
     cache_creation_5m_input_tokens: int = 0
     cache_creation_1h_input_tokens: int = 0
+
+    @model_validator(mode="after")
+    def _reconcile_cache_creation(self) -> Usage:
+        """Keep the TTL split consistent with the authoritative total.
+
+        ``cache_creation_input_tokens`` and the ``5m``/``1h`` split may be
+        supplied independently. This reconciles them so every ``Usage`` is
+        internally consistent (#534):
+
+        - ``total > split``: the unaccounted remainder — a legacy total-only
+          usage, or a partial ``usage.cache_creation`` sub-object — is
+          attributed to the cheaper 5-minute bucket.
+        - ``total < split``: the split is more complete than the stated total
+          (or the total was absent), so the total is raised to match. This
+          guards against a negative 5m bucket when the sub-object reports more
+          than the top-level sum.
+        """
+        split = (
+            self.cache_creation_5m_input_tokens
+            + self.cache_creation_1h_input_tokens
+        )
+        if self.cache_creation_input_tokens > split:
+            self.cache_creation_5m_input_tokens += (
+                self.cache_creation_input_tokens - split
+            )
+        elif self.cache_creation_input_tokens < split:
+            self.cache_creation_input_tokens = split
+        return self
 
     @property
     def total_tokens(self) -> int:

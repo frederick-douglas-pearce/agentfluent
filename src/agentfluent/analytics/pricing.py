@@ -126,23 +126,26 @@ def compute_cost(
     pricing: ModelPricing,
     input_tokens: int,
     output_tokens: int,
-    cache_creation_input_tokens: int = 0,
+    cache_creation_5m_tokens: int = 0,
     cache_read_input_tokens: int = 0,
     cache_creation_1h_tokens: int = 0,
 ) -> float:
     """Compute dollar cost in USD from token counts and pricing rates.
 
-    ``cache_creation_input_tokens`` is billed at the 5-minute write rate;
-    ``cache_creation_1h_tokens`` at the 1-hour rate (2x base). Callers that
-    only know the undifferentiated cache-write total should pass it as
-    ``cache_creation_input_tokens`` (the 5m rate) — this is the documented
-    fallback for sessions whose JSONL lacks the ``usage.cache_creation``
-    TTL split (see #534).
+    The cache-write total is split by TTL: ``cache_creation_5m_tokens`` is
+    billed at the 5-minute write rate, ``cache_creation_1h_tokens`` at the
+    1-hour rate (2x base). The parameter is named for the 5m bucket (not the
+    undifferentiated total) on purpose — passing ``Usage``'s authoritative
+    ``cache_creation_input_tokens`` here alongside a separate 1h count would
+    double-bill the 1h portion. Callers that only know the undifferentiated
+    total pass it here, which prices the whole sum at the 5m rate — the
+    documented fallback for sessions whose JSONL lacks the
+    ``usage.cache_creation`` TTL split (see #534).
     """
     return (
         input_tokens * pricing.input
         + output_tokens * pricing.output
-        + cache_creation_input_tokens * pricing.cache_creation_5m
+        + cache_creation_5m_tokens * pricing.cache_creation_5m
         + cache_creation_1h_tokens * pricing.cache_creation_1h
         + cache_read_input_tokens * pricing.cache_read
     ) / 1_000_000
