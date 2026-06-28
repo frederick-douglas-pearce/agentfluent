@@ -57,6 +57,55 @@ class TestUsage:
         assert total.input_tokens == 9
         assert total.output_tokens == 12
 
+    # --- cache-creation TTL reconciliation (#534) -------------------------
+    # The 5m + 1h == cache_creation_input_tokens invariant is enforced on
+    # EVERY Usage, regardless of constructor, so cost attribution (which
+    # prices the split) can never silently diverge from the displayed total.
+
+    def test_total_only_falls_back_to_5m_bucket(self) -> None:
+        # Legacy / direct construction with just the total: the whole sum is
+        # attributed to the cheaper 5m bucket so it is never priced at $0.
+        usage = Usage(cache_creation_input_tokens=1000)
+        assert usage.cache_creation_5m_input_tokens == 1000
+        assert usage.cache_creation_1h_input_tokens == 0
+
+    def test_split_only_derives_total(self) -> None:
+        # Only the split supplied: the authoritative total is derived from it.
+        usage = Usage(
+            cache_creation_5m_input_tokens=300,
+            cache_creation_1h_input_tokens=700,
+        )
+        assert usage.cache_creation_input_tokens == 1000
+
+    def test_partial_split_residual_to_5m(self) -> None:
+        usage = Usage(
+            cache_creation_input_tokens=1000,
+            cache_creation_1h_input_tokens=600,
+        )
+        assert usage.cache_creation_5m_input_tokens == 400
+        assert usage.cache_creation_1h_input_tokens == 600
+
+    def test_split_exceeding_total_never_goes_negative(self) -> None:
+        # The bug-class #534 guards against: a split larger than the stated
+        # total must raise the total, never produce a negative 5m bucket.
+        usage = Usage(
+            cache_creation_input_tokens=1000,
+            cache_creation_1h_input_tokens=1500,
+        )
+        assert usage.cache_creation_5m_input_tokens == 0
+        assert usage.cache_creation_1h_input_tokens == 1500
+        assert usage.cache_creation_input_tokens == 1500
+
+    def test_add_preserves_split_invariant(self) -> None:
+        a = Usage(cache_creation_5m_input_tokens=100,
+                  cache_creation_1h_input_tokens=200)
+        b = Usage(cache_creation_5m_input_tokens=10,
+                  cache_creation_1h_input_tokens=20)
+        result = a + b
+        assert result.cache_creation_5m_input_tokens == 110
+        assert result.cache_creation_1h_input_tokens == 220
+        assert result.cache_creation_input_tokens == 330
+
 
 class TestToolUseBlock:
     def test_basic(self) -> None:

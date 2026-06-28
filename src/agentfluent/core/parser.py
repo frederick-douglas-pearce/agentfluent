@@ -198,6 +198,34 @@ def _parse_user_message(data: dict[str, Any]) -> SessionMessage:
     )
 
 
+def _extract_cache_ttl_split(usage_data: dict[str, Any]) -> tuple[int, int]:
+    """Extract ``(5m, 1h)`` cache-write tokens from ``usage.cache_creation``.
+
+    Returns ``(0, 0)`` when the optional sub-object is absent (older
+    sessions). When it is present but its TTL buckets do not sum to the
+    authoritative ``cache_creation_input_tokens`` total, that is a genuine
+    data anomaly (a partial sub-object or a Claude Code format change that
+    moved where 1h writes are reported) — log it at WARNING, because the
+    silent fallback would re-bill those tokens at the cheaper 5m rate, the
+    exact under-reporting #534 set out to fix. ``Usage`` itself reconciles
+    the split against the total (see ``Usage._reconcile_cache_creation``).
+    """
+    sub = usage_data.get("cache_creation")
+    if not isinstance(sub, dict):
+        return 0, 0
+    tokens_5m = sub.get("ephemeral_5m_input_tokens", 0) or 0
+    tokens_1h = sub.get("ephemeral_1h_input_tokens", 0) or 0
+    total = usage_data.get("cache_creation_input_tokens", 0) or 0
+    if tokens_5m + tokens_1h != total:
+        logger.warning(
+            "cache_creation TTL split (5m=%d + 1h=%d) disagrees with "
+            "cache_creation_input_tokens=%d; Usage will reconcile to keep "
+            "5m + 1h == total (see #534)",
+            tokens_5m, tokens_1h, total,
+        )
+    return tokens_5m, tokens_1h
+
+
 def _parse_assistant_message(data: dict[str, Any]) -> SessionMessage:
     """Parse an 'assistant' type message."""
     message = data.get("message", {})
@@ -205,11 +233,16 @@ def _parse_assistant_message(data: dict[str, Any]) -> SessionMessage:
 
     usage = None
     if usage_data and isinstance(usage_data, dict):
+        cache_5m, cache_1h = _extract_cache_ttl_split(usage_data)
         usage = Usage(
             input_tokens=usage_data.get("input_tokens", 0),
             output_tokens=usage_data.get("output_tokens", 0),
-            cache_creation_input_tokens=usage_data.get("cache_creation_input_tokens", 0),
+            cache_creation_input_tokens=usage_data.get(
+                "cache_creation_input_tokens", 0,
+            ),
             cache_read_input_tokens=usage_data.get("cache_read_input_tokens", 0),
+            cache_creation_5m_input_tokens=cache_5m,
+            cache_creation_1h_input_tokens=cache_1h,
         )
 
     return SessionMessage(

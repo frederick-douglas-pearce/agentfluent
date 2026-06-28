@@ -14,43 +14,69 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class ModelPricing:
-    """Per-token pricing for a single model (USD per 1M tokens)."""
+    """Per-token pricing for a single model (USD per 1M tokens).
+
+    Anthropic prices cache *writes* at two TTL-dependent rates:
+    ``cache_creation_5m`` (5-minute tier, 1.25x base input) and
+    ``cache_creation_1h`` (1-hour tier, 2x base input). The session JSONL
+    splits write tokens between the two via ``usage.cache_creation`` (see
+    #534); 1h is commonly the dominant TTL in Claude Code, so billing the
+    whole sum at the 5m rate materially under-reports cost.
+
+    ``cache_creation_1h`` is derived as ``2x input`` when left at the
+    ``-1.0`` sentinel, so the 2x multiplier has a single source of truth
+    and any ``ModelPricing`` built without it still prices 1h writes
+    correctly. genai-prices (the upstream pricing source, see
+    docs/COST_MODEL.md) models only a single 5m-equivalent
+    ``cache_write_mtok`` — the 1h dimension is supplied by this overlay
+    and has no upstream field; an adapter mapping must not collapse it
+    back onto the 5m rate.
+    """
 
     input: float
     output: float
-    cache_creation: float
+    cache_creation_5m: float
     cache_read: float
+    cache_creation_1h: float = -1.0
+
+    def __post_init__(self) -> None:
+        if self.cache_creation_1h < 0:
+            object.__setattr__(self, "cache_creation_1h", self.input * 2.0)
 
 
 # Pricing data: USD per 1M tokens.
 # Source: https://platform.claude.com/docs/en/about-claude/pricing
-# Last verified: 2026-04-18
-# Cache write prices reflect the 5-minute TTL tier (1.25x input).
+# Last verified: 2026-06-25
+# cache_creation_5m = 5-minute cache-write rate (1.25x input).
+# cache_creation_1h (2x input) is derived from `input` via __post_init__.
 # Update this dict when Anthropic changes pricing.
 _PRICING: dict[str, ModelPricing] = {
-    # Opus 4.5, 4.6, 4.7 share the same pricing tier ($5 / $25 / $6.25 / $0.50).
+    # Opus 4.5, 4.6, 4.7, 4.8 share the same pricing tier ($5 / $25 / $6.25 / $0.50).
+    "claude-opus-4-8": ModelPricing(
+        input=5.0, output=25.0, cache_creation_5m=6.25, cache_read=0.50,
+    ),
     "claude-opus-4-7": ModelPricing(
-        input=5.0, output=25.0, cache_creation=6.25, cache_read=0.50,
+        input=5.0, output=25.0, cache_creation_5m=6.25, cache_read=0.50,
     ),
     "claude-opus-4-6": ModelPricing(
-        input=5.0, output=25.0, cache_creation=6.25, cache_read=0.50,
+        input=5.0, output=25.0, cache_creation_5m=6.25, cache_read=0.50,
     ),
     "claude-opus-4-5-20251101": ModelPricing(
-        input=5.0, output=25.0, cache_creation=6.25, cache_read=0.50,
+        input=5.0, output=25.0, cache_creation_5m=6.25, cache_read=0.50,
     ),
     # Sonnet 4, 4.5, 4.6 share the same pricing tier ($3 / $15 / $3.75 / $0.30).
     "claude-sonnet-4-6": ModelPricing(
-        input=3.0, output=15.0, cache_creation=3.75, cache_read=0.30,
+        input=3.0, output=15.0, cache_creation_5m=3.75, cache_read=0.30,
     ),
     "claude-sonnet-4-5-20250929": ModelPricing(
-        input=3.0, output=15.0, cache_creation=3.75, cache_read=0.30,
+        input=3.0, output=15.0, cache_creation_5m=3.75, cache_read=0.30,
     ),
     "claude-sonnet-4-20250514": ModelPricing(
-        input=3.0, output=15.0, cache_creation=3.75, cache_read=0.30,
+        input=3.0, output=15.0, cache_creation_5m=3.75, cache_read=0.30,
     ),
     # Haiku 4.5 is $1 / $5 / $1.25 / $0.10 (distinct from Haiku 3.5's $0.80 / $4).
     "claude-haiku-4-5-20251001": ModelPricing(
-        input=1.0, output=5.0, cache_creation=1.25, cache_read=0.10,
+        input=1.0, output=5.0, cache_creation_5m=1.25, cache_read=0.10,
     ),
 }
 
@@ -59,10 +85,11 @@ _PRICING: dict[str, ModelPricing] = {
 # diagnostics/delegation.py recommends `claude-haiku-4-5`, the
 # undated alias — pricing must resolve the same string).
 _ALIASES: dict[str, str] = {
-    "opus": "claude-opus-4-7",
+    "opus": "claude-opus-4-8",
     "sonnet": "claude-sonnet-4-6",
     "haiku": "claude-haiku-4-5-20251001",
     "claude-haiku-4-5": "claude-haiku-4-5-20251001",
+    "claude-opus-4-8[1m]": "claude-opus-4-8",
     "claude-opus-4-7[1m]": "claude-opus-4-7",
     "claude-opus-4-6[1m]": "claude-opus-4-6",
     "claude-sonnet-4-6[1m]": "claude-sonnet-4-6",
@@ -99,14 +126,27 @@ def compute_cost(
     pricing: ModelPricing,
     input_tokens: int,
     output_tokens: int,
-    cache_creation_input_tokens: int = 0,
+    cache_creation_5m_tokens: int = 0,
     cache_read_input_tokens: int = 0,
+    cache_creation_1h_tokens: int = 0,
 ) -> float:
-    """Compute dollar cost in USD from token counts and pricing rates."""
+    """Compute dollar cost in USD from token counts and pricing rates.
+
+    The cache-write total is split by TTL: ``cache_creation_5m_tokens`` is
+    billed at the 5-minute write rate, ``cache_creation_1h_tokens`` at the
+    1-hour rate (2x base). The parameter is named for the 5m bucket (not the
+    undifferentiated total) on purpose — passing ``Usage``'s authoritative
+    ``cache_creation_input_tokens`` here alongside a separate 1h count would
+    double-bill the 1h portion. Callers that only know the undifferentiated
+    total pass it here, which prices the whole sum at the 5m rate — the
+    documented fallback for sessions whose JSONL lacks the
+    ``usage.cache_creation`` TTL split (see #534).
+    """
     return (
         input_tokens * pricing.input
         + output_tokens * pricing.output
-        + cache_creation_input_tokens * pricing.cache_creation
+        + cache_creation_5m_tokens * pricing.cache_creation_5m
+        + cache_creation_1h_tokens * pricing.cache_creation_1h
         + cache_read_input_tokens * pricing.cache_read
     ) / 1_000_000
 

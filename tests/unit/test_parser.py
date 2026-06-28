@@ -1,6 +1,7 @@
 """Tests for JSONL session parser."""
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -495,6 +496,133 @@ class TestToolUseResultOnUserMessage:
         assert by_id["toolu_err"].is_error is True
         assert by_id["toolu_ok"].is_error is False
         assert by_id["toolu_missing"].is_error is None
+
+
+class TestCacheCreationTtlSplit:
+    """#534: the parser reconciles `usage.cache_creation` into 5m/1h buckets,
+    keeping `cache_creation_input_tokens` (the sum) authoritative."""
+
+    def _write_assistant(self, tmp_path: Path, usage: dict) -> Path:
+        path = tmp_path / "session.jsonl"
+        line = {
+            "type": "assistant",
+            "message": {
+                "model": "claude-opus-4-6",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "hi"}],
+                "usage": usage,
+            },
+            "timestamp": "2026-04-14T08:00:00.000Z",
+        }
+        path.write_text(json.dumps(line) + "\n")
+        return path
+
+    def test_subobject_present_splits_5m_and_1h(self, tmp_path: Path) -> None:
+        path = self._write_assistant(
+            tmp_path,
+            {
+                "input_tokens": 3,
+                "output_tokens": 2,
+                "cache_creation_input_tokens": 19117,
+                "cache_read_input_tokens": 100,
+                "cache_creation": {
+                    "ephemeral_5m_input_tokens": 117,
+                    "ephemeral_1h_input_tokens": 19000,
+                },
+            },
+        )
+        usage = parse_session(path)[0].usage
+        assert usage is not None
+        assert usage.cache_creation_input_tokens == 19117
+        assert usage.cache_creation_5m_input_tokens == 117
+        assert usage.cache_creation_1h_input_tokens == 19000
+
+    def test_1h_only(self, tmp_path: Path) -> None:
+        path = self._write_assistant(
+            tmp_path,
+            {
+                "cache_creation_input_tokens": 5000,
+                "cache_creation": {
+                    "ephemeral_5m_input_tokens": 0,
+                    "ephemeral_1h_input_tokens": 5000,
+                },
+            },
+        )
+        usage = parse_session(path)[0].usage
+        assert usage is not None
+        assert usage.cache_creation_5m_input_tokens == 0
+        assert usage.cache_creation_1h_input_tokens == 5000
+
+    def test_subobject_absent_falls_back_to_5m(self, tmp_path: Path) -> None:
+        # Legacy sessions: no `cache_creation` sub-object -> whole sum is 5m.
+        path = self._write_assistant(
+            tmp_path,
+            {"cache_creation_input_tokens": 8000},
+        )
+        usage = parse_session(path)[0].usage
+        assert usage is not None
+        assert usage.cache_creation_input_tokens == 8000
+        assert usage.cache_creation_5m_input_tokens == 8000
+        assert usage.cache_creation_1h_input_tokens == 0
+
+    def test_partial_subobject_residual_to_5m(self, tmp_path: Path) -> None:
+        # Sub-object accounts for less than the total: residual goes to 5m,
+        # preserving 5m + 1h == cache_creation_input_tokens.
+        path = self._write_assistant(
+            tmp_path,
+            {
+                "cache_creation_input_tokens": 1000,
+                "cache_creation": {"ephemeral_1h_input_tokens": 600},
+            },
+        )
+        usage = parse_session(path)[0].usage
+        assert usage is not None
+        assert usage.cache_creation_1h_input_tokens == 600
+        assert usage.cache_creation_5m_input_tokens == 400
+        assert (
+            usage.cache_creation_5m_input_tokens
+            + usage.cache_creation_1h_input_tokens
+            == usage.cache_creation_input_tokens
+        )
+
+    def test_subobject_exceeds_total_no_negative_bucket(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Anomaly: the sub-object reports MORE than the authoritative total.
+        # The split must never produce a negative 5m bucket; the total is
+        # raised to match the split, and the disagreement is logged loudly.
+        path = self._write_assistant(
+            tmp_path,
+            {
+                "cache_creation_input_tokens": 1000,
+                "cache_creation": {"ephemeral_1h_input_tokens": 1500},
+            },
+        )
+        with caplog.at_level(logging.WARNING, logger="agentfluent.core.parser"):
+            usage = parse_session(path)[0].usage
+        assert usage is not None
+        assert usage.cache_creation_5m_input_tokens == 0
+        assert usage.cache_creation_1h_input_tokens == 1500
+        assert usage.cache_creation_input_tokens == 1500
+        assert any("disagrees" in r.getMessage() for r in caplog.records)
+
+    def test_total_absent_but_subobject_present(self, tmp_path: Path) -> None:
+        # The redundant top-level total is omitted but the TTL split is
+        # present: the total is derived from the split (no token loss).
+        path = self._write_assistant(
+            tmp_path,
+            {
+                "cache_creation": {
+                    "ephemeral_5m_input_tokens": 100,
+                    "ephemeral_1h_input_tokens": 200,
+                },
+            },
+        )
+        usage = parse_session(path)[0].usage
+        assert usage is not None
+        assert usage.cache_creation_5m_input_tokens == 100
+        assert usage.cache_creation_1h_input_tokens == 200
+        assert usage.cache_creation_input_tokens == 300
 
 
 class TestTimestamps:
