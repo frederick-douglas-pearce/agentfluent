@@ -1504,6 +1504,52 @@ cleanly and skips the warning.
 
 ## Session metrics
 
+### `api_call_count`
+
+**Short:** The number of real API round-trips in a session -- one per
+non-synthetic assistant message that carries a `usage` block.
+
+**Detail:** Surfaced as the "API calls" row in the Token Usage table and as
+`api_call_count` in `analyze --json`. An *API call* is one assistant
+message that records a `usage` block (input/output/cache token
+counts) -- i.e. a real request/response round-trip the model was
+billed for. Counted once per such message after the parser's
+fragment-merging step.
+
+**`<synthetic>` responses are excluded (#507, D044).** Claude Code
+emits `<synthetic>`-model assistant messages -- locally fabricated
+filler (e.g. "No response requested.") with zero usage and no API
+round-trip. They never carry a `usage` block, so they are never
+counted as API calls. The exclusion is the same one
+[`model_turns`](#model_turns) applies; both counters net out
+synthetic ghost turns.
+
+**Relationship to [`model_turns`](#model_turns).** Both exclude
+synthetic messages, so they are **equal in the common case** -- on
+the v0.9 dogfood corpus both were 7,533 to the unit. They diverge
+only on the (so far unobserved) edge case of a *real-model*
+assistant message that carries no `usage` block: it counts as a
+model turn but **not** as an API call, making
+`model_turns >= api_call_count`. Keeping both metrics surfaces
+exactly that case if it ever occurs. The two are different lenses on
+the same messages: `model_turns` counts the model's *responses*,
+`api_call_count` counts the *billed round-trips* -- they coincide
+whenever every real response was a billed call.
+
+**Example:**
+
+```
+Token Usage
+  ...
+  API calls            350
+  Model turns          350   <- == API calls (both exclude synthetic)
+  Synthetic responses    2   <- ghost turns netted out, not API calls
+```
+
+**Aliases:** `api_calls`
+
+**Related:** [`model_turns`](#model_turns), [`total_cost`](#total_cost)
+
 ### `model_turns`
 
 **Short:** The number of model turns in a session -- one merged, non-synthetic
@@ -1562,7 +1608,7 @@ Token Usage
   Synthetic responses    2   <- ghost turns netted out, tallied here
 ```
 
-**Related:** [`output`](#output), [`total_cost`](#total_cost)
+**Related:** [`api_call_count`](#api_call_count), [`output`](#output), [`total_cost`](#total_cost)
 
 ### `active_duration`
 
