@@ -961,3 +961,32 @@ primary_axis = max(AXIS_TIEBREAKER, key=lambda a: axis_scores[a])
 **Reference:** #507 (fix), #508 (synthetic taxonomy research), #465/#466 (model-turn introduction), #467 (efficiency ratios); architect review comment on #507. Supersedes the "(one API round-trip)" phrasing in the #465/#466 docstrings and the original `model_turns` glossary entry.
 
 ---
+
+## D045: genai-prices as the base-rate source; local overlay for unmodeled levers
+
+**Date:** 2026-06-28
+**Context:** Live pricing was a hand-maintained `_PRICING` dict (single current rate per
+model, no time dependency). genai-prices (pydantic/genai-prices, MIT) had been named as the
+chosen upstream in comments/docs and in epic #535's body, but was never made a dependency or
+ticketed. The earlier DIY plan (#80/#81: build our own time-series pricing.json on CodeFluent's
+shape) rested on a false premise — the "opus $15/$75 → $5/$25 historical drop" never happened
+(Opus 4.5 launched at $5/$25).
+**Decision:** Depend on genai-prices for Anthropic base rates AND native date-aware (effective-
+dated constraint) lookup. Supply every cost lever genai-prices does not model — 1h cache write,
+fast mode, batch/priority, data residency, server-tool surcharges — via a local overlay merged
+at a single documented seam. Supersede #80 and #81; re-scope #82 from "scrape Anthropic into our
+dict" to "keep the genai-prices pin current + detect upstream coverage of our overlay levers."
+**Rationale:**
+- genai-prices provides effective-dated pricing natively — the exact capability #80/#81 tried to
+  hand-build, without the maintenance burden or the append-only discipline #80 required.
+- The base ⊕ overlay split keeps AgentFluent's published cost bar (every lever priced or
+  documented) honest while delegating the volatile base-rate data to a maintained MIT dataset.
+- Owning a scraper (#82) over a hand dict is obviated once the dataset is upstream.
+**Trade-off:** Adds a runtime dependency and couples AgentFluent to genai-prices' Anthropic
+coverage/cadence; mitigated by the overlay (we can always supply a lever locally) and by tracking
+upstream coverage so overlays retire as genai-prices catches up.
+**Reference:** epic #535 (cost-lever coverage), #545/#546/#547 (Phase 1 substrate), #536/#539
+(v0.11 overlay levers), #537/#538/#543 (v0.12), #82 (re-scoped), #80/#81 (superseded, closed),
+#252 (folded into #545); spec `prd-pricing-genai-migration.md`.
+
+---
