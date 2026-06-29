@@ -254,12 +254,19 @@ def _build_parameter_retry_signal(
     """Emit PARAMETER_RETRY for a same-tool run, or ``None`` if it doesn't
     qualify (first call not an error, or no input-shape change).
 
-    The first attempt must carry ``is_error=True`` (the parser-supplied flag,
-    which already synthesizes errors from result text via
-    ``signals.detect_is_error_from_text``). A run that opens with a successful
-    call is sequential paging or query refinement, not a parameter retry, and
-    must not fire (#510) — describing a successful first result as "failed
-    with" was the message bug that motivated this gate."""
+    The first attempt must carry ``is_error=True`` — the parser-supplied flag,
+    which the parser also synthesizes from result text via
+    ``signals.detect_is_error_from_text``. That synthesis covers generic error
+    vocabulary (``failed``/``error``/``unable to``/…), NOT every validation-only
+    phrasing; a first call that sets neither ``is_error`` nor a generic error
+    token is treated as paging/refinement, not a parameter retry. This is a
+    deliberate precision trade-off (#510): it drops the prior keyword-regex
+    fallback (``invalid``/``validation``/``schema``/…) that fired on
+    *successful* results whose text merely looked validation-flavored — the
+    false positives, including describing a successful first result as "failed
+    with", that motivated this gate. The message is keyed on ``run_calls[0]``,
+    so gating on the FIRST attempt (not any attempt) is what keeps that message
+    truthful."""
     run_calls = [calls[i] for i in run_indices]
     if not run_calls[0].is_error:
         return None

@@ -61,6 +61,7 @@ def _load_cached() -> tuple[GlossaryEntry, ...]:
 def reset_cache() -> None:
     """Clear the load cache. Tests use this to force a re-read."""
     _load_cached.cache_clear()
+    builtin_tool_names_cached.cache_clear()
 
 
 def _check_unique_names(entries: list[GlossaryEntry]) -> None:
@@ -172,3 +173,17 @@ def builtin_tool_names(entries: list[GlossaryEntry]) -> frozenset[str]:
     return frozenset(
         entry.name for entry in entries if entry.category == "builtin_tool"
     )
+
+
+@lru_cache(maxsize=1)
+def builtin_tool_names_cached() -> frozenset[str]:
+    """Memoized, zero-arg ``builtin_tool_names`` for hot-path callers.
+
+    The set is invariant across a run, so callers that consult it per item
+    (e.g. ``correlator.ParameterRetryRule`` per signal) should use this rather
+    than rebuilding via ``builtin_tool_names(load_glossary())`` each time. The
+    explicit-``entries`` form is kept for testability/parity with the other
+    accessors; this wrapper caches over the process-wide glossary. Cleared by
+    ``reset_cache``.
+    """
+    return builtin_tool_names(list(_load_cached()))

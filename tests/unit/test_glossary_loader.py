@@ -16,6 +16,7 @@ from agentfluent.glossary.loader import (
     _check_unique_aliases,
     _check_unique_names,
     builtin_tool_names,
+    builtin_tool_names_cached,
     find_term,
     fuzzy_match,
     reset_cache,
@@ -84,6 +85,13 @@ class TestBuiltinToolNames:
         entries = load_glossary()
         agent_names = {e.name for e in entries if e.category == "builtin_agent_type"}
         assert builtin_tool_names(entries).isdisjoint(agent_names)
+
+    def test_cached_accessor_matches_entries_form(self) -> None:
+        # The hot-path memoized wrapper must agree with the explicit-entries
+        # accessor (and stay correct after a cache reset).
+        assert builtin_tool_names_cached() == builtin_tool_names(load_glossary())
+        reset_cache()
+        assert builtin_tool_names_cached() == builtin_tool_names(load_glossary())
 
 
 class TestSchemaValidation:

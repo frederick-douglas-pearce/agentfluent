@@ -30,7 +30,7 @@ from agentfluent.diagnostics.quality_signals import (
 )
 from agentfluent.diagnostics.tool_orchestration import ESTIMATED_TOKEN_SAVINGS_KEY
 from agentfluent.diagnostics.trace_signals import PARAMETER_RETRY_EXAMPLE_KEY
-from agentfluent.glossary.loader import builtin_tool_names, load_glossary
+from agentfluent.glossary.loader import builtin_tool_names_cached
 
 
 def _relpath(path: Path) -> str:
@@ -676,7 +676,12 @@ class ParameterRetryRule:
     ) -> DiagnosticRecommendation:
         tool_name = str(signal.detail.get("tool_name", "the tool"))
         observation = signal.message
-        is_builtin_tool = tool_name in builtin_tool_names(load_glossary())
+        # Exact-match (no case-folding) is correct here: trace tool names are
+        # machine-emitted canonical identifiers (``Read``, ``Edit``) that match
+        # terms.yaml verbatim. This intentionally differs from
+        # ``is_builtin_agent``, which lower-cases because agent types are
+        # user-authored and free-cased.
+        is_builtin_tool = tool_name in builtin_tool_names_cached()
 
         if is_builtin_tool:
             # The `input_examples` fix lives on the tool definition, which a
