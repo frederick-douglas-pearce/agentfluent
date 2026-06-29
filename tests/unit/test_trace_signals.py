@@ -472,7 +472,12 @@ class TestParameterRetry:
         ]
         assert len(_param_signals(_trace(calls=calls))) == 1
 
-    def test_validation_keyword_triggers_without_is_error(self) -> None:
+    def test_validation_keyword_without_is_error_does_not_fire(self) -> None:
+        # #510: the first attempt must carry is_error=True. A non-error first
+        # call whose result text merely *looks* validation-flavored is NOT a
+        # parameter retry (the old text-regex branch fired here -- a false
+        # positive). The parser already synthesizes is_error from result text,
+        # so a genuine error would have is_error=True.
         calls = [
             _ptc(
                 "Run",
@@ -482,7 +487,37 @@ class TestParameterRetry:
             ),
             _ptc("Run", {"a": 1, "b": 2}, err=False),
         ]
-        assert len(_param_signals(_trace(calls=calls))) == 1
+        assert _param_signals(_trace(calls=calls)) == []
+
+    def test_all_success_paging_sequence_does_not_fire(self) -> None:
+        # #510 motivating case: an agent paging through one file (or refining a
+        # query) makes several same-tool calls with differing input shapes but
+        # every call is_error=False. With no first-attempt error this is
+        # sequential paging, not a parameter retry -> must not fire, and so no
+        # "First attempt failed with: '<successful output>'" message is built.
+        calls = [
+            _ptc("Read", {"file_path": "big.py", "offset": 1}, res="1\tline", err=False),
+            _ptc(
+                "Read",
+                {"file_path": "big.py", "offset": 100, "limit": 50},
+                res="100\tline",
+                err=False,
+            ),
+        ]
+        sigs = _param_signals(_trace(calls=calls))
+        assert sigs == []
+
+    def test_fired_message_reports_real_error_first_attempt(self) -> None:
+        # #510 (b): when the rule DOES fire, the first attempt is a real error,
+        # so "First attempt failed with" accurately quotes an error string.
+        calls = [
+            _ptc("Edit", {"path": "a.py"}, res="InputValidationError: bad", err=True),
+            _ptc("Edit", {"file_path": "a.py", "old_string": "x"}, err=False),
+        ]
+        sigs = _param_signals(_trace(calls=calls))
+        assert len(sigs) == 1
+        assert "First attempt failed with" in sigs[0].message
+        assert "InputValidationError" in sigs[0].message
 
     def test_no_shape_evidence_no_signal(self) -> None:
         # First errored but inputs uncaptured and keys empty -> can't

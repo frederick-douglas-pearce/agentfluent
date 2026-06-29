@@ -49,7 +49,6 @@ import re
 
 from agentfluent.config.models import Severity
 from agentfluent.diagnostics.models import DiagnosticSignal, SignalType
-from agentfluent.diagnostics.signals import ERROR_DETECTION_WINDOW_CHARS
 from agentfluent.traces.models import (
     RESULT_SUMMARY_MAX_CHARS,
     RetrySequence,
@@ -64,26 +63,6 @@ from agentfluent.traces.models import (
 # ``input_examples`` block. Absent when no successful call followed the
 # retries or its input exceeded the capture cap.
 PARAMETER_RETRY_EXAMPLE_KEY = "input_example"
-
-# Validation-flavored error keywords that signal parameter/schema
-# confusion specifically (a superset trigger for PARAMETER_RETRY beyond
-# the generic ``is_error`` flag). Kept separate from
-# ``signals.ERROR_PATTERNS`` (which governs the metadata ERROR_PATTERN
-# signal): these terms are too narrow to flag a generic failure but are
-# strong evidence the agent supplied a malformed ``input``. Matched
-# against the leading window only, reusing the FP-defense bound that
-# ``signals.detect_is_error_from_text`` applies.
-_PARAM_ERROR_KEYWORDS = (
-    "invalid",
-    "validation",
-    "missing required",
-    "type error",
-    "schema",
-)
-_PARAM_ERROR_REGEX = re.compile(
-    "|".join(re.escape(k) for k in _PARAM_ERROR_KEYWORDS),
-    re.IGNORECASE,
-)
 
 # Minimum consecutive same-tool calls to consider a parameter-retry run.
 _PARAMETER_RETRY_MIN_ATTEMPTS = 2
@@ -212,21 +191,6 @@ def _extract_permission_failures(
     return signals
 
 
-def _is_param_error(call: SubagentToolCall) -> bool:
-    """Whether ``call`` looks like a parameter/validation failure.
-
-    The parser-supplied ``is_error`` flag (generic error detection) OR a
-    validation-flavored keyword in the leading window of the result. The
-    window bound mirrors ``signals.detect_is_error_from_text``'s
-    FP-defense — keep keyword matches to the start of the result, where
-    real error messages lead.
-    """
-    if call.is_error:
-        return True
-    window = call.result_summary[:ERROR_DETECTION_WINDOW_CHARS]
-    return bool(_PARAM_ERROR_REGEX.search(window))
-
-
 def _value_shape(value: object) -> object:
     """Recursively reduce a JSON value to its structural shape.
 
@@ -288,9 +252,23 @@ def _build_parameter_retry_signal(
     invocation_id: str | None,
 ) -> DiagnosticSignal | None:
     """Emit PARAMETER_RETRY for a same-tool run, or ``None`` if it doesn't
-    qualify (first call not an error, or no input-shape change)."""
+    qualify (first call not an error, or no input-shape change).
+
+    The first attempt must carry ``is_error=True`` — the parser-supplied flag,
+    which the parser also synthesizes from result text via
+    ``signals.detect_is_error_from_text``. That synthesis covers generic error
+    vocabulary (``failed``/``error``/``unable to``/…), NOT every validation-only
+    phrasing; a first call that sets neither ``is_error`` nor a generic error
+    token is treated as paging/refinement, not a parameter retry. This is a
+    deliberate precision trade-off (#510): it drops the prior keyword-regex
+    fallback (``invalid``/``validation``/``schema``/…) that fired on
+    *successful* results whose text merely looked validation-flavored — the
+    false positives, including describing a successful first result as "failed
+    with", that motivated this gate. The message is keyed on ``run_calls[0]``,
+    so gating on the FIRST attempt (not any attempt) is what keeps that message
+    truthful."""
     run_calls = [calls[i] for i in run_indices]
-    if not _is_param_error(run_calls[0]):
+    if not run_calls[0].is_error:
         return None
     if not _input_shape_changed(run_calls):
         return None

@@ -61,6 +61,7 @@ def _load_cached() -> tuple[GlossaryEntry, ...]:
 def reset_cache() -> None:
     """Clear the load cache. Tests use this to force a re-read."""
     _load_cached.cache_clear()
+    builtin_tool_names_cached.cache_clear()
 
 
 def _check_unique_names(entries: list[GlossaryEntry]) -> None:
@@ -155,3 +156,34 @@ def categories_in_use(entries: list[GlossaryEntry]) -> list[str]:
             seen.add(entry.category)
             out.append(cast(str, entry.category))
     return out
+
+
+def builtin_tool_names(entries: list[GlossaryEntry]) -> frozenset[str]:
+    """Names of the glossary's ``builtin_tool`` entries (Read, Edit, …).
+
+    The single source of truth for "is this a Claude Code built-in tool"
+    (as opposed to a custom SDK/MCP tool). Reuses the maintained
+    ``terms.yaml`` glossary rather than a hard-coded set, so newly added
+    built-ins are picked up centrally. Distinct from the ``builtin_agent_type``
+    category — a built-in *tool* (e.g. ``Read``) can be called from inside a
+    custom *agent*. Consumed by the PARAMETER_RETRY recommendation (#510),
+    which flags fires on built-in tools as informational because an
+    ``input_examples`` array cannot be added to a built-in tool definition.
+    """
+    return frozenset(
+        entry.name for entry in entries if entry.category == "builtin_tool"
+    )
+
+
+@lru_cache(maxsize=1)
+def builtin_tool_names_cached() -> frozenset[str]:
+    """Memoized, zero-arg ``builtin_tool_names`` for hot-path callers.
+
+    The set is invariant across a run, so callers that consult it per item
+    (e.g. ``correlator.ParameterRetryRule`` per signal) should use this rather
+    than rebuilding via ``builtin_tool_names(load_glossary())`` each time. The
+    explicit-``entries`` form is kept for testability/parity with the other
+    accessors; this wrapper caches over the process-wide glossary. Cleared by
+    ``reset_cache``.
+    """
+    return builtin_tool_names(list(_load_cached()))

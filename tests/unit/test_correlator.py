@@ -1139,9 +1139,13 @@ class TestParameterRetryRule:
         *,
         with_example: bool = True,
         agent_type: str = "general-purpose",
+        tool_name: str = "search_docs",
     ) -> DiagnosticSignal:
+        # Default ``tool_name`` is a CUSTOM (non-built-in) tool so these tests
+        # exercise the actionable input_examples path; built-in tools take the
+        # informational branch (#510) and are covered separately below.
         detail: dict[str, object] = {
-            "tool_name": "Edit",
+            "tool_name": tool_name,
             "retry_count": 2,
             "eventual_success": with_example,
         }
@@ -1155,7 +1159,7 @@ class TestParameterRetryRule:
             signal_type=SignalType.PARAMETER_RETRY,
             severity=Severity.WARNING,
             agent_type=agent_type,
-            message="Subagent 'general-purpose' retried tool 'Edit' 2 times.",
+            message=f"Subagent '{agent_type}' retried tool '{tool_name}' 2 times.",
             detail=detail,
         )
 
@@ -1165,7 +1169,7 @@ class TestParameterRetryRule:
         assert recs[0].target == "tools"
         assert recs[0].severity == Severity.WARNING
         assert "input_examples" in recs[0].action
-        assert "'Edit'" in recs[0].action
+        assert "'search_docs'" in recs[0].action
 
     def test_includes_paste_ready_example_when_available(self) -> None:
         recs = correlate([self._param_signal(with_example=True)], None)
@@ -1183,9 +1187,31 @@ class TestParameterRetryRule:
 
     def test_fires_for_builtin_agent_without_builtin_branch(self) -> None:
         # The fix targets the tool definition, not the agent config, so a
-        # built-in agent still gets the input_examples recommendation
-        # (not the generic "route to a custom subagent" built-in action).
+        # built-in AGENT (orthogonal to a built-in TOOL) still gets the
+        # input_examples recommendation for a custom tool.
         recs = correlate([self._param_signal(agent_type="Explore")], None)
         assert len(recs) == 1
         assert recs[0].target == "tools"
         assert "input_examples" in recs[0].action
+
+    def test_builtin_tool_fire_is_annotated_informational(self) -> None:
+        # #510 (c): a retry on a built-in tool (Read) cannot be fixed by adding
+        # input_examples (you can't edit a built-in's definition), so the
+        # recommendation is annotated informational rather than emitting a
+        # non-actionable "add an array to 'Read'" instruction.
+        recs = correlate([self._param_signal(tool_name="Read")], None)
+        assert len(recs) == 1
+        assert recs[0].target == "tools"
+        assert recs[0].severity == Severity.WARNING  # annotation only, not deprioritized
+        assert "built-in" in recs[0].reason
+        assert "informational" in recs[0].reason
+        assert "No action on the built-in 'Read'" in recs[0].action
+        # The non-actionable "add input_examples to 'Read'" instruction is gone.
+        assert "Add an `input_examples` array to the 'Read'" not in recs[0].action
+
+    def test_builtin_tool_example_labeled_informational(self) -> None:
+        recs = correlate([self._param_signal(tool_name="Read", with_example=True)], None)
+        action = recs[0].action
+        assert "Observed successful call shape (informational)" in action
+        assert "Suggested `input_examples` entry" not in action
+        assert '"file_path": "a.py"' in action  # shape still surfaced

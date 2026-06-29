@@ -15,6 +15,8 @@ from agentfluent.glossary.loader import (
     _check_cross_references,
     _check_unique_aliases,
     _check_unique_names,
+    builtin_tool_names,
+    builtin_tool_names_cached,
     find_term,
     fuzzy_match,
     reset_cache,
@@ -57,6 +59,39 @@ class TestPackagedGlossaryLoads:
     def test_every_entry_has_short(self) -> None:
         for entry in load_glossary():
             assert entry.short.strip(), f"{entry.name} missing short"
+
+
+class TestBuiltinToolNames:
+    """`builtin_tool_names` is the SSOT consumed by PARAMETER_RETRY (#510)."""
+
+    def test_tracks_the_builtin_tool_category(self) -> None:
+        # Drift guard: the accessor must equal exactly the names declared in
+        # the `builtin_tool` category, so adding/removing a built-in in
+        # terms.yaml flows through without code changes (and a miscategorized
+        # entry is caught here rather than silently mis-annotating findings).
+        entries = load_glossary()
+        expected = {e.name for e in entries if e.category == "builtin_tool"}
+        assert builtin_tool_names(entries) == expected
+
+    def test_core_builtins_present_custom_absent(self) -> None:
+        names = builtin_tool_names(load_glossary())
+        assert {"Read", "Edit", "Write", "Bash", "Grep", "Glob"} <= names
+        # A custom SDK/MCP tool name is NOT a built-in.
+        assert "search_docs" not in names
+
+    def test_distinct_from_builtin_agent_types(self) -> None:
+        # Built-in TOOL and built-in AGENT are orthogonal categories; the
+        # accessor must not leak agent-type names (e.g. "general-purpose").
+        entries = load_glossary()
+        agent_names = {e.name for e in entries if e.category == "builtin_agent_type"}
+        assert builtin_tool_names(entries).isdisjoint(agent_names)
+
+    def test_cached_accessor_matches_entries_form(self) -> None:
+        # The hot-path memoized wrapper must agree with the explicit-entries
+        # accessor (and stay correct after a cache reset).
+        assert builtin_tool_names_cached() == builtin_tool_names(load_glossary())
+        reset_cache()
+        assert builtin_tool_names_cached() == builtin_tool_names(load_glossary())
 
 
 class TestSchemaValidation:

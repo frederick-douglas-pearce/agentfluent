@@ -30,6 +30,7 @@ from agentfluent.diagnostics.quality_signals import (
 )
 from agentfluent.diagnostics.tool_orchestration import ESTIMATED_TOKEN_SAVINGS_KEY
 from agentfluent.diagnostics.trace_signals import PARAMETER_RETRY_EXAMPLE_KEY
+from agentfluent.glossary.loader import builtin_tool_names_cached
 
 
 def _relpath(path: Path) -> str:
@@ -651,8 +652,18 @@ class ParameterRetryRule:
     tool, or custom tool), not the agent's own prompt/tools config. This
     rule therefore does NOT branch on built-in agents the way
     prompt/tools/model rules do: ``input_examples`` helps whoever calls
-    the tool regardless of whether the caller is a built-in agent. When
-    the trace captured a subsequent successful call, its ``input`` dict
+    the tool regardless of whether the caller is a built-in agent.
+
+    Two *different* "built-in" axes apply here, and must not be conflated:
+    built-in **agent** (``is_builtin_agent``) — NOT branched on, above — and
+    built-in **tool** (the glossary ``builtin_tool`` category, via
+    ``builtin_tool_names``) — which this rule DOES branch on. A retry on a
+    built-in tool like ``Read`` is annotated *informational*: you cannot edit
+    a built-in tool's definition to add ``input_examples``, so the fix is not
+    user-actionable (#510). A built-in *tool* can still be called from inside a
+    custom *agent*, so the two axes are orthogonal.
+
+    When the trace captured a subsequent successful call, its ``input`` dict
     is surfaced as a paste-ready example (D002: informational, never
     auto-applied).
     """
@@ -665,24 +676,54 @@ class ParameterRetryRule:
     ) -> DiagnosticRecommendation:
         tool_name = str(signal.detail.get("tool_name", "the tool"))
         observation = signal.message
-        reason = (
-            "Parameter-retry patterns indicate the agent is guessing at "
-            "input formats. Adding concrete examples to the tool definition "
-            "(an `input_examples` array) improves accuracy from 72% to 90% "
-            "on complex parameter handling (Anthropic benchmark)."
-        )
+        # Exact-match (no case-folding) is correct here: trace tool names are
+        # machine-emitted canonical identifiers (``Read``, ``Edit``) that match
+        # terms.yaml verbatim. This intentionally differs from
+        # ``is_builtin_agent``, which lower-cases because agent types are
+        # user-authored and free-cased.
+        is_builtin_tool = tool_name in builtin_tool_names_cached()
 
-        action_parts = [
-            f"Add an `input_examples` array to the '{tool_name}' tool "
-            "definition showing the expected parameter shape.",
-        ]
+        if is_builtin_tool:
+            # The `input_examples` fix lives on the tool definition, which a
+            # user cannot edit for a Claude Code built-in -- so annotate the
+            # fire as informational rather than emit a non-actionable action
+            # (#510). Severity/target are left unchanged: this is annotation,
+            # not scoring deprioritization (the latter is a tracked follow-up).
+            reason = (
+                f"'{tool_name}' is a built-in Claude Code tool, so its "
+                "definition cannot be edited to add an `input_examples` array "
+                "-- this finding is informational, not directly user-tunable. "
+                "The retry pattern still indicates input-format guessing; the "
+                "fix applies only if it recurs on a custom SDK/MCP tool you own."
+            )
+            action_parts = [
+                f"No action on the built-in '{tool_name}' itself. For any "
+                "custom SDK/MCP tool showing the same pattern, add an "
+                "`input_examples` array to its definition showing the expected "
+                "parameter shape.",
+            ]
+        else:
+            reason = (
+                "Parameter-retry patterns indicate the agent is guessing at "
+                "input formats. Adding concrete examples to the tool definition "
+                "(an `input_examples` array) improves accuracy from 72% to 90% "
+                "on complex parameter handling (Anthropic benchmark)."
+            )
+            action_parts = [
+                f"Add an `input_examples` array to the '{tool_name}' tool "
+                "definition showing the expected parameter shape.",
+            ]
+
         example = signal.detail.get(PARAMETER_RETRY_EXAMPLE_KEY)
         if isinstance(example, dict):
             rendered = json.dumps(example, indent=2, ensure_ascii=False)
-            action_parts.append(
-                f"Suggested `input_examples` entry for tool '{tool_name}' "
-                f"based on the observed successful call:\n{rendered}",
+            label = (
+                "Observed successful call shape (informational)"
+                if is_builtin_tool
+                else f"Suggested `input_examples` entry for tool '{tool_name}' "
+                "based on the observed successful call"
             )
+            action_parts.append(f"{label}:\n{rendered}")
         action = "\n".join(action_parts)
 
         return DiagnosticRecommendation(
