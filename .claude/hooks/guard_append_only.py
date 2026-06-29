@@ -42,7 +42,12 @@ from typing import Any
 # elsewhere in the tree). Each value is the anchored, multiline regex that
 # captures the entry IDs whose existence must be preserved across a write.
 # To protect another append-only spec, add its suffix + ID pattern here.
-DECISION_ID_PATTERN = re.compile(r"^##\s+(D\d+)", re.MULTILINE)
+#
+# The ID capture includes an optional `-<suffix>` segment so suffixed entries
+# (e.g. `## D038-A:`) are tracked as distinct IDs. Without it, `D\d+` would
+# truncate `D038-A` to `D038`, collapsing it with a sibling `## D038:` entry
+# and silently allowing one of them to be dropped (the exact #500 hazard).
+DECISION_ID_PATTERN = re.compile(r"^##\s+(D\d+(?:-[A-Za-z0-9]+)?)", re.MULTILINE)
 
 APPEND_ONLY_FILES: dict[str, re.Pattern[str]] = {
     ".claude/specs/decisions.md": DECISION_ID_PATTERN,
@@ -72,7 +77,10 @@ def match_registered_file(path_str: str) -> re.Pattern[str] | None:
         return None
     normalized = normalize(path_str)
     for suffix, pattern in APPEND_ONLY_FILES.items():
-        if normalized.endswith(suffix):
+        # Require a path-component boundary so an unrelated file whose tail
+        # merely ends in the suffix string (e.g. `.../vendor.claude/specs/
+        # decisions.md`) is not mistaken for the protected log.
+        if normalized == suffix or normalized.endswith("/" + suffix):
             return pattern
     return None
 

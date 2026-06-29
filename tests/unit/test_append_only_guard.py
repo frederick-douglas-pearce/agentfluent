@@ -16,14 +16,15 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import re
 from pathlib import Path
 from types import ModuleType
 
 import pytest
 
-_HOOK_PATH = (
-    Path(__file__).resolve().parents[2] / ".claude" / "hooks" / "guard_append_only.py"
-)
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_HOOK_PATH = _REPO_ROOT / ".claude" / "hooks" / "guard_append_only.py"
+_REAL_DECISIONS = _REPO_ROOT / ".claude" / "specs" / "decisions.md"
 
 
 def _load_hook() -> ModuleType:
@@ -93,6 +94,21 @@ def test_existing_with_no_ids_is_allowed() -> None:
     assert blocked is False
 
 
+def test_suffixed_id_is_distinct_from_numeric_sibling() -> None:
+    # Regression: `## D038-A:` must not collapse onto `## D038:`. Dropping the
+    # suffixed entry while keeping the numeric one must be detected.
+    existing = _doc("038", "038-A")
+    proposed = _doc("038")  # D038-A silently dropped
+    blocked, reason = guard.evaluate(existing, proposed, guard.DECISION_ID_PATTERN)
+    assert blocked is True
+    assert "D038-A" in reason
+
+
+def test_suffixed_and_numeric_ids_both_extracted() -> None:
+    ids = guard.extract_ids(_doc("038", "038-A"), guard.DECISION_ID_PATTERN)
+    assert ids == {"D038", "D038-A"}
+
+
 # --- extract_ids(): anchored regex ----------------------------------------
 
 
@@ -119,6 +135,16 @@ def test_unrelated_decisions_md_does_not_match() -> None:
 
 def test_empty_path_does_not_match() -> None:
     assert guard.match_registered_file("") is None
+
+
+def test_relative_registered_path_matches() -> None:
+    assert guard.match_registered_file(REGISTERED_SUFFIX) is guard.DECISION_ID_PATTERN
+
+
+def test_suffix_requires_path_boundary() -> None:
+    # Regression: a tail that merely ends in the suffix STRING, without a `/`
+    # boundary before `.claude`, must NOT be treated as the protected log.
+    assert guard.match_registered_file(f"/repo/vendor{REGISTERED_SUFFIX}") is None
 
 
 # --- check(): event-level behavior + I/O ----------------------------------
@@ -216,3 +242,26 @@ def test_main_allows_valid_append(
     rc = guard.main()
     assert rc == 0
     assert capsys.readouterr().out == ""  # no decision emitted == allow
+
+
+# --- drift guard against the real decisions.md ----------------------------
+
+
+def test_pattern_tracks_the_real_decision_log() -> None:
+    # Couples the guard to the live file: if decisions.md's heading style ever
+    # drifts away from `## Dxxx`, the pattern would silently stop matching and
+    # the guard would degrade to a no-op (the #500 hazard, reintroduced
+    # quietly). This test turns that silent failure into a red build.
+    assert _REAL_DECISIONS.exists(), "real decisions.md not found at expected path"
+    text = _REAL_DECISIONS.read_text(encoding="utf-8")
+
+    ids = list(guard.DECISION_ID_PATTERN.findall(text))
+    heading_lines = re.findall(r"^##\s+D\d", text, re.MULTILINE)
+
+    assert ids, "pattern captured no decision IDs from the real log"
+    # Every decision-shaped heading is captured exactly once (no drift, no
+    # collision such as D038-A collapsing onto D038).
+    assert len(ids) == len(heading_lines)
+    assert len(ids) == len(set(ids))
+    # The known suffixed/numeric sibling pair stays distinct.
+    assert {"D038", "D038-A"} <= set(ids)
