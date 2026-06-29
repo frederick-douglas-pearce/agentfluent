@@ -155,3 +155,20 @@ def categories_in_use(entries: list[GlossaryEntry]) -> list[str]:
             seen.add(entry.category)
             out.append(cast(str, entry.category))
     return out
+
+
+def builtin_tool_names(entries: list[GlossaryEntry]) -> frozenset[str]:
+    """Names of the glossary's ``builtin_tool`` entries (Read, Edit, …).
+
+    The single source of truth for "is this a Claude Code built-in tool"
+    (as opposed to a custom SDK/MCP tool). Reuses the maintained
+    ``terms.yaml`` glossary rather than a hard-coded set, so newly added
+    built-ins are picked up centrally. Distinct from the ``builtin_agent_type``
+    category — a built-in *tool* (e.g. ``Read``) can be called from inside a
+    custom *agent*. Consumed by the PARAMETER_RETRY recommendation (#510),
+    which flags fires on built-in tools as informational because an
+    ``input_examples`` array cannot be added to a built-in tool definition.
+    """
+    return frozenset(
+        entry.name for entry in entries if entry.category == "builtin_tool"
+    )
