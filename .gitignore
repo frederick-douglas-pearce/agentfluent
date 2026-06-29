@@ -21,6 +21,10 @@ data/
 .claude/settings.local.json
 .claude/*.lock
 .claude/worktrees/
+# Loop-engineering harness ledger: local working state (queue/progress/plans),
+# never committed -- committing collides with branch protection (see
+# .claude/specs/prd-loop-engineering.md section 6.4).
+.claude/loop/
 
 # IDE
 .vscode/
