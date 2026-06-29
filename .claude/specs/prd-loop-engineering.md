@@ -581,6 +581,31 @@ equivalent review/verify steps as in-process subagent calls or programmatic GHA 
   persistence/visibility?
 - Graduation criteria from supervised → escalation-only → headless, and the guardrails
   (sandbox, budget cap, expanded allow-list) each step needs.
+- **Async-ask UX in headless mode (§13).** `claude -p` is non-interactive by definition —
+  there is no live turn to block into — so the supervised loop's *blocking* gate (stop
+  mid-turn, wait for a human click) cannot exist headless. §2's principle ("HITL as an async
+  *ask*, not a blocking babysit") becomes mandatory there. Mechanism is partly in place: the
+  `hold` / `blocked` ledger statuses (§6.1) already turn a human gate into a durable, parked
+  row that survives `/clear`; the human answers out of band (release the hold, comment on the
+  issue, edit the ledger) and the next launch resumes via §0/§7.6. **Open:** on an
+  uncertainty, does the run *halt-and-exit* (leaving one parked ask) or *park-and-continue*
+  (record the ask, move to the next selectable issue, exit when only parked/held rows remain)?
+  How is the ask surfaced beyond the ledger — issue comment, push/email ping, both? And what
+  is the human's review surface for a run they did *not* watch live (streamed
+  `--output-format stream-json` vs. reading `progress.md` + the PR/issue trail after the
+  fact)? Note review/verify re-plumbing (§13): `/code-review`/`/security-review`/`/verify`
+  don't carry into `claude -p`, so the gate machinery itself changes, not just the human's
+  presence.
+- **Hybrid mode selection.** Headless graduation is not all-or-nothing (§13: graduate *part*
+  of the loop). The likely end-state keeps **both** an interactive `/release-loop` (for
+  calibration, risky/irreversible issues, anything worth being live for — blocking gates work)
+  **and** a headless `claude -p` loop (for the escalation-only steady state, where low-risk
+  routes flow through untouched and only genuine asks surface as parked rows). **Open:** what
+  is the selection boundary — per `mode:` (already gates auto-merge, §7.1 step 11), per route
+  (e.g. `docs`/`research` headless-eligible, `code` stays interactive until proven), per
+  issue-level flag, or a confidence threshold? Headless presupposes the gates are already
+  loosened (it cannot run under `mode: calibration`, which stops at every plan gate), so the
+  boundary is downstream of the graduation ladder above, not independent of it.
 
 ## 15. References
 - Research synthesis (this session): Huntley `ghuntley.com/ralph`; Anthropic posts above;
