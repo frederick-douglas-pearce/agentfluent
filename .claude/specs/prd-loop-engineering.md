@@ -175,13 +175,17 @@ Create `LEDGER_ROOT/<run-slug>/` (e.g. `.claude/loop/v0.10.0/`) containing three
 The orchestrator is the only writer except where noted.
 
 ### 6.1 `queue.md` — work list (authoritative status)
-Dependency-ordered. One row per issue. Statuses: `queued → routed → planning →
-plan-approved → implementing → in-pr → in-review → done | blocked | deferred | hold`.
-The orchestrator advances a row's status as it moves through the pipeline (§7.1), so an
-interrupted run leaves a **non-terminal status that resume keys on** (§7.6). `hold` is a
-durable, human-set merge-hold that survives `/clear`. The header carries a `mode:` field
-(`calibration` until the human loosens it to `escalation-only`) that gates auto-merge (§7.1
-step 11).
+Dependency-ordered. One row per issue. **`Route` and `Status` are separate columns** (a row
+can be Route `research`, Status `blocked`). **Pipeline statuses** — advanced by the
+orchestrator as the issue moves through §7.1, so an interrupted run leaves a non-terminal
+status resume keys on (§7.6): `queued → routed → planning → plan-approved → implementing →
+in-pr → in-review`. **Terminal statuses** — the run converges when every row is terminal:
+`done`; `deferred` (Route `stub-defer`); `blocked` (parked — an unmet dependency, or
+`blocked: too-large` awaiting a split). **`hold`** is a separate **non-terminal, parked**
+status: a durable, human-set merge-hold that survives `/clear`. While any `hold` row remains
+the run is NOT complete, but a held row does not block selecting other queued work (§7.1
+steps 0–1). The header carries a `mode:` field (`calibration` until the human loosens it to
+`escalation-only`) that gates auto-merge (§7.1 step 11).
 
 ```markdown
 # Loop run: v0.10.0
@@ -277,21 +281,29 @@ fresh invocation resumes correctly. Read the project parameters in
    `RUN COMPLETE` sentinel (§9), report done and STOP — do not re-scan. If no run exists, ask
    the user which milestone/label to run, then INITIALIZE per §7.5 of the spec.
 2. Read `queue.md` (note its `mode:` header and any `hold` rows) and the tail of `progress.md`.
-3. **Resume before selecting (spec §7.6).** If any row sits in a non-terminal,
-   non-`queued`/`routed` status (`planning`/`plan-approved`/`implementing`/`in-pr`/
-   `in-review`/`hold`), a prior iteration was interrupted. Reconcile that row against LIVE
-   git/PR state as the source of truth — branch exists? PR open? already merged? CI status? —
-   plus the working tree, then re-enter the pipeline at the matching stage and FINISH that
-   issue BEFORE selecting a new one. This is what makes "one PR at a time" hold across
-   `/clear`/compaction. A `hold` row stays held until the human releases it.
+3. **Resume before selecting (spec §7.6).** If any row sits in an *interrupted* status —
+   non-terminal and NOT `queued`/`routed`/`hold` (i.e. `planning`/`plan-approved`/
+   `implementing`/`in-pr`/`in-review`) — a prior iteration was cut off. Reconcile it against
+   LIVE git/PR state as the source of truth — branch exists? PR open? already merged? CI
+   status? — plus the working tree (status is only a coarse anchor; git wins on conflict),
+   then re-enter the pipeline at the matching stage and FINISH that issue BEFORE selecting a
+   new one. This is what makes "one PR at a time" hold across `/clear`/compaction. A `hold`
+   row is NOT an interruption: skip it here, leave it held — it stays parked until the human
+   releases the hold and does not block working other issues.
 
 ## 1. Select
-Among issues whose status is `queued`/`routed` and whose `Depends on` issues are all `done`,
-pick by `PRIORITY_LABELS` order, tiebreak issue-number ascending. If none are selectable: if
-EVERY row is terminal (`done`/`deferred`/`blocked`), append the §9 `RUN COMPLETE — <run-slug>`
-sentinel to `progress.md` (counts + any blocked/deferred items) and STOP (convergence).
-Otherwise (rows still blocked on open in-run dependencies) report what's pending and STOP
-without the sentinel.
+A row is **selectable** if its status is `queued`/`routed`, OR it is `blocked` on an unmet
+dependency that has SINCE cleared (all its `Depends on` issues are now `done` — re-route it via
+§2; this does NOT apply to a `blocked: too-large` park, which waits on a split). Among
+selectable rows pick by `PRIORITY_LABELS` order, tiebreak issue-number ascending. If none are
+selectable:
+- If EVERY row is terminal (`done`/`deferred`/`blocked`), append the §9 `RUN COMPLETE —
+  <run-slug>` sentinel to `progress.md` (counts + any blocked/deferred items) and STOP
+  (convergence).
+- Else if the only non-terminal rows are `hold`, report "<n> held — awaiting human
+  merge-release" and STOP **without** the sentinel (the run is not complete).
+- Else (rows still blocked on open in-run dependencies) report what's pending and STOP
+  without the sentinel.
 **Size guard:** before entering the pipeline, estimate scope from the issue body — if it
 plausibly touches many files or spans multiple unrelated acceptance-criteria clusters (won't
 fit one context window), mark it `blocked: too-large`, escalate to SCOPE_AGENT to split, and
@@ -299,9 +311,12 @@ go back to select. Aggressively offload reading/analysis to subagents (architect
 within an iteration to conserve the parent's context.
 
 ## 2. Triage / route (if not already routed)
-Classify into `code | research | docs | stub-defer | blocked` using §7.3. Set the row's Route
-and advance its status to `routed`. If `stub-defer` or `blocked`, journal why and go back to
-§1 (do not implement).
+Run §7.3 to set the row's **Route** (`code`/`research`/`docs`/`stub-defer`) and its **initial
+Status** (Route and Status are distinct — §6.1): `stub-defer` → Status `deferred` (terminal);
+an unmet dependency → Status `blocked` (parked; record the dep, or `too-large`, in Notes — the
+Route is retained so the row resumes as that route when the dependency clears, §1); otherwise →
+Status `routed`. If the Status is `deferred` or `blocked`, journal why and go back to §1 — do
+not implement.
 
 ## 3. Plan
 Set the row status to `planning`. Fetch the issue (`gh issue view <N>`). Write
@@ -352,10 +367,13 @@ Address findings ≥ the project's confidence bar.
 ## 11. Merge
 Read the run `mode` from the `queue.md` header. If `mode: calibration` (the default until the
 human loosens it) OR the row is flagged `hold`: STOP and ask the human before merging — never
-auto-merge in calibration. Otherwise, when CI + security are green AND no merge-hold is
-recorded: squash-merge with an explicit `--subject` carrying the correct `COMMIT_CONV` scope,
-`--delete-branch`. Confirm the issue closed. (A human merge-hold is recorded durably in the
-row — status `hold` or a `Notes: HOLD …` flag — so it survives `/clear`.)
+auto-merge in calibration. **If the human holds the merge (now or in any later invocation),
+WRITE the hold to the row before stopping** — set Status `hold` (record the reason in Notes) so
+it persists across `/clear`; resume (step 0.3), §1, and this gate all key on Status `hold` and
+honor it until the human clears it (restoring the row's prior status). Otherwise, when CI +
+security are green AND the row is not `hold`:
+squash-merge with an explicit `--subject` carrying the correct `COMMIT_CONV` scope,
+`--delete-branch`. Confirm the issue closed.
 
 ## 12. Journal + stop
 Append the iteration block to `progress.md`; set the `queue.md` row to `done` (or
@@ -392,15 +410,22 @@ correlation logic, or analytics pipeline; **or the orchestrator is unsure.** Bia
 calling it (read-only, cheap vs. a bad implementation). Skip for docs and trivial research.
 
 ### 7.3 Router — classification procedure
-Decide route from labels + body signals, in order:
+Set the row's **Route** (the semantic kind) and its **initial Status** *separately* — they are
+distinct columns (§6.1), so a dependency-blocked research issue is Route `research` / Status
+`blocked`, not Route `blocked`.
+
+**Route**, from labels + body signals, in order:
 1. Issue body says explicitly "NOT implementation-ready" / is a stub (e.g. #469, D041) →
    `stub-defer`.
-2. Any `Depends on` issue not `done` → `blocked`.
-3. Label `documentation` and change is confined to `docs/`/markdown → `docs`.
-4. Label `research` or epic `*-discovery`, throwaway scaffolding, "artifact under study is
+2. Label `documentation` and change is confined to `docs/`/markdown → `docs`.
+3. Label `research` or epic `*-discovery`, throwaway scaffolding, "artifact under study is
    data" → `research` (no test-coverage gate; placement outside `src/`; no runtime-dep
    leakage into the package).
-5. Otherwise (`bug`/`enhancement` touching `src/`) → `code` (full pipeline).
+4. Otherwise (`bug`/`enhancement` touching `src/`) → `code` (full pipeline).
+
+**Initial Status:** Route `stub-defer` → `deferred` (terminal). Else if any `Depends on` issue
+is not `done` → `blocked` (parked; record the dep in Notes; the semantic Route is retained so
+the row resumes as that route once the dependency clears, §1). Else → `routed`.
 
 ### 7.4 C5 — AC-verifier
 Default: **compose existing tools**, don't mint an agent.
@@ -426,14 +451,23 @@ Promote to a dedicated `ac-verifier` agent only if the composed approach proves 
 
 ### 7.6 Resume after `/clear` or compaction
 The next `/release-loop` invocation's §0 resume step (step 3) reads `queue.md` + tail of
-`progress.md` and, finding any in-flight (non-terminal, non-`queued`/`routed`) row, finishes
-it before selecting new work. The on-disk ledger row status is the cheap anchor (which stage);
-the **live git/PR state is the source of truth** for the details (the ledger is uncommitted,
-§6.4): for an in-flight row, check whether its branch exists, whether a PR is open (or already
-merged), and the PR's CI status, and resume at the matching pipeline stage. **Working-tree reconciliation:** if a crashed prior attempt left uncommitted
-changes, inspect them before proceeding — keep and continue if they match the plan, or
-`git restore`/stash if they're partial/unrelated. A resumed `implementing` row is NOT "stuck"
-(stuck keys on a repeated error signature, not status re-entry — see Guardrails).
+`progress.md` and, finding any *interrupted* row (non-terminal and NOT
+`queued`/`routed`/`hold`), finishes it before selecting new work. A `hold` row is **excluded**
+— it is a deliberate, durable human merge-hold, not an interruption; leave it parked (it stays
+held until the human clears it, §7.1 step 11) and it does not block other work. The on-disk
+ledger row status is only a **coarse anchor** (which stage); the **live git/PR state is the
+source of truth** for the details (the ledger is uncommitted, §6.4): for an in-flight row,
+check whether its branch exists, whether a PR is open (or already merged), and the PR's CI
+status, and resume at the matching pipeline stage — git wins on any conflict with a stale
+status. Stages 4/7/10 need no distinct status because the surrounding statuses bracket them:
+a `plan-approved` row re-enters at implement (§6), so the architect/human gates are NOT re-run.
+The one external-side-effect stage is the architect (§4) — it posts a comment to the issue —
+so on the rare resume of a `planning` row, check for an existing architect comment and skip
+re-invoking if present (do not double-post). AC-verify (§7) is side-effect-free; security (§10)
+re-labeling is a GitHub no-op. **Working-tree reconciliation:** if a crashed prior attempt left uncommitted changes, inspect them before
+proceeding — keep and continue if they match the plan, or `git restore`/stash if they're
+partial/unrelated. A resumed `implementing` row is NOT "stuck" (stuck keys on a repeated error
+signature, not status re-entry — see Guardrails).
 
 ---
 
@@ -444,8 +478,11 @@ changes, inspect them before proceeding — keep and continue if they match the 
 | `code` | full pipeline, all gates |
 | `research` | lighter plan; **no test-coverage gate**; architect optional; security only if deps added; place outside `src/` |
 | `docs` | skip architect + security; light review; `docs:` scope |
-| `stub-defer` | do NOT implement; journal why; leave in backlog |
-| `blocked` | skip; revisit when dependency closes |
+| `stub-defer` | do NOT implement; journal why; leave in backlog (Status `deferred`) |
+
+`blocked` is a **Status overlay, not a Route**: a row keeps its semantic Route (`code`/
+`research`/`docs`) while parked on an unmet dependency. Skip it; it returns to selection and
+runs as its Route when the dependency closes (§1, §7.3).
 
 **Mechanical rules (both learned in the #500 run — §11):**
 - `.claude/`-only change → local `/security-review`, not the label (workflow excludes

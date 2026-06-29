@@ -15,21 +15,29 @@ fresh invocation resumes correctly. Read the project parameters in
    `RUN COMPLETE` sentinel (§9), report done and STOP — do not re-scan. If no run exists, ask
    the user which milestone/label to run, then INITIALIZE per §7.5 of the spec.
 2. Read `queue.md` (note its `mode:` header and any `hold` rows) and the tail of `progress.md`.
-3. **Resume before selecting (spec §7.6).** If any row sits in a non-terminal,
-   non-`queued`/`routed` status (`planning`/`plan-approved`/`implementing`/`in-pr`/
-   `in-review`/`hold`), a prior iteration was interrupted. Reconcile that row against LIVE
-   git/PR state as the source of truth — branch exists? PR open? already merged? CI status? —
-   plus the working tree, then re-enter the pipeline at the matching stage and FINISH that
-   issue BEFORE selecting a new one. This is what makes "one PR at a time" hold across
-   `/clear`/compaction. A `hold` row stays held until the human releases it.
+3. **Resume before selecting (spec §7.6).** If any row sits in an *interrupted* status —
+   non-terminal and NOT `queued`/`routed`/`hold` (i.e. `planning`/`plan-approved`/
+   `implementing`/`in-pr`/`in-review`) — a prior iteration was cut off. Reconcile it against
+   LIVE git/PR state as the source of truth — branch exists? PR open? already merged? CI
+   status? — plus the working tree (status is only a coarse anchor; git wins on conflict),
+   then re-enter the pipeline at the matching stage and FINISH that issue BEFORE selecting a
+   new one. This is what makes "one PR at a time" hold across `/clear`/compaction. A `hold`
+   row is NOT an interruption: skip it here, leave it held — it stays parked until the human
+   releases the hold and does not block working other issues.
 
 ## 1. Select
-Among issues whose status is `queued`/`routed` and whose `Depends on` issues are all `done`,
-pick by `PRIORITY_LABELS` order, tiebreak issue-number ascending. If none are selectable: if
-EVERY row is terminal (`done`/`deferred`/`blocked`), append the §9 `RUN COMPLETE — <run-slug>`
-sentinel to `progress.md` (counts + any blocked/deferred items) and STOP (convergence).
-Otherwise (rows still blocked on open in-run dependencies) report what's pending and STOP
-without the sentinel.
+A row is **selectable** if its status is `queued`/`routed`, OR it is `blocked` on an unmet
+dependency that has SINCE cleared (all its `Depends on` issues are now `done` — re-route it via
+§2; this does NOT apply to a `blocked: too-large` park, which waits on a split). Among
+selectable rows pick by `PRIORITY_LABELS` order, tiebreak issue-number ascending. If none are
+selectable:
+- If EVERY row is terminal (`done`/`deferred`/`blocked`), append the §9 `RUN COMPLETE —
+  <run-slug>` sentinel to `progress.md` (counts + any blocked/deferred items) and STOP
+  (convergence).
+- Else if the only non-terminal rows are `hold`, report "<n> held — awaiting human
+  merge-release" and STOP **without** the sentinel (the run is not complete).
+- Else (rows still blocked on open in-run dependencies) report what's pending and STOP
+  without the sentinel.
 **Size guard:** before entering the pipeline, estimate scope from the issue body — if it
 plausibly touches many files or spans multiple unrelated acceptance-criteria clusters (won't
 fit one context window), mark it `blocked: too-large`, escalate to SCOPE_AGENT to split, and
@@ -37,9 +45,12 @@ go back to select. Aggressively offload reading/analysis to subagents (architect
 within an iteration to conserve the parent's context.
 
 ## 2. Triage / route (if not already routed)
-Classify into `code | research | docs | stub-defer | blocked` using §7.3. Set the row's Route
-and advance its status to `routed`. If `stub-defer` or `blocked`, journal why and go back to
-§1 (do not implement).
+Run §7.3 to set the row's **Route** (`code`/`research`/`docs`/`stub-defer`) and its **initial
+Status** (Route and Status are distinct — §6.1): `stub-defer` → Status `deferred` (terminal);
+an unmet dependency → Status `blocked` (parked; record the dep, or `too-large`, in Notes — the
+Route is retained so the row resumes as that route when the dependency clears, §1); otherwise →
+Status `routed`. If the Status is `deferred` or `blocked`, journal why and go back to §1 — do
+not implement.
 
 ## 3. Plan
 Set the row status to `planning`. Fetch the issue (`gh issue view <N>`). Write
@@ -90,10 +101,13 @@ Address findings ≥ the project's confidence bar.
 ## 11. Merge
 Read the run `mode` from the `queue.md` header. If `mode: calibration` (the default until the
 human loosens it) OR the row is flagged `hold`: STOP and ask the human before merging — never
-auto-merge in calibration. Otherwise, when CI + security are green AND no merge-hold is
-recorded: squash-merge with an explicit `--subject` carrying the correct `COMMIT_CONV` scope,
-`--delete-branch`. Confirm the issue closed. (A human merge-hold is recorded durably in the
-row — status `hold` or a `Notes: HOLD …` flag — so it survives `/clear`.)
+auto-merge in calibration. **If the human holds the merge (now or in any later invocation),
+WRITE the hold to the row before stopping** — set Status `hold` (record the reason in Notes) so
+it persists across `/clear`; resume (step 0.3), §1, and this gate all key on Status `hold` and
+honor it until the human clears it (restoring the row's prior status). Otherwise, when CI +
+security are green AND the row is not `hold`:
+squash-merge with an explicit `--subject` carrying the correct `COMMIT_CONV` scope,
+`--delete-branch`. Confirm the issue closed.
 
 ## 12. Journal + stop
 Append the iteration block to `progress.md`; set the `queue.md` row to `done` (or
