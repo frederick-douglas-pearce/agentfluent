@@ -33,13 +33,13 @@ from typing import TYPE_CHECKING, Literal
 from agentfluent.analytics.pricing import compute_cost, get_pricing
 from agentfluent.config.models import Severity
 from agentfluent.diagnostics._complexity import (
-    MODEL_HAIKU,
-    MODEL_SONNET,
     AgentStats,
     ComplexityTier,
     classify_complexity,
+    classify_model_tier,
     compute_error_rate,
     has_write_tools_in_trace,
+    select_target_model,
 )
 from agentfluent.diagnostics.models import DiagnosticSignal, SignalType
 
@@ -59,6 +59,7 @@ __all__ = [
     "aggregate_agent_stats",
     "classify_complexity",
     "classify_model_tier",
+    "estimate_model_savings",
     "extract_model_routing_signals",
 ]
 
@@ -78,31 +79,6 @@ _MIN_INVOCATIONS_FOR_ANALYSIS = 3
 # The error-rate threshold below is reused for the underspec gate; kept
 # local here so the gate stays close to its consumer.
 _UNDERSPEC_ERROR_RATE_GATE = 0.20
-
-# Complexity tier by Claude model family. Model IDs follow the pattern
-# `claude-<family>-<version>[-<date>]`, so a prefix match covers both
-# short aliases (`claude-opus-4-7`) and dated pinned forms
-# (`claude-haiku-4-5-20251001`) that subagent traces record at runtime.
-# Avoids duplicating the model catalog with `analytics.pricing._PRICING`.
-_TIER_BY_FAMILY: dict[ComplexityTier, tuple[str, ...]] = {
-    "simple": ("claude-haiku",),
-    "moderate": ("claude-sonnet",),
-    "complex": ("claude-opus",),
-}
-
-
-def classify_model_tier(model: str) -> ComplexityTier:
-    """Classify a Claude model ID into a complexity tier by family prefix.
-
-    Returns "moderate" for anything that doesn't match a known family —
-    a safe default that doesn't emit MODEL_MISMATCH signals against
-    unrecognized models.
-    """
-    for tier, prefixes in _TIER_BY_FAMILY.items():
-        if any(model.startswith(p) for p in prefixes):
-            return tier
-    return "moderate"
-
 
 def _resolve_current_model(
     group: list[AgentInvocation],
@@ -172,34 +148,49 @@ def aggregate_agent_stats(
     return stats_by_type
 
 
-def _compute_savings(
-    stats: AgentStats,
+def estimate_model_savings(
+    current_model: str | None,
     alt_model: str,
+    total_tokens: float | None,
+    count: int,
 ) -> tuple[float | None, float | None]:
-    """Estimate (savings_usd, current_cost_usd) for switching current → alt.
+    """Estimate ``(savings_usd, current_cost_usd)`` for ``current → alt``.
 
-    Returns ``(None, None)`` when pricing is unavailable for either
-    model — the recommendation still ships, just without the dollar
-    figure. Token in/out split is approximated 50/50; real ratio
-    tracked in #143.
+    Shared by both ``target: model`` paths (#170): the complexity-mismatch
+    path prices ``mean_tokens × invocation_count``; the duration-outlier
+    path prices a single outlier's ``total_tokens × 1``. Returns
+    ``(None, None)`` when the current model is unknown, token data is
+    missing, or pricing is unavailable for either model — the
+    recommendation still ships, just without the dollar figure. Token
+    in/out split is approximated 50/50; real ratio tracked in #143.
     """
-    if stats.current_model is None:
+    if not current_model or total_tokens is None:
         return None, None
-    current_pricing = get_pricing(stats.current_model)
+    current_pricing = get_pricing(current_model)
     alt_pricing = get_pricing(alt_model)
     if current_pricing is None or alt_pricing is None:
         return None, None
-    half = stats.mean_tokens / 2.0
+    half = total_tokens / 2.0
     current_per_inv = compute_cost(
         current_pricing, input_tokens=int(half), output_tokens=int(half),
     )
     alt_per_inv = compute_cost(
         alt_pricing, input_tokens=int(half), output_tokens=int(half),
     )
-    current_cost = current_per_inv * stats.invocation_count
-    alt_cost = alt_per_inv * stats.invocation_count
+    current_cost = current_per_inv * count
+    alt_cost = alt_per_inv * count
     savings = max(0.0, current_cost - alt_cost)
     return savings, current_cost
+
+
+def _compute_savings(
+    stats: AgentStats,
+    alt_model: str,
+) -> tuple[float | None, float | None]:
+    """Per-agent savings for the mismatch path: ``mean_tokens × count``."""
+    return estimate_model_savings(
+        stats.current_model, alt_model, stats.mean_tokens, stats.invocation_count,
+    )
 
 
 def _build_mismatch_signal(
@@ -259,18 +250,28 @@ def _detect_mismatch(stats: AgentStats) -> DiagnosticSignal | None:
     current_tier = classify_model_tier(stats.current_model)
     complexity = classify_complexity(stats)
 
+    # Both gates resolve their target through the shared selector (#170);
+    # it returns None when the target tier equals the current tier, so
+    # the same-as-current guard lives in one place. Overspec aims at the
+    # complexity-matched tier (simple → Haiku); underspec deliberately
+    # steps just one tier up to Sonnet rather than the complexity-matched
+    # Opus — a conservative, cheaper recommendation.
     if complexity == "simple" and current_tier in ("moderate", "complex"):
-        return _build_mismatch_signal(
-            stats, "overspec", complexity, recommended_model=MODEL_HAIKU,
-        )
+        recommended = select_target_model(stats.current_model, "simple")
+        if recommended is not None:
+            return _build_mismatch_signal(
+                stats, "overspec", complexity, recommended_model=recommended,
+            )
     if (
         complexity == "complex"
         and current_tier == "simple"
         and stats.error_rate > _UNDERSPEC_ERROR_RATE_GATE
     ):
-        return _build_mismatch_signal(
-            stats, "underspec", complexity, recommended_model=MODEL_SONNET,
-        )
+        recommended = select_target_model(stats.current_model, "moderate")
+        if recommended is not None:
+            return _build_mismatch_signal(
+                stats, "underspec", complexity, recommended_model=recommended,
+            )
     return None
 
 
