@@ -53,7 +53,8 @@ From 2026 loop-engineering practice (Huntley's ralph; Anthropic's
   not the agent's *claim* of done.
 - **Independent fresh-context review beats self-critique** (validated in §11).
 - **HITL as an async "ask"** raised on uncertainty, not a blocking babysit.
-- **Cap iterations/budget; detect "stuck" (repeat action after same error) → escalate.**
+- **Cap iterations/budget; detect "stuck" (repeat action after same error) → escalate.** (The
+  per-iteration budget record + cap fields are defined in §6.1/§6.2.)
 
 **Contested, NOT adopted yet:** pure bash-loop autonomy, unattended runs, async fan-out.
 Both camps agree the deciding factor is *verification gates + explicit state* — the spine of
@@ -201,17 +202,34 @@ uncertainty — never merely because of `mode:`). The two modes:
   always-escalate condition is uncertain, fall back to the human merge gate.** Plan gate
   conditional (unchanged). Loosening to `escalation-only` presupposes the calibration
   prerequisites are met (these pinned mode semantics, #563, plus per-iteration budget
-  journaling); it cannot run headless (§13/§14).
+  journaling — the `- Budget:` record and `iteration-cap:`/`subagent-cap:` fields below,
+  #565); it cannot run headless (§13/§14).
 
 The set of graduated routes is recorded in a `graduated-routes:` header field beside `mode:`
 (default `none`; e.g. `graduated-routes: docs`). Under `mode: calibration` it is inert. *Which*
 routes graduate and the criteria for promoting one (#562) are out of scope here; this field only
 gives the merge gate (§7.1 step 11) a place to read the human's decision from.
 
+The header also carries two **budget caps** (both default `none` = uncapped), #565:
+`iteration-cap:` (max **issues per run** — in this spec one "iteration" = one issue) and
+`subagent-cap:` (max **subagent runs per iteration**). The orchestrator checks them at iteration
+start (§7.1 step 1) as a **retrospective circuit-breaker** against the ledger — it does not watch
+its own spend mid-turn (that is why token/cost is deferred, §6.2). Cumulative iterations are
+counted as the **distinct issues at a terminal status** (`done`/`deferred`/`blocked`) in
+`queue.md` — the authoritative status file — never by counting `progress.md` blocks, since a
+`/clear`-resume re-enters an iteration and would double-count. `subagent-cap` is enforced by
+reading the **prior** iteration's journaled `- Budget:` line (§6.2): if it breached, halt before
+starting the next. On breach the behavior is **advisory in manual re-invoke** (journal + surface
+it and proceed — the human who invoked is the budget authority) and **halting under the driver**
+(§9). The caps bound `escalation-only`'s runaway-consumption risk; bad-merge risk is already
+covered by §6.1's default-deny/always-escalate machinery.
+
 ```markdown
 # Loop run: v0.10.0
 _mode: calibration_
 _graduated-routes: none_
+_iteration-cap: none_       # max issues per run; none = uncapped (#565)
+_subagent-cap: none_        # max subagent runs per iteration; none = uncapped (#565)
 _Last updated: <ISO8601 by orchestrator>_
 
 | # | Issue | Route | Status | Depends on | PR | Notes |
@@ -238,9 +256,26 @@ This is the audit trail and the resume anchor.
 - AC-verify: 3/3 acceptance criteria met (location, discriminator, options metadata).
 - PR: #NNN (chore scope). CI: green.
 - Code-review: 0 findings. Security: n/a (no deps added).
+- Budget: subagent-runs=3 · gate-rounds=architect=0,code-review=1,ac-verify=1 · wall-clock=18m · tokens=deferred
 - Merged: squash #NNN. Issue #518 closed.
 - Next: #522 now unblocked.
 ```
+
+The `- Budget:` line is the per-iteration cost record (#565). Fields:
+- **`subagent-runs`** — the proxy cost signal the orchestrator can count for free (the v0.10.0
+  run's only quantitative signal was "~6 subagent runs/issue", §11.3). Its blind spot:
+  parent-thread token burn (a long implement step spawns no subagent yet can be the largest
+  consumer) is invisible to run-count — which is precisely what the deferred `tokens` field
+  eventually fixes.
+- **`gate-rounds`** — architect / code-review / ac-verify round counts (feeds §12 review-thrash
+  detection).
+- **`wall-clock`** — elapsed time including human gate-wait; recorded for the §12 corpus, **not a
+  cap input** (an iteration that waited overnight for approval is not "expensive").
+- **`tokens=deferred`** — a reserved, named slot. Per-iteration token/cost is computed **post-hoc
+  by AgentFluent over the loop's own JSONL** (the loop JSONL is a first-class corpus, §12), not
+  inside the skill (the orchestrator can't cleanly slice its live session mid-turn). The future
+  SDK driver (§13) backfills it via usage callbacks — keeping the slot named now makes that a
+  backfill, not a format change.
 
 ### 6.3 `issue-<N>.plan.md` — per-issue plan (architect-reviewed, human-approved)
 ```markdown
@@ -314,6 +349,15 @@ fresh invocation resumes correctly. Read the project parameters in
    releases the hold and does not block working other issues.
 
 ## 1. Select
+**Budget cap (iteration start, retrospective).** Read `iteration-cap:` / `subagent-cap:` from the
+`queue.md` header (both default `none` = uncapped). Cumulative iterations = the count of **distinct
+issues at a terminal status** (`done`/`deferred`/`blocked`) in `queue.md` — never count
+`progress.md` blocks (a `/clear`-resume re-enters an iteration and double-counts). Breach = that
+count ≥ `iteration-cap`, OR the **prior** iteration's journaled `- Budget:` line (§12) shows
+`subagent-runs` ≥ `subagent-cap`. On breach: **manual re-invoke is advisory** — journal + surface
+it and proceed (the human who invoked is the budget authority); **the driver halts.** Inert while
+both caps are `none`.
+
 A row is **selectable** if its status is `queued`/`routed`, OR it is `blocked` on an unmet
 dependency that has SINCE cleared (all its `Depends on` issues are now `done` — re-route it via
 §2; this does NOT apply to a `blocked: too-large` park, which waits on a split). Among
@@ -412,9 +456,13 @@ squash-merge with an explicit `--subject` carrying the correct `COMMIT_CONV` sco
 `--delete-branch`. Confirm the issue closed.
 
 ## 12. Journal + stop
-Append the iteration block to `progress.md`; set the `queue.md` row to `done` (or
-`blocked`/`deferred` with reason); note newly-unblocked issues. The ledger is gitignored —
-do NOT commit it (spec §6.4). STOP. (Driver re-invokes with fresh context for the next issue.)
+Append the iteration block to `progress.md`, including a `- Budget:` line (spec §6.2):
+`subagent-runs=<n>` · `gate-rounds=architect=<a>,code-review=<c>,ac-verify=<v>` ·
+`wall-clock=<elapsed, includes gate-wait — not a cap input>` · `tokens=deferred` (computed
+post-hoc by AgentFluent over the loop JSONL; the named slot keeps the line forward-stable).
+Set the `queue.md` row to `done` (or `blocked`/`deferred` with reason); note newly-unblocked
+issues. The ledger is gitignored — do NOT commit it (spec §6.4). STOP. (Driver re-invokes with
+fresh context for the next issue.)
 
 ## Escalation rubric (when unsure)
 Scope/priority/requirements → SCOPE_AGENT. Design/implementation → DESIGN_AGENT. Escalate to
@@ -426,8 +474,9 @@ One PR at a time (no stacked PRs). **Stuck = the same error SIGNATURE recurs** �
 `progress.md` (not just the tail) for the signature: an identical CI failure, or the same
 tool+args failing again — NOT merely re-entering a status (a legitimate `/clear`-resume
 re-enters `implementing` and must not be flagged). On a genuine repeat: stop, escalate, mark
-`blocked`, move on. Respect any iteration/budget cap (stored in the ledger; enforced by the
-driver — inert in manual re-invoke mode).
+`blocked`, move on. Respect any iteration/budget cap (`iteration-cap:`/`subagent-cap:` in the
+`queue.md` header): checked at iteration start (§1) against the ledger — **advisory in manual
+re-invoke (journaled + surfaced, not gating), halted by the driver**.
 
 ## Tool surface — and what you must NOT do
 This skill intentionally runs with the full session toolset (no `allowed-tools` restriction):
@@ -483,7 +532,8 @@ Promote to a dedicated `ac-verifier` agent only if the composed approach proves 
 4. Topologically order by dependency, then by `PRIORITY_LABELS` (tiebreak issue-number asc).
    Write `queue.md` (§6.1) with header `mode: calibration` (default; the human loosens to
    `escalation-only` after calibration — step 11 reads this to gate **the merge gate**, per
-   route; it never affects the plan gate).
+   route; it never affects the plan gate), plus `graduated-routes: none`, `iteration-cap: none`,
+   and `subagent-cap: none` (the budget caps, #565; the human sets them when loosening).
 5. Append an "init" block to `progress.md`. (Ledger is gitignored — not committed.)
 
 ### 7.6 Resume after `/clear` or compaction
@@ -546,8 +596,10 @@ runs as its Route when the dependency closes (§1, §7.3).
 `deferred` | `blocked`). The **completion sentinel** is a final `progress.md` block titled
 `RUN COMPLETE — <run-slug>` summarizing counts (done/deferred/blocked) and listing any
 blocked items + reasons; on reaching it, the orchestrator stops and reports. **Guardrails:**
-iteration/budget caps live in the ledger and are enforced by the driver (inert in manual
-re-invoke mode); one PR at a time; stuck-detection (repeated error signature) → escalate.
+iteration/budget caps live in the `queue.md` header (`iteration-cap:`/`subagent-cap:`, §6.1) and
+are checked at iteration start against the ledger — **advisory in manual re-invoke (journaled +
+surfaced, not gating — the human who invoked is the budget authority), halted by the driver**;
+one PR at a time; stuck-detection (repeated error signature) → escalate.
 The #500 guard hook protects append-only logs once the loop commits its own work.
 
 ---
@@ -619,9 +671,11 @@ equivalent review/verify steps as in-process subagent calls or programmatic GHA 
   persistence/visibility?
 - Graduation criteria from supervised → escalation-only → headless, and the guardrails
   (sandbox, budget cap, expanded allow-list) each step needs. (The supervised → escalation-only
-  *definitions* are now pinned in §6.1 / §11, #563; what remains open is the per-route
-  graduation *criteria* — e.g. how many zero-veto merges before `code` graduates — tracked in
-  #562.)
+  *definitions* are now pinned in §6.1 / §11, #563; the per-iteration budget *record + cap* are
+  pinned in §6.1 / §6.2, #565 — what remains open there is **enforcement in headless mode** (the
+  driver halts; a `claude -p` loop has no live turn to surface an advisory into). What remains open
+  on graduation is the per-route *criteria* — e.g. how many zero-veto merges before `code`
+  graduates — tracked in #562.)
 - **Async-ask UX in headless mode (§13).** `claude -p` is non-interactive by definition —
   there is no live turn to block into — so the supervised loop's *blocking* gate (stop
   mid-turn, wait for a human click) cannot exist headless. §2's principle ("HITL as an async
