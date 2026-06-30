@@ -14,7 +14,7 @@ fresh invocation resumes correctly. Read the project parameters in
 1. Identify the active run (most recent `LEDGER_ROOT/<run>/`). If it already carries a
    `RUN COMPLETE` sentinel (§9), report done and STOP — do not re-scan. If no run exists, ask
    the user which milestone/label to run, then INITIALIZE per §7.5 of the spec.
-2. Read `queue.md` (note its `mode:` header and any `hold` rows) and the tail of `progress.md`.
+2. Read `queue.md` (note its `mode:` / `graduated-routes:` header and any `hold` rows) and the tail of `progress.md`.
 3. **Resume before selecting (spec §7.6).** If any row sits in an *interrupted* status —
    non-terminal and NOT `queued`/`routed`/`hold` (i.e. `planning`/`plan-approved`/
    `implementing`/`in-pr`/`in-review`) — a prior iteration was cut off. Reconcile it against
@@ -62,9 +62,10 @@ If any §7.2 trigger fires OR you are unsure about the design, invoke the DESIGN
 the plan; address `blocking`/`important` concerns before coding. Skip for docs and trivial
 research.
 
-## 5. Human gate (conditional — supervised mode)
-Present the plan and STOP for approval when: acceptance criteria are ambiguous; the change is
-risky/irreversible; SCOPE/ DESIGN agents disagree or punt; or you are otherwise unsure.
+## 5. Human gate (conditional — every mode)
+The plan gate is **conditional in every mode** — `mode:` gates the merge gate only (§11), never
+this one. Present the plan and STOP for approval when: acceptance criteria are ambiguous; the
+change is risky/irreversible; SCOPE/ DESIGN agents disagree or punt; or you are otherwise unsure.
 Otherwise proceed (note "auto-approved" + why in the journal). Route scope questions to
 SCOPE_AGENT and design questions to DESIGN_AGENT BEFORE escalating to the human. On approval
 (human or auto), advance the row to `plan-approved`.
@@ -99,13 +100,27 @@ contested findings escalate to the human, do not loop. Commit fixes.
 Address findings ≥ the project's confidence bar.
 
 ## 11. Merge
-Read the run `mode` from the `queue.md` header. If `mode: calibration` (the default until the
-human loosens it) OR the row is flagged `hold`: STOP and ask the human before merging — never
-auto-merge in calibration. **If the human holds the merge (now or in any later invocation),
+Read the run `mode` and `graduated-routes` from the `queue.md` header. The merge gate is the
+**only** gate `mode` changes (§5 is conditional in every mode). A row is **auto-merge-eligible**
+only when ALL of these hold:
+- `mode: escalation-only`, AND
+- the row's Route is listed in the header's `graduated-routes` field, AND
+- the version bump is ≤ patch — a `docs`/`chore` change produces no bump, which qualifies, AND
+- the row is **not** `hold`, AND
+- none of the always-escalate conditions apply: a `feat:`/breaking change, a risky/irreversible
+  change, a touched security surface, or a contested review finding.
+
+**Default-deny:** if route graduation or any always-escalate condition is uncertain, the row is
+**not** auto-merge-eligible — fall back to the human merge gate.
+
+If the row is **not** auto-merge-eligible — which includes *every* row under `mode: calibration`
+(the default) and any `hold` row — STOP and ask the human before merging; never auto-merge.
+**If the human holds the merge (now or in any later invocation),
 WRITE the hold to the row before stopping** — set Status `hold` (record the reason in Notes) so
 it persists across `/clear`; resume (step 0.3), §1, and this gate all key on Status `hold` and
-honor it until the human clears it (restoring the row's prior status). Otherwise, when CI +
-security are green AND the row is not `hold`:
+honor it until the human clears it (restoring the row's prior status). When the row **is**
+auto-merge-eligible (or the human has approved), and CI + security are green AND the row is not
+`hold`:
 squash-merge with an explicit `--subject` carrying the correct `COMMIT_CONV` scope,
 `--delete-branch`. Confirm the issue closed.
 
