@@ -14,11 +14,18 @@ from typing import ClassVar, Protocol
 
 from agentfluent.agents.models import is_builtin_agent
 from agentfluent.config.models import AgentConfig, Severity
+from agentfluent.diagnostics._complexity import (
+    faster_tier,
+    select_target_model,
+)
 from agentfluent.diagnostics.builtin_actions import (
     BuiltinConcern,
     builtin_recommendation,
 )
-from agentfluent.diagnostics.model_routing import SAVINGS_USD_KEY
+from agentfluent.diagnostics.model_routing import (
+    SAVINGS_USD_KEY,
+    estimate_model_savings,
+)
 from agentfluent.diagnostics.models import (
     DiagnosticRecommendation,
     DiagnosticSignal,
@@ -263,11 +270,22 @@ class DurationOutlierRule:
         if rec := _check_builtin(self, signal, reason):
             return rec
 
-        if config and config.model and "opus" in config.model.lower():
-            action = (
-                f"If this agent's task is routine, consider switching "
-                f"from {config.model} to a faster model in {_relpath(config.file_path)}."
-            )
+        # Resolve the model the agent runs on: the editable declaration
+        # (config.model) wins, else the model the slow invocation actually
+        # used (carried on the signal from its trace). `faster_tier` +
+        # `select_target_model` name a concrete one-tier-down target, or
+        # return None when the model is unknown or already at the fastest
+        # tier — in which case we fall back to a task-scoping suggestion
+        # rather than emit an unnamed "a faster model" rec (#170).
+        current_model = config.model if (config and config.model) else None
+        if current_model is None:
+            detail_model = signal.detail.get("current_model")
+            current_model = detail_model if isinstance(detail_model, str) else None
+        tier = faster_tier(current_model)
+        target_model = select_target_model(current_model, tier) if tier else None
+
+        if target_model is not None:
+            action = self._model_action(signal, config, current_model, target_model)
             target = "model"
         elif config:
             action = (
@@ -277,10 +295,10 @@ class DurationOutlierRule:
             target = "prompt"
         else:
             action = (
-                "Consider using a faster model or adding clearer task "
-                "boundaries to the agent's prompt."
+                "Add clearer task boundaries to the agent's prompt to help "
+                "it work more efficiently."
             )
-            target = "model"
+            target = "prompt"
 
         return DiagnosticRecommendation(
             target=target,
@@ -294,6 +312,35 @@ class DurationOutlierRule:
             config_file=str(config.file_path) if config else "",
             signal_types=[signal.signal_type],
         )
+
+    @staticmethod
+    def _model_action(
+        signal: DiagnosticSignal,
+        config: AgentConfig | None,
+        current_model: str | None,
+        target_model: str,
+    ) -> str:
+        """Compose the concrete current → target switch suggestion.
+
+        Latency leads (it's the duration signal); cost is a parenthetical
+        scoped to *this invocation* — a single slow outlier's tokens are
+        atypically high, so framing them as per-agent savings would
+        overstate the typical case (architect review, #170).
+        """
+        tokens = signal.detail.get("total_tokens")
+        savings, _ = estimate_model_savings(
+            current_model, target_model,
+            tokens if isinstance(tokens, int | float) else None,
+            count=1,
+        )
+        where = f" in {_relpath(config.file_path)}" if config else ""
+        action = (
+            f"If this agent's task is routine, consider switching from "
+            f"{current_model} to {target_model}{where}."
+        )
+        if savings is not None and savings > 0:
+            action += f" (estimated savings: ${savings:.2f} for this invocation)"
+        return action
 
 
 class PermissionFailureRule:

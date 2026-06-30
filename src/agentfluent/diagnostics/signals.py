@@ -161,6 +161,7 @@ def _detect_outliers(
     accessor: Callable[[AgentInvocation], float | None],
     signal_type: SignalType,
     format_message: Callable[[AgentInvocation, float, float, float], str],
+    extra_detail: Callable[[AgentInvocation], dict[str, object]] | None = None,
 ) -> list[DiagnosticSignal]:
     """Generic per-agent-type outlier detector (Tukey IQR rule).
 
@@ -170,7 +171,10 @@ def _detect_outliers(
     ``len(group) < OUTLIER_MIN_SAMPLE`` or where ``IQR <= 0`` (degenerate
     distribution — can't establish "outlier" sensibly).
 
-    Callers supply ``format_message(inv, value, q3, iqr)``.
+    Callers supply ``format_message(inv, value, q3, iqr)`` and may supply
+    ``extra_detail(inv)`` to merge per-invocation keys into the signal's
+    ``detail`` (e.g. the duration path attaches the current model + token
+    count the correlator needs to name + price a concrete model switch).
     """
     signals: list[DiagnosticSignal] = []
 
@@ -200,22 +204,25 @@ def _detect_outliers(
             if val is None or val <= threshold:
                 continue
             excess_iqrs = (val - q3) / iqr
+            detail: dict[str, object] = {
+                "actual_value": val,
+                "median_value": median_val,
+                "q3_value": q3,
+                "iqr_value": iqr,
+                "p95_value": p95,
+                "threshold_value": threshold,
+                "excess_iqrs": round(excess_iqrs, 2),
+                "tool_use_id": inv.tool_use_id,
+            }
+            if extra_detail is not None:
+                detail.update(extra_detail(inv))
             signals.append(DiagnosticSignal(
                 signal_type=signal_type,
                 severity=Severity.WARNING,
                 agent_type=inv.agent_type,
                 invocation_id=inv.invocation_id,
                 message=format_message(inv, val, q3, iqr),
-                detail={
-                    "actual_value": val,
-                    "median_value": median_val,
-                    "q3_value": q3,
-                    "iqr_value": iqr,
-                    "p95_value": p95,
-                    "threshold_value": threshold,
-                    "excess_iqrs": round(excess_iqrs, 2),
-                    "tool_use_id": inv.tool_use_id,
-                },
+                detail=detail,
             ))
 
     return signals
@@ -252,6 +259,14 @@ def _extract_duration_outliers(invocations: list[AgentInvocation]) -> list[Diagn
             f"Agent '{inv.agent_type}' has {val / 1000:.1f}s/tool_use, "
             f"{(val - q3) / iqr:.1f}×IQR above Q3 of {q3 / 1000:.1f}s."
         ),
+        # The correlator's DurationOutlierRule can't reach the invocation
+        # (its interface is (signal, config)), so carry the model it ran
+        # on and this invocation's token count — enough to name and price
+        # a concrete faster-model switch (#170).
+        extra_detail=lambda inv: {
+            "current_model": inv.trace.model if inv.trace else None,
+            "total_tokens": inv.total_tokens,
+        },
     )
 
 

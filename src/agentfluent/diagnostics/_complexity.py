@@ -48,6 +48,36 @@ _TIER_TO_MODEL: dict[ComplexityTier, str] = {
     "complex": MODEL_OPUS,
 }
 
+# Tiers ordered cheapest/fastest → most capable. The single source for
+# "what's one tier faster/slower" (``faster_tier``) — an explicit tuple
+# rather than relying on ``_TIER_TO_MODEL`` dict ordering.
+_TIER_ORDER: tuple[ComplexityTier, ...] = ("simple", "moderate", "complex")
+
+# Complexity tier by Claude model family. Model IDs follow the pattern
+# `claude-<family>-<version>[-<date>]`, so a prefix match covers both
+# short aliases (`claude-opus-4-7`) and dated pinned forms
+# (`claude-haiku-4-5-20251001`) that subagent traces record at runtime.
+# Lives here (not in the pricing module) so all model↔tier knowledge is
+# co-located with the tier→model mapping above (#170).
+_TIER_BY_FAMILY: dict[ComplexityTier, tuple[str, ...]] = {
+    "simple": ("claude-haiku",),
+    "moderate": ("claude-sonnet",),
+    "complex": ("claude-opus",),
+}
+
+
+def classify_model_tier(model: str) -> ComplexityTier:
+    """Classify a Claude model ID into a complexity tier by family prefix.
+
+    Returns "moderate" for anything that doesn't match a known family —
+    a safe default that doesn't emit MODEL_MISMATCH signals against
+    unrecognized models.
+    """
+    for tier, prefixes in _TIER_BY_FAMILY.items():
+        if any(model.startswith(p) for p in prefixes):
+            return tier
+    return "moderate"
+
 
 class AgentStats(BaseModel):
     """Aggregated stats consumed by complexity classification.
@@ -134,6 +164,44 @@ def classify_complexity(stats: AgentStats) -> ComplexityTier:
 def recommend_model_for_complexity(tier: ComplexityTier) -> str:
     """Map a complexity tier to its recommended model id."""
     return _TIER_TO_MODEL[tier]
+
+
+def select_target_model(
+    current_model: str | None,
+    target_tier: ComplexityTier,
+) -> str | None:
+    """Pick a concrete target model for ``target_tier`` — the shared
+    "pick a target model for this agent" helper (#170).
+
+    Both ``target: model`` recommendation paths (duration-outlier and
+    complexity-mismatch) route through this so they produce concrete,
+    deduplicated suggestions from one place. Returns the tier-matched
+    model id, or ``None`` when there's no actionable switch:
+
+    - ``current_model`` is unknown (caller has no model to name), or
+    - the current model already classifies into ``target_tier`` — the
+      "suggested target == current → no recommendation" guard (AC3).
+    """
+    if not current_model:
+        return None
+    if classify_model_tier(current_model) == target_tier:
+        return None
+    return recommend_model_for_complexity(target_tier)
+
+
+def faster_tier(current_model: str | None) -> ComplexityTier | None:
+    """The complexity tier one step faster/cheaper than ``current_model``.
+
+    Returns ``None`` when the model is unknown or already at the fastest
+    tier (Haiku) — callers fall back to a non-model recommendation in
+    that case.
+    """
+    if not current_model:
+        return None
+    idx = _TIER_ORDER.index(classify_model_tier(current_model))
+    if idx == 0:
+        return None
+    return _TIER_ORDER[idx - 1]
 
 
 def aggregate_cluster_stats(

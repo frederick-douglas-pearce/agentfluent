@@ -140,27 +140,85 @@ class TestTokenOutlierCorrelation:
         assert len(recs) == 1
 
 
+def _duration_signal(
+    detail: dict[str, object] | None = None,
+    agent_type: str = "pm",
+) -> DiagnosticSignal:
+    return _signal(
+        signal_type=SignalType.DURATION_OUTLIER,
+        agent_type=agent_type,
+        keyword="",
+        detail=detail if detail is not None else {},
+    )
+
+
 class TestDurationOutlierCorrelation:
-    def test_with_opus_model(self) -> None:
-        signals = [_signal(signal_type=SignalType.DURATION_OUTLIER, keyword="")]
+    def test_opus_config_names_concrete_sonnet_target(self) -> None:
+        # AC1: every target:model rec names current + proposed model.
+        signals = [_duration_signal()]
         configs = {"pm": _config(model="claude-opus-4-6")}
         recs = correlate(signals, configs)
         assert len(recs) == 1
         assert recs[0].target == "model"
+        assert "claude-opus-4-6" in recs[0].action
+        assert "claude-sonnet-4-6" in recs[0].action
+        assert "a faster model" not in recs[0].action
 
-    def test_with_sonnet_model(self) -> None:
-        signals = [_signal(signal_type=SignalType.DURATION_OUTLIER, keyword="")]
+    def test_sonnet_config_names_concrete_haiku_target(self) -> None:
+        # One tier down from Sonnet is Haiku — still a concrete model rec.
+        signals = [_duration_signal()]
         configs = {"pm": _config(model="claude-sonnet-4-6")}
+        recs = correlate(signals, configs)
+        assert len(recs) == 1
+        assert recs[0].target == "model"
+        assert "claude-sonnet-4-6" in recs[0].action
+        assert "claude-haiku-4-5" in recs[0].action
+
+    def test_haiku_config_falls_back_to_prompt(self) -> None:
+        # AC3: Haiku is the fastest tier — no faster model to name, so we
+        # suggest task scoping instead of an unnamed model rec.
+        signals = [_duration_signal()]
+        configs = {"pm": _config(model="claude-haiku-4-5")}
         recs = correlate(signals, configs)
         assert len(recs) == 1
         assert recs[0].target == "prompt"
 
-    def test_without_config(self) -> None:
-        signals = [_signal(signal_type=SignalType.DURATION_OUTLIER, keyword="")]
+    def test_current_model_resolved_from_signal_when_no_config(self) -> None:
+        # config → trace precedence: trace model on the signal still yields
+        # a concrete model rec when there's no AgentConfig.
+        signals = [_duration_signal(detail={"current_model": "claude-opus-4-6"})]
         recs = correlate(signals, None)
         assert len(recs) == 1
         assert recs[0].target == "model"
+        assert "claude-opus-4-6" in recs[0].action
+        assert "claude-sonnet-4-6" in recs[0].action
         assert recs[0].config_file == ""
+
+    def test_without_config_or_model_falls_back_to_prompt(self) -> None:
+        # No editable model and no trace model → can't name a target, so no
+        # unnamed target:model rec is emitted (AC1).
+        signals = [_duration_signal()]
+        recs = correlate(signals, None)
+        assert len(recs) == 1
+        assert recs[0].target == "prompt"
+        assert "a faster model" not in recs[0].action
+
+    def test_savings_included_when_tokens_and_pricing_available(self) -> None:
+        # AC4: cost-savings estimate present when pricing + tokens available.
+        signals = [_duration_signal(detail={"total_tokens": 500_000})]
+        configs = {"pm": _config(model="claude-opus-4-6")}
+        recs = correlate(signals, configs)
+        assert len(recs) == 1
+        assert "estimated savings" in recs[0].action
+
+    def test_savings_omitted_when_tokens_missing(self) -> None:
+        # AC4: degrades gracefully — concrete target, no dollar figure.
+        signals = [_duration_signal()]
+        configs = {"pm": _config(model="claude-opus-4-6")}
+        recs = correlate(signals, configs)
+        assert len(recs) == 1
+        assert "estimated savings" not in recs[0].action
+        assert "claude-sonnet-4-6" in recs[0].action
 
 
 class TestCorrelateGeneral:
