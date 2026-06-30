@@ -184,12 +184,34 @@ in-pr → in-review`. **Terminal statuses** — the run converges when every row
 `blocked: too-large` awaiting a split). **`hold`** is a separate **non-terminal, parked**
 status: a durable, human-set merge-hold that survives `/clear`. While any `hold` row remains
 the run is NOT complete, but a held row does not block selecting other queued work (§7.1
-steps 0–1). The header carries a `mode:` field (`calibration` until the human loosens it to
-`escalation-only`) that gates auto-merge (§7.1 step 11).
+steps 0–1). The header carries a `mode:` field that gates **the merge gate only** — it does
+**not** change the plan gate, which is conditional in *every* mode (§7.1 step 5 / skill §5: the
+plan gate stops only on ambiguous ACs, risk/irreversibility, agent disagreement, or genuine
+uncertainty — never merely because of `mode:`). The two modes:
+- **`calibration`** (default) — the human approves **every** merge; the loop never auto-merges
+  (§7.1 step 11). Plan gate conditional.
+- **`escalation-only`** — the human loosens the **merge gate per route**: a route the human has
+  *graduated* auto-merges when CI + AC-verifier + review are green and the version bump is
+  ≤ patch (a `docs`/`chore` change produces no bump, which qualifies). Initially only `docs`;
+  `research` graduates after its first clean end-to-end loop run (to date it has only been
+  *reconciled*, never driven — see the v0.10.0 retrospective, #562). The human merge gate is
+  **retained** for every non-graduated route and, regardless of route, for any of: a `feat:`/
+  breaking change, a risky/irreversible change, a touched security surface, a contested review
+  finding, or a `hold` row — **and, by default-deny, whenever route graduation or any
+  always-escalate condition is uncertain, fall back to the human merge gate.** Plan gate
+  conditional (unchanged). Loosening to `escalation-only` presupposes the calibration
+  prerequisites are met (these pinned mode semantics, #563, plus per-iteration budget
+  journaling); it cannot run headless (§13/§14).
+
+The set of graduated routes is recorded in a `graduated-routes:` header field beside `mode:`
+(default `none`; e.g. `graduated-routes: docs`). Under `mode: calibration` it is inert. *Which*
+routes graduate and the criteria for promoting one (#562) are out of scope here; this field only
+gives the merge gate (§7.1 step 11) a place to read the human's decision from.
 
 ```markdown
 # Loop run: v0.10.0
 _mode: calibration_
+_graduated-routes: none_
 _Last updated: <ISO8601 by orchestrator>_
 
 | # | Issue | Route | Status | Depends on | PR | Notes |
@@ -280,7 +302,7 @@ fresh invocation resumes correctly. Read the project parameters in
 1. Identify the active run (most recent `LEDGER_ROOT/<run>/`). If it already carries a
    `RUN COMPLETE` sentinel (§9), report done and STOP — do not re-scan. If no run exists, ask
    the user which milestone/label to run, then INITIALIZE per §7.5 of the spec.
-2. Read `queue.md` (note its `mode:` header and any `hold` rows) and the tail of `progress.md`.
+2. Read `queue.md` (note its `mode:` / `graduated-routes:` header and any `hold` rows) and the tail of `progress.md`.
 3. **Resume before selecting (spec §7.6).** If any row sits in an *interrupted* status —
    non-terminal and NOT `queued`/`routed`/`hold` (i.e. `planning`/`plan-approved`/
    `implementing`/`in-pr`/`in-review`) — a prior iteration was cut off. Reconcile it against
@@ -328,9 +350,10 @@ If any §7.2 trigger fires OR you are unsure about the design, invoke the DESIGN
 the plan; address `blocking`/`important` concerns before coding. Skip for docs and trivial
 research.
 
-## 5. Human gate (conditional — supervised mode)
-Present the plan and STOP for approval when: acceptance criteria are ambiguous; the change is
-risky/irreversible; SCOPE/ DESIGN agents disagree or punt; or you are otherwise unsure.
+## 5. Human gate (conditional — every mode)
+The plan gate is **conditional in every mode** — `mode:` gates the merge gate only (§11), never
+this one. Present the plan and STOP for approval when: acceptance criteria are ambiguous; the
+change is risky/irreversible; SCOPE/ DESIGN agents disagree or punt; or you are otherwise unsure.
 Otherwise proceed (note "auto-approved" + why in the journal). Route scope questions to
 SCOPE_AGENT and design questions to DESIGN_AGENT BEFORE escalating to the human. On approval
 (human or auto), advance the row to `plan-approved`.
@@ -365,13 +388,26 @@ contested findings escalate to the human, do not loop. Commit fixes.
 Address findings ≥ the project's confidence bar.
 
 ## 11. Merge
-Read the run `mode` from the `queue.md` header. If `mode: calibration` (the default until the
-human loosens it) OR the row is flagged `hold`: STOP and ask the human before merging — never
-auto-merge in calibration. **If the human holds the merge (now or in any later invocation),
-WRITE the hold to the row before stopping** — set Status `hold` (record the reason in Notes) so
-it persists across `/clear`; resume (step 0.3), §1, and this gate all key on Status `hold` and
-honor it until the human clears it (restoring the row's prior status). Otherwise, when CI +
-security are green AND the row is not `hold`:
+Read the run `mode` and `graduated-routes` from the `queue.md` header. The merge gate is the
+**only** gate `mode` changes (§6.1). A row is **auto-merge-eligible** only when ALL of these
+hold:
+- `mode: escalation-only`, AND
+- the row's Route is listed in the header's `graduated-routes` field (§6.1), AND
+- the version bump is ≤ patch — a `docs`/`chore` change produces no bump, which qualifies, AND
+- the row is **not** `hold`, AND
+- none of the always-escalate conditions apply: a `feat:`/breaking change, a risky/irreversible
+  change, a touched security surface, or a contested review finding.
+
+**Default-deny:** if route graduation or any always-escalate condition is uncertain, the row is
+**not** auto-merge-eligible — fall back to the human merge gate.
+
+If the row is **not** auto-merge-eligible — which includes *every* row under `mode: calibration`
+(the default) and any `hold` row — **STOP and ask the human before merging; never auto-merge.**
+**If the human holds the merge (now or in any later invocation), WRITE the hold to the row before
+stopping** — set Status `hold` (record the reason in Notes) so it persists across `/clear`;
+resume (step 0.3), §1, and this gate all key on Status `hold` and honor it until the human clears
+it (restoring the row's prior status). When the row **is** auto-merge-eligible (or the human has
+approved), and CI + security are green AND the row is not `hold`:
 squash-merge with an explicit `--subject` carrying the correct `COMMIT_CONV` scope,
 `--delete-branch`. Confirm the issue closed.
 
@@ -446,7 +482,8 @@ Promote to a dedicated `ac-verifier` agent only if the composed approach proves 
    refs in the body; respect epic ordering notes).
 4. Topologically order by dependency, then by `PRIORITY_LABELS` (tiebreak issue-number asc).
    Write `queue.md` (§6.1) with header `mode: calibration` (default; the human loosens to
-   `escalation-only` after calibration — step 11 reads this to gate auto-merge).
+   `escalation-only` after calibration — step 11 reads this to gate **the merge gate**, per
+   route; it never affects the plan gate).
 5. Append an "init" block to `progress.md`. (Ledger is gitignored — not committed.)
 
 ### 7.6 Resume after `/clear` or compaction
@@ -527,8 +564,9 @@ The #500 guard hook protects append-only logs once the loop commits its own work
 5. **C5 AC-verifier** — embodied in the skill (§7.4); compose existing tools.
 6. **Smoke test** — run `/release-loop` against a single easy issue in supervised mode; walk
    every gate; confirm the ledger updates and the PR ships.
-7. **Calibrate** — run 2–3 issues with the human at every plan gate; tune router + escalation
-   thresholds; then loosen to escalation-only.
+7. **Calibrate** — run 2–3 issues with the human present at the **merge** gate (and at the plan
+   gate whenever it fires on uncertainty — the plan gate is conditional in every mode, §6.1);
+   tune router + escalation thresholds; then loosen to escalation-only.
 8. **Commit** the harness — skill + the `.gitignore` entry (NOT the ledger, which is
    gitignored) — under `chore(loop):` via the normal PR flow.
 
@@ -580,7 +618,10 @@ equivalent review/verify steps as in-process subagent calls or programmatic GHA 
 - Per-issue plan: ledger only, or also posted to the issue (like architect reviews) for
   persistence/visibility?
 - Graduation criteria from supervised → escalation-only → headless, and the guardrails
-  (sandbox, budget cap, expanded allow-list) each step needs.
+  (sandbox, budget cap, expanded allow-list) each step needs. (The supervised → escalation-only
+  *definitions* are now pinned in §6.1 / §11, #563; what remains open is the per-route
+  graduation *criteria* — e.g. how many zero-veto merges before `code` graduates — tracked in
+  #562.)
 - **Async-ask UX in headless mode (§13).** `claude -p` is non-interactive by definition —
   there is no live turn to block into — so the supervised loop's *blocking* gate (stop
   mid-turn, wait for a human click) cannot exist headless. §2's principle ("HITL as an async
@@ -604,7 +645,7 @@ equivalent review/verify steps as in-process subagent calls or programmatic GHA 
   is the selection boundary — per `mode:` (already gates auto-merge, §7.1 step 11), per route
   (e.g. `docs`/`research` headless-eligible, `code` stays interactive until proven), per
   issue-level flag, or a confidence threshold? Headless presupposes the gates are already
-  loosened (it cannot run under `mode: calibration`, which stops at every plan gate), so the
+  loosened (it cannot run under `mode: calibration`, which stops at every merge gate), so the
   boundary is downstream of the graduation ladder above, not independent of it.
 
 ## 15. References
