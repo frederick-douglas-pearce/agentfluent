@@ -193,9 +193,12 @@ Claude Code and Agent SDK sessions are stored at `~/.claude/projects/` as JSONL 
 ├── -home-user-project-name/
 │   ├── session-uuid-1.jsonl              # main session
 │   ├── session-uuid-1/
-│   │   └── subagents/
-│   │       ├── agent-<agentId-1>.jsonl   # full subagent trace
-│   │       └── agent-<agentId-2>.jsonl
+│   │   ├── subagents/
+│   │   │   ├── agent-<agentId-1>.jsonl       # full subagent trace
+│   │   │   ├── agent-<agentId-1>.meta.json   # sidecar: {agentType, description, toolUseId}
+│   │   │   └── agent-<agentId-2>.jsonl
+│   │   └── tool-results/
+│   │       └── <rand>.txt                # spilled oversized tool output (verbatim)
 │   ├── session-uuid-2.jsonl
 │   └── ...
 └── -home-user-other-project/
@@ -203,6 +206,8 @@ Claude Code and Agent SDK sessions are stored at `~/.claude/projects/` as JSONL 
 ```
 
 **Subagent JSONL files** contain complete internal traces (tool_use/tool_result pairs, per-step token usage, `is_error` flags, reasoning steps). All messages have `isSidechain: true`. The `agentId` links subagent files to the parent session's `toolUseResult.agentId`. MVP enumerates these files; deep parsing is deferred to v1.1 (see D008).
+
+Each `agent-<agentId>.jsonl` has a sibling **`agent-<agentId>.meta.json` sidecar** (shape `{"agentType", "description", "toolUseId"}`) -- a Claude Code format evolution (not SDK-specific), already documented upstream in [`claude-code-sessions`](https://github.com/frederick-douglas-pearce/claude-code-sessions) (`reference/subagent-traces.md`). It gives a direct `toolUseId -> agentId` map without scanning the parent JSONL; the existing `toolUseResult.agentId` indexing still works unchanged.
 
 ### Message types AgentFluent extracts
 
@@ -270,9 +275,30 @@ The parser attaches the deserialized `toolUseResult` to
 `SessionMessage.metadata` on the containing user message; the agent extractor
 indexes results by `tool_use_id` from the `tool_result` content block.
 
-**Format as of 2026-04; Claude Code may evolve this — verify against a current
-session before assuming field presence.** `ToolResultMetadata` uses
-`extra="ignore"` so additional fields on `toolUseResult` don't break parsing.
+**Large tool results -- the `tool-results/` spill (`persistedOutputPath` / `persistedOutputSize`).**
+When a tool's output is oversized (e.g. ~3.2 MB in the captured corpus), Claude
+Code does **not** inline it. The full output is written verbatim to
+`<session-id>/tool-results/<rand>.txt`, and the JSONL line instead carries:
+- a `tool_result.content` `<persisted-output>` block (a header + ~2 KB preview + `...`);
+- a `toolUseResult.stdout` truncated to 30,000 chars;
+- **`persistedOutputPath`** (absolute path to the spill file) and
+  **`persistedOutputSize`** (full byte count) on `toolUseResult`.
+
+**Parser note:** any content/token analysis reading `tool_result.content` or
+`toolUseResult.stdout` sees only a truncated view -- follow `persistedOutputPath`
+for the full bytes, and a signal keying on tool **output size** must read
+`persistedOutputSize`, not `len(stdout)`. (`persistedOutputPath` embeds an
+absolute filesystem path -- scrub it before committing fixtures.) This layout is
+already documented upstream in
+[`claude-code-sessions`](https://github.com/frederick-douglas-pearce/claude-code-sessions)
+(`reference/data-dictionary.md`).
+
+**Format as of 2026-04; the `.meta.json` sidecar, `tool-results/` spill, and
+`persistedOutputPath`/`persistedOutputSize` fields above were confirmed against
+`claude-agent-sdk==0.2.106` / CLI `2.1.185` (captured 2026-06-22). Claude Code
+may evolve this -- verify against a current session before assuming field
+presence.** `ToolResultMetadata` uses `extra="ignore"` so additional fields on
+`toolUseResult` (including these) don't break parsing.
 
 **`type: "user"` -- Prompts**
 ```json
@@ -301,6 +327,17 @@ session before assuming field presence.** `ToolResultMetadata` uses
 - `progress`, `hook_progress`, `bash_progress` -- streaming events
 - `system` -- system messages
 - `create` -- file creation events
+- `ai-title` -- auto-generated session title (`{type, sessionId, aiTitle}`)
+- `queue-operation` -- queued-prompt bookkeeping
+- `attachment` -- interleaved attachment lines
+- `last-prompt` -- trailing prompt marker
+
+The last four were confirmed against `claude-agent-sdk==0.2.106` / CLI `2.1.185`
+(captured 2026-06-22) and are documented upstream in
+[`claude-code-sessions`](https://github.com/frederick-douglas-pearce/claude-code-sessions)
+(`reference/data-dictionary.md`). The parser tolerates them today (they fall
+through to the debug-logged `else` branch); adding them to the runtime
+`SKIP_TYPES` frozenset in `core/session.py` is a separate downstream code item.
 
 ## Tech Stack
 
