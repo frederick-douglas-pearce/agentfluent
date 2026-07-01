@@ -16,7 +16,7 @@ from agentfluent.agents.models import AgentInvocation
 from agentfluent.config.mcp_discovery import _load_json
 from agentfluent.config.models import AgentConfig, Scope, Severity
 from agentfluent.core.session import ContentBlock, SessionMessage
-from agentfluent.diagnostics import TRACE_SIGNAL_TYPES
+from agentfluent.diagnostics import TRACE_SIGNAL_TYPES, pipeline
 from agentfluent.diagnostics.delegation import MODEL_OPUS
 from agentfluent.diagnostics.mcp_assessment import McpToolCall
 from agentfluent.diagnostics.models import (
@@ -1042,3 +1042,145 @@ class TestParameterRetryPipeline:
         assert param_recs[0].target == "tools"
         # Paste-ready example extracted from the successful call.
         assert '"file_path": "a.py"' in param_recs[0].action
+
+
+def _duration_group(
+    agent_type: str, *, outlier_ms: int = 500_000, n_peers: int = 8,
+) -> list[AgentInvocation]:
+    """Build a trace-linked invocation group that yields one DURATION_OUTLIER.
+
+    ``duration_reliable`` requires a linked trace, and outlier detection
+    compares ``active_duration_per_tool_use``; every invocation carries a
+    trace with ``idle_gap_ms=0`` so active duration equals wall-clock.
+    """
+    invs: list[AgentInvocation] = []
+    for i in range(n_peers):
+        dur = 10_000 + 1_000 * i
+        invs.append(
+            AgentInvocation(
+                agent_type=agent_type,
+                description="task",
+                prompt="do it",
+                tool_use_id=f"t{i}",
+                tool_uses=10,
+                duration_ms=dur,
+                trace=SubagentTrace(
+                    agent_id=f"ag-{i}",
+                    agent_type=agent_type,
+                    delegation_prompt="x",
+                    duration_ms=dur,
+                    idle_gap_ms=0,
+                ),
+            )
+        )
+    invs.append(
+        AgentInvocation(
+            agent_type=agent_type,
+            description="task",
+            prompt="do it",
+            tool_use_id="t-slow",
+            tool_uses=10,
+            duration_ms=outlier_ms,
+            trace=SubagentTrace(
+                agent_id="ag-slow",
+                agent_type=agent_type,
+                delegation_prompt="x",
+                duration_ms=outlier_ms,
+                idle_gap_ms=0,
+            ),
+        )
+    )
+    return invs
+
+
+def _agent_config(name: str, *, command: str, model: str | None = None) -> AgentConfig:
+    """An AgentConfig with one PostToolUse hook running ``command`` (nested shape)."""
+    return AgentConfig(
+        name=name,
+        file_path=Path(f"/home/user/.claude/agents/{name}.md"),
+        scope=Scope.USER,
+        model=model,
+        hooks={
+            "PostToolUse": [
+                {"matcher": "*", "hooks": [{"type": "command", "command": command}]},
+            ],
+        },
+    )
+
+
+class TestHookCoverageWiring:
+    """#426: run_diagnostics assembles per-agent hook coverage and threads it
+    to correlate() so a DURATION_OUTLIER on an agent whose PostToolUse hooks
+    don't reference ``duration_ms`` yields a ``target="hooks"`` recommendation.
+    """
+
+    def test_uncovered_agent_yields_hooks_recommendation(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def fake_scan(_scope: str) -> list[AgentConfig]:
+            return [_agent_config("my-agent", command="echo done")]
+
+        monkeypatch.setattr(
+            "agentfluent.diagnostics.pipeline.scan_agents", fake_scan,
+        )
+
+        result = run_diagnostics(_duration_group("my-agent"))
+
+        hook_recs = [
+            r
+            for r in result.recommendations
+            if r.target == "hooks" and r.agent_type == "my-agent"
+        ]
+        assert len(hook_recs) == 1
+        assert "duration_ms" in hook_recs[0].action
+
+    def test_covered_agent_targets_model_not_hooks(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def fake_scan(_scope: str) -> list[AgentConfig]:
+            return [
+                _agent_config(
+                    "my-agent",
+                    command="echo \"slow: $duration_ms\"",
+                    model=MODEL_OPUS,
+                ),
+            ]
+
+        monkeypatch.setattr(
+            "agentfluent.diagnostics.pipeline.scan_agents", fake_scan,
+        )
+
+        result = run_diagnostics(_duration_group("my-agent"))
+
+        my_agent_recs = [
+            r for r in result.recommendations if r.agent_type == "my-agent"
+        ]
+        assert my_agent_recs, "expected a duration recommendation for my-agent"
+        assert all(r.target != "hooks" for r in my_agent_recs)
+        # A covered agent declaring Opus falls through to the model branch.
+        assert any(r.target == "model" for r in my_agent_recs)
+
+    def test_no_configs_passes_hook_coverage_none(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def empty_scan(_scope: str) -> list[AgentConfig]:
+            return []
+
+        monkeypatch.setattr(
+            "agentfluent.diagnostics.pipeline.scan_agents", empty_scan,
+        )
+
+        captured: dict[str, object] = {}
+        real_correlate = pipeline.correlate
+
+        def spy_correlate(signals, configs=None, hook_coverage=None):  # type: ignore[no-untyped-def]
+            captured["hook_coverage"] = hook_coverage
+            return real_correlate(signals, configs, hook_coverage)
+
+        monkeypatch.setattr(pipeline, "correlate", spy_correlate)
+
+        result = run_diagnostics(_duration_group("my-agent"))
+
+        assert captured["hook_coverage"] is None
+        # No config → no hooks rec, but the pipeline still runs cleanly.
+        assert all(r.target != "hooks" for r in result.recommendations)
