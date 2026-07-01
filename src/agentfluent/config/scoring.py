@@ -48,6 +48,68 @@ SUCCESS_KEYWORDS: frozenset[str] = frozenset({
     "produce", "deliver", "result", "criteria",
 })
 
+# Verbosity-constraint detection (C-006a). Blanket word-count caps on agent
+# responses can silently degrade quality -- Anthropic's April 2026 postmortem
+# documented a 3% coding regression from a "keep responses to <=25 words" cap.
+# We flag captured word counts at or below this threshold as advisory only.
+VERBOSITY_CONSTRAINT_MAX_WORDS = 200
+
+# WARNING at/below this many words; INFO above it (up to the max threshold).
+VERBOSITY_CONSTRAINT_WARNING_WORDS = 50
+
+VERBOSITY_POSTMORTEM_URL = "https://www.anthropic.com/engineering/april-23-postmortem"
+
+# Regex list from the #431 architect design, with two corrections so the
+# canonical no-space postmortem phrasing ("<=25", "<=100") is caught:
+#   - pattern 1 tolerates an optional <=/≤ symbol before the digits
+#   - pattern 2 uses \s* (not \s+) after the symbol alternation
+# Without these the exact string the feature targets goes undetected (dead feature).
+VERBOSITY_CONSTRAINT_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(
+        r"(?:keep|limit|restrict|cap)\b.{0,40}\b(?:to|under|at most|no more than)"
+        r"\s+(?:≤|<=)?\s*(\d+)\s+words",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:≤|<=|at most|max(?:imum)?|no more than)\s*(\d+)\s+words",
+        re.IGNORECASE,
+    ),
+    re.compile(r"(\d+)\s+words?\s+(?:or fewer|max(?:imum)?|limit)", re.IGNORECASE),
+    re.compile(r"respond\s+(?:in|with)\s+(\d+)\s+(?:words|tokens)\b", re.IGNORECASE),
+]
+
+# Strips fenced code blocks (```...```) so constraint examples inside code
+# samples don't trigger a recommendation.
+_FENCED_CODE_BLOCK = re.compile(r"```.*?```", re.DOTALL)
+
+
+def _detect_verbosity_constraints(body: str) -> list[tuple[int, str]]:
+    """Find blanket word-count constraints in a prompt body.
+
+    Returns ``(word_count, matched_text)`` pairs for matches at or below
+    ``VERBOSITY_CONSTRAINT_MAX_WORDS``. Fenced code blocks are stripped before
+    scanning. Overlapping matches (one constraint caught by multiple patterns)
+    are de-duplicated by span so each distinct constraint yields one result.
+    """
+    scrubbed = _FENCED_CODE_BLOCK.sub("", body)
+
+    spans: list[tuple[int, int, int, str]] = []  # start, end, word_count, text
+    for pattern in VERBOSITY_CONSTRAINT_PATTERNS:
+        for match in pattern.finditer(scrubbed):
+            word_count = int(match.group(1))
+            if word_count <= VERBOSITY_CONSTRAINT_MAX_WORDS:
+                spans.append((match.start(), match.end(), word_count, match.group(0)))
+
+    # Earliest start first, longest match first, then greedily accept only
+    # non-overlapping spans so a single constraint isn't reported twice.
+    spans.sort(key=lambda s: (s[0], -(s[1] - s[0])))
+    results: list[tuple[int, str]] = []
+    last_end = -1
+    for start, end, word_count, text in spans:
+        if start >= last_end:
+            results.append((word_count, text))
+            last_end = end
+    return results
 
 
 def _score_description(config: AgentConfig) -> tuple[int, list[ConfigRecommendation]]:
@@ -265,6 +327,30 @@ def _score_prompt_body(config: AgentConfig) -> tuple[int, list[ConfigRecommendat
             severity=Severity.INFO,
             message="Prompt body doesn't define success criteria.",
             suggested_action="Add criteria for what constitutes a successful outcome.",
+        ))
+
+    # Verbosity-constraint overlay (C-006a): advisory only, no score change.
+    for word_count, matched_text in _detect_verbosity_constraints(body):
+        severity = (
+            Severity.WARNING
+            if word_count <= VERBOSITY_CONSTRAINT_WARNING_WORDS
+            else Severity.INFO
+        )
+        recs.append(ConfigRecommendation(
+            dimension="prompt_body",
+            severity=severity,
+            message=(
+                f"Prompt contains a blanket word-count constraint "
+                f"('{matched_text}') that may degrade output quality. "
+                f"Anthropic's April 2026 postmortem documented a 3% quality "
+                f"regression from similar constraints. See: "
+                f"{VERBOSITY_POSTMORTEM_URL}"
+            ),
+            current_value=matched_text,
+            suggested_action=(
+                "Remove or relax the word-count constraint, or scope it to a "
+                "specific output field rather than all responses."
+            ),
         ))
 
     return score, recs
