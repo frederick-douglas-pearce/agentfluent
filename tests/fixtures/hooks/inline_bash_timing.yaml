@@ -1,0 +1,15 @@
+# Fixture: minimal agent frontmatter with an inline-bash PostToolUse hook that
+# references duration_ms directly in the command (no external script file).
+# Nested Claude Code matcher-group schema: event -> [{matcher, hooks: [{type, command}]}].
+hooks:
+  PostToolUse:
+    - matcher: "Bash"
+      hooks:
+        - type: command
+          command: |
+            bash -c '
+              DURATION=$(jq -r ".tool_response.duration_ms // empty")
+              if [ -n "$DURATION" ] && [ "$DURATION" -gt 5000 ]; then
+                echo "{\"systemMessage\": \"slow: ${DURATION}ms\"}"
+              fi
+            '
