@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import ClassVar, Protocol
 
 from agentfluent.agents.models import is_builtin_agent
-from agentfluent.config.models import AgentConfig, Severity
+from agentfluent.config.models import AgentConfig, HookFieldCoverage, Severity
 from agentfluent.diagnostics._complexity import (
     faster_tier,
     select_target_model,
@@ -252,8 +252,32 @@ class TokenOutlierRule:
         )
 
 
+_DURATION_HOOK_EVENT = "PostToolUse"
+_DURATION_HOOK_FIELD = "duration_ms"
+
+
+def _duration_ms_covered(
+    hook_coverage: dict[str, list[HookFieldCoverage]] | None,
+    agent_type: str | None,
+) -> bool | None:
+    """Whether ``agent_type`` has a ``(PostToolUse, duration_ms)`` hook.
+
+    Returns the coverage ``bool`` when an explicit result for that pair exists,
+    else ``None`` meaning *unknown* — no coverage map, no agent name, the agent
+    was not inspected, or the map carries no matching entry. ``None`` is treated
+    as "don't emit the hook rec" (default-deny), matching the
+    ``hook_coverage=None`` backward-compat contract.
+    """
+    if not hook_coverage or not agent_type:
+        return None
+    for cov in hook_coverage.get(agent_type.lower(), []):
+        if cov.hook_event == _DURATION_HOOK_EVENT and cov.field_name == _DURATION_HOOK_FIELD:
+            return cov.covered
+    return None
+
+
 class DurationOutlierRule:
-    """Duration outlier -> check model selection or task scoping."""
+    """Duration outlier -> check hook coverage, model selection, or scoping."""
 
     _builtin_target = "prompt"
     _builtin_concern: BuiltinConcern = "scope"
@@ -262,13 +286,26 @@ class DurationOutlierRule:
         return signal.signal_type == SignalType.DURATION_OUTLIER
 
     def recommend(
-        self, signal: DiagnosticSignal, config: AgentConfig | None,
+        self,
+        signal: DiagnosticSignal,
+        config: AgentConfig | None,
+        *,
+        hook_coverage: dict[str, list[HookFieldCoverage]] | None = None,
     ) -> DiagnosticRecommendation:
         observation = signal.message
         reason = "Slow invocations may indicate an overqualified model or unclear task scope."
 
         if rec := _check_builtin(self, signal, reason):
             return rec
+
+        # Hook-coverage branch (#425): the most actionable fix is "you have no
+        # timing hook, so slow calls go undetected at runtime." Emit it only on
+        # explicit not-covered evidence AND when we can cite the agent's config
+        # file — unknown coverage falls through to the model/prompt branches.
+        if config is not None and (
+            _duration_ms_covered(hook_coverage, signal.agent_type) is False
+        ):
+            return self._hook_recommendation(signal, config)
 
         # Resolve the model the agent runs on: the editable declaration
         # (config.model) wins, else the model the slow invocation actually
@@ -302,6 +339,34 @@ class DurationOutlierRule:
 
         return DiagnosticRecommendation(
             target=target,
+            severity=Severity.WARNING,
+            message=f"{observation} {reason} {action}",
+            observation=observation,
+            reason=reason,
+            action=action,
+            agent_type=signal.agent_type,
+            invocation_id=signal.invocation_id,
+            config_file=str(config.file_path) if config else "",
+            signal_types=[signal.signal_type],
+        )
+
+    @staticmethod
+    def _hook_recommendation(
+        signal: DiagnosticSignal, config: AgentConfig | None,
+    ) -> DiagnosticRecommendation:
+        """Recommend adding a ``duration_ms`` PostToolUse hook (``target=hooks``)."""
+        observation = signal.message
+        reason = (
+            "Slow tool calls go undetected at runtime when no PostToolUse hook "
+            "gates on `duration_ms`."
+        )
+        action = (
+            "Add a PostToolUse hook that logs or gates on `duration_ms` to surface "
+            "slow tool calls before they compound. Note: project-level hooks in "
+            "`.claude/settings.json` are not currently inspected."
+        )
+        return DiagnosticRecommendation(
+            target="hooks",
             severity=Severity.WARNING,
             message=f"{observation} {reason} {action}",
             observation=observation,
@@ -1315,6 +1380,7 @@ RULES: list[CorrelationRule] = [
 def correlate(
     signals: list[DiagnosticSignal],
     configs: dict[str, AgentConfig] | None = None,
+    hook_coverage: dict[str, list[HookFieldCoverage]] | None = None,
 ) -> list[tuple[DiagnosticSignal, DiagnosticRecommendation]]:
     """Map signals to config surfaces and produce recommendations.
 
@@ -1322,6 +1388,15 @@ def correlate(
         signals: Detected behavior signals from signal extraction.
         configs: Optional dict of agent_type (lowercase) -> AgentConfig.
             When available, recommendations reference specific config files.
+        hook_coverage: Optional dict of agent_type (lowercase) ->
+            HookFieldCoverage results, parallel to ``configs`` (#425). Only
+            ``DurationOutlierRule`` consumes it; when a ``DURATION_OUTLIER``
+            agent has an explicit not-covered ``(PostToolUse, duration_ms)``
+            entry the rule recommends adding a timing hook. **Contract with the
+            caller (#426):** to make the load-bearing "zero-hook agent" case
+            fire, emit a ``covered=False`` entry for *every* inspected custom
+            agent, including those declaring no hooks. Absent agents are treated
+            as "not inspected" (default-deny) — no hook rec.
 
     Returns:
         Paired ``(signal, recommendation)`` tuples — one per matched
@@ -1341,7 +1416,11 @@ def correlate(
 
         for rule in RULES:
             if rule.matches(signal, config):
-                pairs.append((signal, rule.recommend(signal, config)))
+                if isinstance(rule, DurationOutlierRule):
+                    rec = rule.recommend(signal, config, hook_coverage=hook_coverage)
+                else:
+                    rec = rule.recommend(signal, config)
+                pairs.append((signal, rec))
                 break
 
     return pairs
