@@ -4,7 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from agentfluent.config.models import AgentConfig, Scope, Severity
+from agentfluent.config.models import (
+    AgentConfig,
+    HookFieldCoverage,
+    Scope,
+    Severity,
+)
 from agentfluent.diagnostics.correlator import (
     _relpath,
 )
@@ -21,11 +26,12 @@ from agentfluent.diagnostics.models import (
 def correlate(
     signals: list[DiagnosticSignal],
     configs: dict[str, AgentConfig] | None = None,
+    hook_coverage: dict[str, list[HookFieldCoverage]] | None = None,
 ) -> list[DiagnosticRecommendation]:
     """Test wrapper: drops the signal side of ``correlate``'s paired return
     so per-rule assertions can stay focused on recommendation content.
     Pairing semantics are exercised by the aggregation tests."""
-    return [rec for _, rec in _correlate_pairs(signals, configs)]
+    return [rec for _, rec in _correlate_pairs(signals, configs, hook_coverage)]
 
 
 def _signal(
@@ -219,6 +225,117 @@ class TestDurationOutlierCorrelation:
         assert len(recs) == 1
         assert "estimated savings" not in recs[0].action
         assert "claude-sonnet-4-6" in recs[0].action
+
+
+def _coverage(covered: bool, agent: str = "pm") -> dict[str, list[HookFieldCoverage]]:
+    """One-agent coverage map with a single (PostToolUse, duration_ms) result."""
+    return {
+        agent: [
+            HookFieldCoverage(
+                hook_event="PostToolUse",
+                field_name="duration_ms",
+                covered=covered,
+                source="script.py" if covered else "",
+            )
+        ]
+    }
+
+
+class TestDurationOutlierHookCoverage:
+    _HOOK_REASON = (
+        "Slow tool calls go undetected at runtime when no PostToolUse hook "
+        "gates on `duration_ms`."
+    )
+    _HOOK_ACTION = (
+        "Add a PostToolUse hook that logs or gates on `duration_ms` to surface "
+        "slow tool calls before they compound. Note: project-level hooks in "
+        "`.claude/settings.json` are not currently inspected."
+    )
+
+    def test_no_coverage_yields_hooks_recommendation(self) -> None:
+        # AC: DURATION_OUTLIER + no PostToolUse/duration_ms hook -> hooks rec,
+        # pre-empting the model/prompt branches.
+        signals = [_duration_signal()]
+        configs = {"pm": _config(model="claude-opus-4-6")}
+        recs = correlate(signals, configs, _coverage(covered=False))
+        assert len(recs) == 1
+        rec = recs[0]
+        assert rec.target == "hooks"
+        assert rec.severity == Severity.WARNING
+        assert rec.observation == signals[0].message
+        assert rec.reason == self._HOOK_REASON
+        assert rec.action == self._HOOK_ACTION
+        assert "pm.md" in rec.config_file
+
+    def test_has_coverage_falls_through_to_model_branch(self) -> None:
+        # AC: has PostToolUse/duration_ms coverage -> existing model branch fires.
+        signals = [_duration_signal()]
+        configs = {"pm": _config(model="claude-opus-4-6")}
+        recs = correlate(signals, configs, _coverage(covered=True))
+        assert len(recs) == 1
+        assert recs[0].target == "model"
+        assert "claude-sonnet-4-6" in recs[0].action
+
+    def test_none_coverage_preserves_existing_behavior(self) -> None:
+        # AC: hook_coverage=None -> no hook rec, existing model branch unchanged.
+        signals = [_duration_signal()]
+        configs = {"pm": _config(model="claude-opus-4-6")}
+        recs = correlate(signals, configs, None)
+        assert len(recs) == 1
+        assert recs[0].target == "model"
+
+    def test_builtin_agent_unaffected_by_missing_coverage(self) -> None:
+        # AC: built-in agent -> built-in rec, even with not-covered coverage
+        # present. The built-in check runs before the hook branch.
+        signals = [_duration_signal(agent_type="general-purpose")]
+        recs = correlate(signals, None, _coverage(covered=False, agent="general-purpose"))
+        assert len(recs) == 1
+        assert recs[0].target != "hooks"
+
+    def test_agent_absent_from_coverage_falls_through(self) -> None:
+        # Default-deny (architect Q3): an agent with no coverage entry is
+        # "not inspected", not "no hook" -> fall through, no hooks rec.
+        signals = [_duration_signal(agent_type="pm")]
+        configs = {"pm": _config(model="claude-opus-4-6")}
+        recs = correlate(signals, configs, _coverage(covered=False, agent="other"))
+        assert len(recs) == 1
+        assert recs[0].target == "model"
+
+    def test_posttooluse_key_entirely_absent_falls_through(self) -> None:
+        # Architect finding 1: coverage map present but carrying only an
+        # unrelated field -> no (PostToolUse, duration_ms) entry -> fall through.
+        signals = [_duration_signal()]
+        configs = {"pm": _config(model="claude-opus-4-6")}
+        coverage = {
+            "pm": [
+                HookFieldCoverage(
+                    hook_event="PostToolUse",
+                    field_name="tool_name",
+                    covered=False,
+                )
+            ]
+        }
+        recs = correlate(signals, configs, coverage)
+        assert len(recs) == 1
+        assert recs[0].target == "model"
+
+    def test_no_coverage_but_no_config_falls_through(self) -> None:
+        # Hook branch is gated on config (config_file must cite the .md path).
+        # No config -> cannot emit a hooks rec -> existing behavior.
+        signals = [_duration_signal(detail={"current_model": "claude-opus-4-6"})]
+        recs = correlate(signals, None, _coverage(covered=False))
+        assert len(recs) == 1
+        assert recs[0].target == "model"
+
+    def test_sequential_calls_do_not_leak_coverage(self) -> None:
+        # Architect finding 2: a stateless param must not leak a prior call's
+        # coverage into a later None call.
+        signals = [_duration_signal()]
+        configs = {"pm": _config(model="claude-opus-4-6")}
+        first = correlate(signals, configs, _coverage(covered=False))
+        assert first[0].target == "hooks"
+        second = correlate(signals, configs, None)
+        assert second[0].target == "model"
 
 
 class TestCorrelateGeneral:
