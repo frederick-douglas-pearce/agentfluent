@@ -92,6 +92,18 @@ def test_missing_external_script_does_not_crash() -> None:
         config, "PostToolUse", "duration_ms", project_root=FIXTURES
     )
     assert result.covered is False
+    assert result.source == ""
+
+
+def test_non_utf8_external_script_does_not_crash(tmp_path: Path) -> None:
+    """A binary/non-UTF-8 hook script degrades to not-covered, no crash."""
+    bad = tmp_path / "binary_hook.py"
+    bad.write_bytes(b"\xff\xfe not valid utf-8 \x80\x81")
+    config = _agent(_external_hook("binary_hook.py"))
+    result = inspect_hook_field(
+        config, "PostToolUse", "duration_ms", project_root=tmp_path
+    )
+    assert result.covered is False
 
 
 def test_claude_project_dir_expansion() -> None:

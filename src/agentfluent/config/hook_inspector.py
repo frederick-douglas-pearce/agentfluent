@@ -111,11 +111,9 @@ def inspect_hook_field(
     not covering (no crash). Does not modify ``config``.
     """
     root = project_root or Path.cwd()
-    last_source = ""
     for command in _iter_commands(config.hooks.get(hook_event)):
         script_path = _resolve_script_path(command, root)
         if script_path is None:
-            last_source = _INLINE
             if _references_field(command, field_name):
                 return HookFieldCoverage(
                     hook_event=hook_event,
@@ -124,10 +122,9 @@ def inspect_hook_field(
                     source=_INLINE,
                 )
             continue
-        last_source = str(script_path)
         try:
             content = script_path.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             logger.debug("Hook script not readable: %s", script_path)
             continue
         if _references_field(content, field_name):
@@ -141,5 +138,5 @@ def inspect_hook_field(
         hook_event=hook_event,
         field_name=field_name,
         covered=False,
-        source=last_source,
+        source="",
     )
