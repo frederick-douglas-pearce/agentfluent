@@ -1,0 +1,9 @@
+# Fixture: agent frontmatter with PreToolUse hooks only (no PostToolUse).
+# Inspecting the PostToolUse timing field against this must return not-covered.
+# Nested Claude Code matcher-group schema.
+hooks:
+  PreToolUse:
+    - matcher: "Edit"
+      hooks:
+        - type: command
+          command: 'python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/block_secret_reads.py"'

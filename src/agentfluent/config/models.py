@@ -172,6 +172,27 @@ class ConfigScore(BaseModel):
     """Actionable recommendations for improving the config."""
 
 
+class HookFieldCoverage(BaseModel):
+    """Whether an agent's hook scripts reference a specific hook-input field.
+
+    Result of inspecting one ``(hook_event, field_name)`` pair against an
+    agent's configured hooks (see ``hook_inspector``). Standalone result
+    model -- not nested inside ``AgentConfig``.
+    """
+
+    hook_event: str
+    """The hook event inspected (e.g. ``"PostToolUse"``)."""
+
+    field_name: str
+    """The hook-input field searched for (e.g. ``"duration_ms"``)."""
+
+    covered: bool = False
+    """True if a hook script for ``hook_event`` references ``field_name``."""
+
+    source: str = ""
+    """Where coverage was found: a script path, ``"(inline)"``, or ``""`` (none)."""
+
+
 class McpServerConfig(BaseModel):
     """A configured MCP server discovered from Claude Code config files."""
 
