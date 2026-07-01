@@ -23,8 +23,9 @@ from agentfluent.agents.models import AgentInvocation
 if TYPE_CHECKING:
     from agentfluent.analytics.pipeline import SessionAnalysis
     from agentfluent.github.models import GitHubRepo
+from agentfluent.config.hook_inspector import inspect_hook_field
 from agentfluent.config.mcp_discovery import discover_mcp_servers
-from agentfluent.config.models import AgentConfig
+from agentfluent.config.models import AgentConfig, HookFieldCoverage
 from agentfluent.config.scanner import scan_agents
 from agentfluent.core.session import SessionMessage
 from agentfluent.diagnostics.agent_audit import (
@@ -228,6 +229,32 @@ def run_diagnostics(
         {c.name.lower(): c for c in agent_configs} if agent_configs else None
     )
 
+    # Hook-field coverage (#426, C-001). Inspect every scanned agent for a
+    # PostToolUse hook that surfaces ``duration_ms``; the correlator's
+    # DurationOutlierRule turns an explicit not-covered result into a
+    # ``target="hooks"`` recommendation. Contract with correlate() (#425):
+    # emit a coverage entry for *every* inspected agent (incl. those with no
+    # hooks — inspect_hook_field returns covered=False for them) so the
+    # load-bearing "zero-hook agent" case fires; absent agents stay
+    # uninspected (default-deny). ``None`` when no configs were scanned, so
+    # correlate() receives hook_coverage=None (no crash). Guarded like the
+    # scan itself. project_dir resolves $CLAUDE_PROJECT_DIR / relative script
+    # paths (falls back to cwd inside the inspector when None).
+    hook_coverage_by_name: dict[str, list[HookFieldCoverage]] | None = None
+    if agent_configs:
+        try:
+            hook_coverage_by_name = {
+                c.name.lower(): [
+                    inspect_hook_field(
+                        c, "PostToolUse", "duration_ms", project_root=project_dir,
+                    )
+                ]
+                for c in agent_configs
+            }
+        except OSError:
+            logger.debug("Could not inspect hook coverage", exc_info=True)
+            hook_coverage_by_name = None
+
     # Aggregate-level signals (model-routing) use the same config lookup
     # the correlator will read from; fold them in before correlation.
     signals.extend(extract_model_routing_signals(invocations, configs_by_name))
@@ -370,7 +397,7 @@ def run_diagnostics(
         )
         tier3_degraded = True
 
-    correlated_pairs = correlate(signals, configs_by_name)
+    correlated_pairs = correlate(signals, configs_by_name, hook_coverage_by_name)
     recommendations = [rec for _, rec in correlated_pairs]
     aggregated = aggregate_recommendations(correlated_pairs)
 
