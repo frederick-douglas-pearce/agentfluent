@@ -59,14 +59,19 @@ VERBOSITY_CONSTRAINT_WARNING_WORDS = 50
 
 VERBOSITY_POSTMORTEM_URL = "https://www.anthropic.com/engineering/april-23-postmortem"
 
-# Regex list from the #431 architect design, with two corrections so the
-# canonical no-space postmortem phrasing ("<=25", "<=100") is caught:
-#   - pattern 1 tolerates an optional <=/≤ symbol before the digits
-#   - pattern 2 uses \s* (not \s+) after the symbol alternation
-# Without these the exact string the feature targets goes undetected (dead feature).
+# Regex list from the #431 architect design, with corrections:
+#   - pattern 1 tolerates an optional <=/≤ symbol before the digits, so the
+#     canonical no-space postmortem phrasing ("<=25", "<=100") is caught;
+#   - pattern 2 uses \s* (not \s+) after the symbol alternation, for the same
+#     reason;
+#   - pattern 1's gap is NON-greedy (.{0,40}?) so two distinct constraints on
+#     one line ("...to 30 words. Keep...to 15 words") aren't merged into a
+#     single match that drops the first (and its severity).
+# Without the first two the exact string the feature targets goes undetected
+# (dead feature); without the third a nearby second constraint is silently lost.
 VERBOSITY_CONSTRAINT_PATTERNS: list[re.Pattern[str]] = [
     re.compile(
-        r"(?:keep|limit|restrict|cap)\b.{0,40}\b(?:to|under|at most|no more than)"
+        r"(?:keep|limit|restrict|cap)\b.{0,40}?\b(?:to|under|at most|no more than)"
         r"\s+(?:≤|<=)?\s*(\d+)\s+words",
         re.IGNORECASE,
     ),

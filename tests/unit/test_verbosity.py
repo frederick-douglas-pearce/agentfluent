@@ -81,6 +81,21 @@ class TestDetectHelper:
             (100, "keep final responses to ≤100 words"),
         ]
 
+    def test_two_constraints_one_line_both_kept(self) -> None:
+        # Regression: a greedy gap in pattern 1 merged two distinct nearby
+        # constraints into one match, dropping the first. Non-greedy keeps both.
+        assert _detect_verbosity_constraints(
+            "Limit summaries to 30 words. Keep captions to 15 words."
+        ) == [(30, "Limit summaries to 30 words"), (15, "Keep captions to 15 words")]
+
+    def test_nearby_constraints_do_not_hide_more_severe(self) -> None:
+        # Regression: greedy merge kept only the trailing (less severe) count,
+        # hiding the leading WARNING behind a trailing INFO. The WARNING must win.
+        results = _detect_verbosity_constraints(
+            "Keep replies to 25 words, tips to 40 words"
+        )
+        assert (25, "Keep replies to 25 words") in results
+
     def test_overlapping_patterns_deduped_to_one(self) -> None:
         # "maximum 50 words or fewer" is caught by patterns 2 and 3; dedup -> one.
         assert _detect_verbosity_constraints("maximum 50 words or fewer") == [
