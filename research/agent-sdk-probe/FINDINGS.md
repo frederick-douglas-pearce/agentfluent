@@ -460,3 +460,148 @@ findings 1-3 as executable assertions for the downstream linker work.
   `discover_session_subagents()` ignores `.meta.json` sidecars.
 - The `.meta.json` sidecar itself is already in the #528 CLAUDE.md-sync scope
   (documented in the #522 section above) -- no new docs issue needed.
+
+---
+
+# SDK vs Claude Code -- structured comparison (#520)
+
+The **consolidated, dimension-by-dimension cross-walk** of the SDK corpus against
+the Claude Code baseline (the `CLAUDE.md` "JSONL Data Format" section). Where the
+per-story sections above (#518/#522/#519/#530) recorded observations as they were
+discovered, this section is the single structured artifact **S4 (#521) synthesizes
+from**: every row is re-verified against the corpus bytes and cited to a specific
+record (corpus-relative `filename:line` or field path). Same versions
+(`claude-agent-sdk==0.2.106`, CLI `2.1.185`, captured 2026-06-22).
+
+**Baseline note.** `CLAUDE.md`'s JSONL section already reflects the #528 sync -- it
+documents the `.meta.json` sidecar, the `tool-results/` spill,
+`persistedOutputPath`/`persistedOutputSize`, and lists `ai-title`,
+`queue-operation`, `attachment`, `last-prompt` under "Types to skip." So several
+items the earlier sections flagged as "stale-snapshot deltas" are now **in** the
+baseline; this cross-walk grades against the current `CLAUDE.md` text (see the
+"Refinements vs earlier sections" note below).
+
+**Corpus scope for this diff.** Every claim was checked across all main `*.jsonl`
++ child traces via `jq`/`grep` (not restated from prose). Counts below are over
+the full corpus (main + child `user`/`assistant` lines unless noted).
+
+## 1. Per-dimension comparison
+
+| Dimension | CC baseline (`CLAUDE.md`) | SDK observed | Verdict | Sample record |
+|---|---|---|---|---|
+| **File location / dir layout** | `~/.claude/projects/<slug>/<session-id>.jsonl`; child dirs `<id>/subagents/`, `<id>/tool-results/` | Identical: single `<session-id>.jsonl` at slug root; child dirs are siblings | **Same** | `manifest.json` `project_slug` + `source_jsonl`; on-disk `f63d80f5-.../subagents/`, `6c141b2e-.../tool-results/be5p6qdq6.txt` |
+| **Message types (assistant/user)** | `assistant` (model+`tool_use`), `user` (prompt or `tool_result` blocks) | Both present, identical schema | **Same** | `981cd27f...jsonl:8` assistant; `:3` user |
+| **Skip-types present** | Lists incl. `ai-title, queue-operation, attachment, last-prompt` | Corpus's only non-user/assistant types are exactly `ai-title, attachment, last-prompt, queue-operation` (18/30/13/16 occ.); `system, progress, create, file-history-snapshot` not exercised | **Same** (all 4 observed types are in the baseline list) | `981cd27f...jsonl:1` queue-operation, `:4` attachment, `:7` ai-title, `:24` last-prompt |
+| **`toolUseResult` shape (camelCase)** | `status, prompt, agentId, agentType, totalDurationMs, totalTokens, totalToolUseCount, usage, toolStats` (+`persistedOutput*` on spill) | Same keys, camelCase, **+ `resolvedModel`** (concrete child model) not in baseline | **Differs (superset: +`resolvedModel`)** | `f63d80f5...jsonl:10` -- keys incl. `resolvedModel=claude-haiku-4-5-20251001` |
+| **`toolUseResult.status` value** | example shows `"success"` (`CLAUDE.md:260`) | `"completed"` on all 3 Agent results; non-Agent tool results carry **no** `status` key | **Differs (doc-example nit)** | 3× `"completed"`, 17× absent (`f63d80f5...jsonl:10`, `ac1c3a7f...jsonl:10,13`) |
+| **`isSidechain` present / semantics** | main `false`; subagent traces `true` | main `false`; child traces `true` | **Same** | main lines all `false`; `ac1c3a7f/.../agent-a29449fa7d1602e91.jsonl` all `true` |
+| **Subagent trace layout + `agentId` linkage** | `<id>/subagents/agent-<agentId>.jsonl` + `.meta.json {agentType,description,toolUseId}`; `agentId` == `toolUseResult.agentId` | Exactly this; 4-way join verified: parent `tool_use.id` == `tool_result.tool_use_id` == sidecar `toolUseId` == `toolUseResult.agentId` == `agent-<agentId>.jsonl` filename == child top-level `agentId` | **Same** | `ac1c3a7f...jsonl:9` `tool_use.id=toolu_01CwHK...`; `:10` `agentId=a29449fa7d1602e91`; sidecar `agent-a29449fa7d1602e91.meta.json`; child file top-level `agentId=a29449fa7d1602e91` |
+| **token/usage field shape** | `input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens` | All 4 present **+ extras**: `cache_creation` (nested), `server_tool_use`, `service_tier`, `inference_geo`, `iterations`, `speed` (absorbed by `extra="ignore"`) | **Differs (superset)** | `981cd27f...jsonl:8` usage block |
+| **SDK-only markers (D013 discriminator)** | not documented | `entrypoint == "sdk-py"` on **119/119** user+assistant lines (main+child); `promptSource == "sdk"` on prompt lines; `version == "2.1.185"` | **SDK-only (new)** | 119× `entrypoint=sdk-py`, 0 other; `981cd27f...jsonl:3` `promptSource=sdk` |
+| **Main-session model / options metadata** | `assistant.message.model` per message; no options header line | `message.model` per assistant line == configured model (haiku + sonnet both observed); **0 `system` lines corpus-wide** -- options are runtime-only (`SystemMessage(init)`, captured in `manifest.json` `init`) | **Same** (confirmed no persisted options header) | `981cd27f...jsonl:8` `message.model`; `manifest.json` `init`; 0 `system` lines |
+
+## 2. Parser-assumption cross-walk -- holds / breaks / unknown
+
+Each concrete assumption stated or implied by the `CLAUDE.md` JSONL section, graded
+for SDK data with a sample-record pointer.
+
+| Assumption (`CLAUDE.md`) | Verdict | Evidence |
+|---|---|---|
+| `message.content` may be **string OR array** | **holds** | user lines corpus-wide (main + child): 11 string, 27 array |
+| Top-level `type:"tool_result"` lines are **NOT** emitted (results are blocks inside `user` messages) | **holds** | 0 top-level `tool_result` lines; block form at `f63d80f5...jsonl:10` |
+| `toolUseResult` attached to the **containing** user message carrying the `tool_result` block | **holds** | `f63d80f5...jsonl:10` -- same line has the `tool_result` block + sibling `toolUseResult` |
+| Agent delegation `tool_use.name == "Agent"` (with `subagent_type`) | **holds** | `f63d80f5...jsonl:9` `name=Agent`; init advertises `Task` (`manifest.json` `init.tools`) -- alias caveat from #522 still applies |
+| `usage` extra keys absorbed by `extra="ignore"` | **holds** | extras present (`iterations, inference_geo, speed, server_tool_use, service_tier, cache_creation`); `parse_session` runs clean (#518/#519) |
+| Subagents discovered via **flat** `<id>/subagents/` | **holds (single-level only)** | `ac1c3a7f/subagents/` 2 siblings, `f63d80f5/subagents/` 1; **no `nested` session in this corpus** -- #530's multi-level flatness is carried from its own capture, not re-verified here |
+| `agentId` links child file to `toolUseResult.agentId` | **holds** | `ac1c3a7f...jsonl:10,13` agentIds match the two child filenames |
+| "Types to skip" list is complete for SDK data | **holds** | all 4 observed non-user/assistant types are in the baseline list; parser else-branch tolerates them |
+| Large output spilled; `persistedOutputSize` = full byte count, `stdout` truncated | **holds** | `6c141b2e...jsonl:10` `persistedOutputSize=3388895` == spill file bytes (3,388,895); `len(stdout)=30000` |
+| `.meta.json` sidecar shape `{agentType,description,toolUseId}` | **holds** | all 3 sidecars carry exactly those keys |
+| `toolUseResult.status` == `"success"` (per the doc example) | **breaks (value)** | observed `"completed"` (3/3 Agent results); minor doc-example fix, not a schema break |
+
+**No line type present in SDK data is missing from the baseline "Types to skip"
+list.** All four candidates (`queue-operation, attachment, last-prompt, ai-title`)
+are already listed post-#528.
+
+## 3. The three #112 open questions -- observed answers
+
+**(a) On-disk location.** Same as Claude Code:
+`~/.claude/projects/<cwd-slug>/<session-id>.jsonl`, co-located with interactive
+sessions. Probe `cwd == research/agent-sdk-probe/` produced slug
+`-home-...-agent-sdk-probe` identically; existing discovery needs **no path
+changes**. *Cite: `manifest.json` `project_slug` + `source_jsonl`.*
+
+**(b) SDK-vs-interactive discriminator.** `entrypoint == "sdk-py"` on **119/119**
+user+assistant lines (main + child) -- intrinsic and reliable; #112 needs **no**
+`--scope` heuristic. CC interactive carries `entrypoint == "cli"` (per #518 across
+3 real sessions; not re-verifiable from this SDK-only corpus). Corroborating:
+`promptSource == "sdk"` (prompt lines only). `userType` (`external`) and
+`isSidechain` (`false`) are identical to CC and do **not** discriminate.
+Version-specific -- phrase as `entrypoint == "sdk-py"` for SDK >= 0.2.106 / CLI
+2.1.185. *Cite: 119× `entrypoint=sdk-py`; `981cd27f...jsonl:3` `promptSource=sdk`.*
+
+**(c) Main-session model/options metadata.** Model surfaces per assistant message
+at `message.model`, equal to the configured `ClaudeAgentOptions.model` (verified
+across two model values, haiku + sonnet). **No persisted options/init line** -- 0
+`system` lines corpus-wide; the full options snapshot (`tools, mcp_servers, agents,
+skills, plugins, permissionMode, cwd, apiKeySource, model, ...`) is delivered at
+runtime as `SystemMessage(subtype="init")` and captured out-of-band into
+`manifest.json` `init`, never written to JSONL. *Cite: `981cd27f...jsonl:8`
+`message.model`; `manifest.json` `init`; 0 `system` lines.*
+
+## 4. SDK-only / absent fields relative to the CC baseline
+
+**Present in SDK bytes, NOT in the `CLAUDE.md` JSONL section:**
+- `entrypoint` (`"sdk-py"`) -- every user/assistant line. *(`981cd27f...jsonl:3`)*
+- `promptSource` (`"sdk"`) -- user prompt lines only. *(`981cd27f...jsonl:3`)*
+- `toolUseResult.resolvedModel` -- concrete child model; on Agent results; not in baseline and (per #522) not yet in `claude-code-sessions`. *(`f63d80f5...jsonl:10`)*
+- Claude Code threading/top-level fields not called out by the baseline: `userType, version, promptId, gitBranch, permissionMode, parentUuid, uuid, requestId`. *(top-level keys, `981cd27f...jsonl:3`/`:8`)*
+- assistant `message` extras: `id, stop_reason, stop_sequence, stop_details, diagnostics`. *(`981cd27f...jsonl:8`)*
+- `usage` extras: `cache_creation` (nested), `server_tool_use, service_tier, inference_geo, iterations, speed`. *(`981cd27f...jsonl:8`)*
+- child-trace top-level extras: `agentId, attributionAgent` (self-label = own agentType), `sourceToolAssistantUUID` (intra-file threading). *(`ac1c3a7f/.../agent-a29449fa7d1602e91.jsonl`)*
+- inline `<usage>subagent_tokens: N / tool_uses: N / duration_ms: N</usage>` text trailer inside the Agent `tool_result.content` -- present at **level 1** here (see refinement 2). *(`f63d80f5...jsonl`, `ac1c3a7f...jsonl`)*
+- runtime-only `init` keys (never persisted): `slash_commands, claude_code_version, output_style, apiKeySource, memory_paths, fast_mode_state, analytics_disabled, product_feedback_disabled`. *(`manifest.json` `init`)*
+
+**Documented in `CLAUDE.md` but ABSENT from this corpus (uncovered, not contradicted):**
+- line types `system, progress, hook_progress, bash_progress, create, file-history-snapshot` -- 0 occurrences (not exercised by these runs).
+- `toolUseResult.status: "success"` -- observed value is `"completed"` (§2).
+- `persistedOutputPath`/`persistedOutputSize` -- only in the one `large` run (`6c141b2e`); spill-only, expected.
+
+## 5. Refinements vs the earlier per-story sections
+
+Everything material in the #518/#522/#519/#530 sections checks out against the
+bytes. Three refinements for S4/#521:
+
+1. **The "Types-to-skip gap" is documentation-resolved.** The earlier sections
+   flag `queue-operation, attachment, last-prompt, ai-title` as absent from
+   `CLAUDE.md`'s skip list (tracked in #528). The **current** `CLAUDE.md` lists all
+   four. What remains is only the runtime `SKIP_TYPES` frozenset code change (still
+   valid, unticketed) -- no outstanding doc gap.
+2. **The `subagent_tokens` inline trailer is not level-2-exclusive.** #530 frames
+   it as the depth>=2 fallback. In this corpus it also appears in the **level-1**
+   Agent `tool_result.content`, *alongside* a full `toolUseResult`. Refinement: the
+   trailer lives in the tool_result content text at all levels; the level-1-only
+   artifact is the sibling `toolUseResult` object, not the trailer -- a parser must
+   not treat the trailer's presence as a nesting signal.
+3. **The `nested` multi-level layout is not re-verifiable from this corpus.** No
+   `nested`-variant session exists here (only single-level: `ac1c3a7f` 2 children,
+   `f63d80f5` 1). #530's "flat at all depths" + cross-file `toolUseId` join claims
+   are carried from its own separate capture; the single-level 4-way linkage they
+   build on **is** confirmed here.
+
+One doc nit for #521/#528: the `status: "success"` example value in `CLAUDE.md`
+does not match the observed `"completed"` -- a one-word example fix, not a schema
+change.
+
+## Net result for the roadmap
+
+- **#520 ACs met:** structured per-dimension comparison (§1) + per-assumption
+  holds/breaks/unknown cross-walk (§2), each with a sample-record citation; the
+  three #112 questions answered with evidence (§3); SDK-only/absent fields
+  enumerated (§4); all observations cite specific #519-corpus records.
+- **#521 (S4)** synthesizes the durable findings doc + anonymized fixtures from
+  §§1-4 and inherits three concrete doc/parser follow-ups from §5 (`SKIP_TYPES`
+  code change; `status` example fix; the level-1 `subagent_tokens` trailer note).
+- **#112** stays unblocked: reliable intrinsic discriminator (`entrypoint ==
+  "sdk-py"`), co-located location, per-assistant model + `resolvedModel` for
+  child-model routing, options runtime-only.
