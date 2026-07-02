@@ -282,6 +282,15 @@ The `- Budget:` line is the per-iteration cost record (#565). Fields:
 # Plan: #<N> — <title>
 **Route:** <code|research|docs>  **Branch:** <BRANCH_FMT>
 
+## Value framing (route-scaled — see §3)
+<feat: backbone activity + 1–3 `as a … I want … so that …`, each with who-benefits +
+prevalence + a falsifier ("what observation would show this is misdirected?"); discharge cheap
+falsifiers here (run the grep/corpus pass) rather than only stating them.
+fix: who hits it / how often / what breaks. docs: who reads it / what it unblocks.
+research: question + downstream decision + what a null result means.
+chore:/refactor: what internal tooling/quality it serves + why now.
+Add a source-fidelity note if the rationale leans on any externally-cited source.>
+
 ## Acceptance criteria (verbatim from issue)
 - [ ] ...
 
@@ -389,6 +398,40 @@ Set the row status to `planning`. Fetch the issue (`gh issue view <N>`). Write
 `issue-<N>.plan.md` (template in spec §6.3), copying acceptance criteria verbatim. Lighter for
 research/docs.
 
+**Value framing (opens the plan, route-scaled).** State *why this should exist* in
+user terms — the question the architect/AC-verifier/code-review gates never ask (they check we
+build the thing right, not that it's the right thing). You write it inline; it is not extra
+ceremony. Scale it to the route:
+- **`feat:`** — a compact user-story map: one backbone activity + 1–3 `as a <user>, I want
+  <capability>, so that <outcome>` stories. Each carries **who benefits**, its **prevalence**
+  (how often real configs/corpora actually hit it), and a **falsifier** — *what single
+  observation would show this feature is misdirected?* (e.g. "~0 matching instances in any real
+  corpus"). A story with no credible user, or no checkable falsifier, is a red flag.
+- **`fix:`** — one line: who hits the bug, how often, what breaks without the fix.
+- **`docs:`** — who reads it and what it unblocks.
+- **`research:`** — the question, the downstream decision it informs, and what a **null result**
+  would mean (a null that changes nothing is a sign the question isn't worth asking).
+- **`chore:` / `refactor:`** — one line: what internal tooling or quality this serves and why
+  now; no user-facing story required (state "internal tooling, no PyPI-visible change" if so).
+
+**Discharge cheap falsifiers at plan time — don't just state them.** If a story's falsifier is
+checkable *before* code (a grep / corpus / prevalence pass), RUN it now, or escalate; a
+stated-but-unrun falsifier is not sufficient. This is the load-bearing step: the cheap corpus
+pass is exactly what caught #437 — but only post-hoc. Defer discharge only when the check
+genuinely requires the built feature.
+
+**Source-fidelity check (any externally-cited justification).** If the issue's rationale leans on
+an external source — a research-scout (`anthropic-feature-watch`) candidate, a linked article, a
+postmortem — confirm the source actually supports the generalization the issue makes: **locus**
+(does the incident occur on the surface this feature inspects?), **evidence base** (n, scope,
+whether the source itself generalizes), and **current relevance** (already fixed upstream?
+version-specific?). An issue that extrapolates past what its source establishes is misdirected
+regardless of implementation quality. (The #437 lesson — decision D046.)
+
+**When you can't articulate it, escalate — don't build.** If you cannot state a credible user
+*and* a checkable falsifier, route the issue to SCOPE_AGENT (pm) BEFORE implementing; do not
+proceed on a plan whose value story doesn't hold.
+
 ## 4. Architect gate (conditional)
 If any §7.2 trigger fires OR you are unsure about the design, invoke the DESIGN_AGENT with
 the plan; address `blocking`/`important` concerns before coding. Skip for docs and trivial
@@ -396,9 +439,12 @@ research.
 
 ## 5. Human gate (conditional — every mode)
 The plan gate is **conditional in every mode** — `mode:` gates the merge gate only (§11), never
-this one. Present the plan and STOP for approval when: acceptance criteria are ambiguous; the
-change is risky/irreversible; SCOPE/ DESIGN agents disagree or punt; or you are otherwise unsure.
-Otherwise proceed (note "auto-approved" + why in the journal). Route scope questions to
+this one. It is **value-first**: present the §3 value framing (user-story map / value statement)
+alongside the approach, and treat a **non-credible value story — no plausible user, or no
+checkable falsifier — as itself a reason to STOP**, not just ambiguous ACs. Present the plan and
+STOP for approval when: the value story doesn't hold; acceptance criteria are ambiguous; the
+change is risky/irreversible; SCOPE/DESIGN agents disagree or punt; or you are otherwise unsure.
+Otherwise proceed (note "auto-approved" + why in the journal). Route scope/value questions to
 SCOPE_AGENT and design questions to DESIGN_AGENT BEFORE escalating to the human. On approval
 (human or auto), advance the row to `plan-approved`.
 
@@ -465,9 +511,10 @@ issues. The ledger is gitignored — do NOT commit it (spec §6.4). STOP. (Drive
 fresh context for the next issue.)
 
 ## Escalation rubric (when unsure)
-Scope/priority/requirements → SCOPE_AGENT. Design/implementation → DESIGN_AGENT. Escalate to
-the HUMAN only when those disagree/punt, ACs are unresolvable, an action is
-destructive/irreversible, a review finding is contested, or the same step failed twice.
+Scope/priority/requirements — including any plan whose value story lacks a credible user or a
+checkable falsifier (§3) — → SCOPE_AGENT (pm), before implementing. Design/implementation →
+DESIGN_AGENT. Escalate to the HUMAN only when those disagree/punt, ACs are unresolvable, an
+action is destructive/irreversible, a review finding is contested, or the same step failed twice.
 
 ## Guardrails
 One PR at a time (no stacked PRs). **Stuck = the same error SIGNATURE recurs** — grep the FULL

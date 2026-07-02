@@ -990,3 +990,39 @@ upstream coverage so overlays retire as genai-prices catches up.
 #252 (folded into #545); spec `prd-pricing-genai-migration.md`.
 
 ---
+
+## D046: Defer verbosity-constraint scanner (#437) — corpus prevalence is 0; re-enter only on evidence
+
+**Date:** 2026-07-01
+**Context:** #437 (PR #571, built + held at merge gate) shipped a regex scanner flagging ≤200-word
+caps in the user's *own* agent prompts, citing Anthropic's April 2026 postmortem "3% coding
+regression." A value re-review (`.claude/specs/value-review-437-verbosity.md`) found: (a) the
+incident was in Anthropic's Claude Code **harness** system prompt — a surface the scanner cannot
+see (locus mismatch); (b) evidence is n=1, internal, self-corrected, coding-specific, no
+generalization claimed by the source; (c) v1 flags the common+correct case (scoped word caps on
+summarizers/classifiers) and cannot distinguish the rare valid case (blanket caps on tool-using
+agents); (d) v1 hands judgment back to the user, contradicting the "tells you what to change"
+tagline; (e) the bare 3% citation is misapplied evidence that erodes recommendation credibility.
+A read-only prevalence pass of the detector over the dogfood corpus (all `~/.claude/agents/` +
+project `.claude/agents/` defs, 2026-07-01) found **0 blanket caps on tool-having agents**; the
+corpus's only word-count constraints are all legitimate scoped output specs (marketer per-artifact
+lengths; three research agents' "under 200 words" summaries) — the exact population v1 risks
+mis-flagging.
+**Decision:** DEFER, and the 0-prevalence result resolves the DEFER-vs-RESCOPE fork toward DEFER
+(not immediate rescope). PR #571 closed **unmerged** (branch deleted; work preserved on the PR).
+#437 closed as **misdirected-as-written** (not "kept open" — an older issue with architect-blessed
+ACs written against the article, not a corpus). Correctly-scoped, evidence-gated successor filed as
+**#572** (unmilestoned, backlog). Re-entry gate: build only if a corpus surfaces real blanket
+response caps on agentic/tool-using prompts; if so, re-enter as RESCOPE-NARROW (tool-having gate +
+scoped-field FP guard + mechanism-based copy, no bare 3% stat).
+**Rationale:** The binding constraint is unproven prevalence, not implementation quality — and the
+prevalence check returned 0. Cost asymmetry favors waiting: DEFER is reversible; shipping a
+trust-damaging citation is not. A prevalence oracle already existed at zero marginal cost (the
+dogfood corpus).
+**Meta / process:** This effort was corrected only by a post-hoc user-story mapping requested after
+implementation. Surfaced a release-loop gap → adding a user-focused value framing at the *planning*
+gate so misdirected effort is caught before code (#573).
+**Reference:** #437 (closed), #572 (successor), #431 (C-006a epic), PR #571 (closed unmerged),
+spec `value-review-437-verbosity.md`, [postmortem](https://www.anthropic.com/engineering/april-23-postmortem).
+
+---
