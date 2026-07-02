@@ -1,11 +1,12 @@
 # PRD: Agent SDK Session Data Discovery
 
-**Status:** Draft
+**Status:** Complete — epic #517 closed 2026-07-02 (all six children merged; findings in `agent-sdk-session-format-findings.md`)
 **Date:** 2026-06-18
 **Author:** PM Agent
 **Type:** Discovery / research epic (deliverable is knowledge, not a shipped feature)
 **Governing decision:** D013 in `decisions.md` (main-session model-routing scope)
 **Primary downstream consumer:** #112 (model-routing diagnostics for main Agent SDK session)
+**Findings:** `.claude/specs/agent-sdk-session-format-findings.md` (the durable S4 deliverable)
 
 ---
 
