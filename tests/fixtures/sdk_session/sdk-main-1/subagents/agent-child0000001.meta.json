@@ -1,0 +1,5 @@
+{
+ "agentType": "summarizer",
+ "description": "Summarize the dataset",
+ "toolUseId": "toolu_main_to_child"
+}
