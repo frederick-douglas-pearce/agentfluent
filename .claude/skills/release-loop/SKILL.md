@@ -79,14 +79,22 @@ ceremony. Scale it to the route:
 - **`docs:`** — who reads it and what it unblocks.
 - **`research:`** — the question, the downstream decision it informs, and what a **null result**
   would mean (a null that changes nothing is a sign the question isn't worth asking).
+- **`chore:` / `refactor:`** — one line: what internal tooling or quality this serves and why
+  now; no user-facing story required (state "internal tooling, no PyPI-visible change" if so).
 
-**Source-fidelity check (candidates from `anthropic-feature-watch`).** If the issue traces to a
-research-scout candidate citing an external article/postmortem, confirm the source actually
-supports the generalization the issue makes — **locus** (does the incident occur on the surface
-this feature inspects?), **evidence base** (n, scope, whether the source itself generalizes),
-and **current relevance** (already fixed upstream? version-specific?). An issue that extrapolates
-past what its source establishes is misdirected regardless of implementation quality. (The #437
-lesson — decision D046.)
+**Discharge cheap falsifiers at plan time — don't just state them.** If a story's falsifier is
+checkable *before* code (a grep / corpus / prevalence pass), RUN it now, or escalate; a
+stated-but-unrun falsifier is not sufficient. This is the load-bearing step: the cheap corpus
+pass is exactly what caught #437 — but only post-hoc. Defer discharge only when the check
+genuinely requires the built feature.
+
+**Source-fidelity check (any externally-cited justification).** If the issue's rationale leans on
+an external source — a research-scout (`anthropic-feature-watch`) candidate, a linked article, a
+postmortem — confirm the source actually supports the generalization the issue makes: **locus**
+(does the incident occur on the surface this feature inspects?), **evidence base** (n, scope,
+whether the source itself generalizes), and **current relevance** (already fixed upstream?
+version-specific?). An issue that extrapolates past what its source establishes is misdirected
+regardless of implementation quality. (The #437 lesson — decision D046.)
 
 **When you can't articulate it, escalate — don't build.** If you cannot state a credible user
 *and* a checkable falsifier, route the issue to SCOPE_AGENT (pm) BEFORE implementing; do not
