@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.10.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.9.0...v0.10.0) (2026-07-03) — "Close the Hook Gap"
+
+The release theme reaches a config surface the recommendation engine was previously blind to: **hooks**. AgentFluent's premise is that the config *is* the agent — prompt, tools, model, MCP servers, and hooks — but until now the diagnostics could see and prescribe every surface on that list except the last. v0.10 closes that blind spot. A new `hook_inspector` reads each agent definition's `PostToolUse` hooks and reports whether they surface a given field (`HookFieldCoverage`, #424); when a duration outlier fires on an agent with **no `duration_ms` timing hook**, `DurationOutlierRule` now recommends adding one through the new **`target=hooks`** recommendation surface (#425), wired into the diagnostics pipeline by #426 (epic #423). This is the *first* recommendation into the hooks surface — foundational and extensible (the inspector generalizes to other fields via `KNOWN_HOOK_FIELDS`), not exhaustive hook analysis; project-level `.claude/settings.json` hooks are not yet inspected. The same through-line — recommendations that name a concrete fix — sharpens model routing: model-mismatch and duration recommendations now name a **specific** one-tier-down model (e.g. `claude-haiku-4-5`) instead of a vague "use a faster model" (#560/#170).
+
+Underneath the headline, v0.10 makes **first empirical contact with the primary audience's data — the Agent SDK.** For nine releases every signal was validated on Claude Code sessions, almost all from a single developer's `~/.claude/projects/`; the tool had never seen a byte from its stated primary target. Epic #517 fixes that: a hello-world probe locates and fingerprints SDK sessions and answers #112's three blocking questions against real bytes (#518), a representative data-generation agent (#522) and a run-matrix corpus (#519) capture how the SDK actually writes sessions, nested subagent recording is verified (#530), and the corpus is diffed against Claude Code (#520) and distilled into a durable findings doc with anonymized fixtures (#521). This stream produces **knowledge and a sample corpus, not a CLI surface you invoke** — which is why it is absent from the feature list below (it ships as `docs:`/`research:` groundwork). Its strategic weight is nonetheless the largest in the release: it unblocks #112 and every downstream SDK-native feature. #520 and #521 landed further than planned — both were scheduled for v0.11, but the front of the epic stabilized early enough to ship them now.
+
+A third stream lands the v0.9 dogfood calibration and hygiene follow-ups: `PARAMETER_RETRY` is gated on a genuine first-attempt error and annotates built-in-tool fires as informational, so it stays quiet on no-error paging sequences and only recommends the `input_examples` fix where a user can actually apply it (#510); 1-hour prompt-cache writes are billed at 2× the base rate rather than the 5-minute rate (#542); the `model_turns` vs `api_call_count` relationship and `<synthetic>` exclusion are documented (#511); and the CLAUDE.md JSONL snapshot is synced to the upstream `claude-code-sessions` reference (#528).
+
+**No breaking changes.** All additions are additive: the `HookFieldCoverage` model and the `target=hooks` recommendation join the existing rollups and recommendation shapes without changing the JSON envelope, the hook recommendation fires only when timing-hook coverage is missing, and concrete model naming replaces vague wording in an existing recommendation (no schema change). One cost-value note: after #542, sessions that used 1-hour cache TTLs will read **higher** total cost than before — a pricing-accuracy correction, not a contract break.
+
+See the README v0.10 roadmap entry, [`prd-v0.10.md`](.claude/specs/prd-v0.10.md) (with a §10 addendum recording the mid-release scope growth and the theme reframe), and [`prd-agent-sdk-discovery.md`](.claude/specs/prd-agent-sdk-discovery.md) for the full design context. Epics: [#423](https://github.com/frederick-douglas-pearce/agentfluent/issues/423) (hook coverage, C-001), [#517](https://github.com/frederick-douglas-pearce/agentfluent/issues/517) (Agent SDK discovery). Decisions D044–D046 in [`.claude/specs/decisions.md`](.claude/specs/decisions.md).
+
+
+### Features
+
+* **config:** add HookFieldCoverage model and hook_inspector module ([#424](https://github.com/frederick-douglas-pearce/agentfluent/issues/424)) ([c83de50](https://github.com/frederick-douglas-pearce/agentfluent/commit/c83de5019cfd638c672a5a4ef71708f9b2f8d8a9))
+* **diagnostics:** name a concrete target model in model-routing recommendations ([#560](https://github.com/frederick-douglas-pearce/agentfluent/issues/560)) ([568905e](https://github.com/frederick-douglas-pearce/agentfluent/commit/568905e0c0f01d346f2b12a6127818ddbcef7470))
+* **diagnostics:** recommend a duration_ms timing hook in DurationOutlierRule ([#425](https://github.com/frederick-douglas-pearce/agentfluent/issues/425)) ([1806106](https://github.com/frederick-douglas-pearce/agentfluent/commit/18061069fbcb0e0a71d87df3de1135a7aeed66f5))
+* **diagnostics:** wire hook_inspector into run_diagnostics pipeline ([#426](https://github.com/frederick-douglas-pearce/agentfluent/issues/426)) ([3a8808d](https://github.com/frederick-douglas-pearce/agentfluent/commit/3a8808db95b6497ab6d3d334dcfc7b891f19bfcc))
+
+
+### Bug Fixes
+
+* **diagnostics:** gate PARAMETER_RETRY on first-attempt error, annotate built-in tools ([#555](https://github.com/frederick-douglas-pearce/agentfluent/issues/555)) ([9bbc868](https://github.com/frederick-douglas-pearce/agentfluent/commit/9bbc868e4e412c7e0e4e2524451563497aec92d0))
+* **pricing:** bill 1-hour cache writes at 2x base, not the 5m rate ([#542](https://github.com/frederick-douglas-pearce/agentfluent/issues/542)) ([8c5b2e8](https://github.com/frederick-douglas-pearce/agentfluent/commit/8c5b2e87d4ee9f2bce2e6320fd1ab4a94bd4660d))
+
 ## [0.9.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.8.0...v0.9.0) (2026-06-06) — "Count Every Turn"
 
 The release theme adds the missing foundational metric — **model turns** — at every level of the analytics stack, and pairs it with **Advanced Tool Use diagnostics** that explain *why* an agent's round-trips are wasteful.
