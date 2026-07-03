@@ -194,5 +194,34 @@ v0.10 is successful when:
 - [ ] `uv run mypy src/agentfluent/` clean
 - [ ] CHANGELOG updated via release-please
 - [ ] Version bump to 0.10.0
-</content>
-</invoke>
+
+## 10. Shipped vs. planned (post-release addendum)
+
+**Added 2026-07-02 during the #504 close-out.** The milestone grew after this PRD was drafted
+(2026-06-19). The theme was reframed to lead with the shipped, pip-visible surface; the strategic
+substance is unchanged. Recorded here (not as a `decisions.md` D-entry) because the change is
+milestone-level scope growth, not a design decision — the release's design calls are already covered
+by D044–D046.
+
+**Theme.** Reframed from the PRD's **"Meet the Primary Audience"** to the shipped
+**"Close the Hook Gap."** Rationale: prior release themes name the user-facing capability
+("Count Every Turn," "Quality Axis: Tier 3"), and a `pip install` user's headline delta this release
+is the recommendation engine reaching the **hooks** config surface — not the SDK discovery, which
+ships knowledge + a corpus, not an invocable feature. The SDK-discovery stream remains the strategic
+marquee and leads the forward-looking [`ROADMAP.md`](../../docs/ROADMAP.md) v0.10 entry; in the
+CHANGELOG it is given a full, weighty paragraph (its only CHANGELOG home) framed as groundwork.
+
+**Scope grew (not in the PRD's §4 in-scope table):**
+- **Hook coverage diagnostics** — epic #423 (C-001): `HookFieldCoverage` + `hook_inspector` (#424),
+  the `DurationOutlierRule` hook-coverage branch introducing the `target=hooks` surface (#425), and
+  the `run_diagnostics` wiring (#426). Scoped into the milestone 2026-06-30.
+- **Concrete target-model naming** (#170) and the **1-hour cache-write pricing fix** (#542).
+
+**Pulled forward from v0.11:** #520 (SDK-vs-Claude-Code diff) and #521 (SDK-format findings doc +
+anonymized fixtures) — the PRD §3/§4 explicitly deferred both to v0.11, but the front of epic #517
+stabilized early enough to land them in v0.10. Epic #517 is functionally complete (all six children
+merged); GitHub closure is the owner's call.
+
+**Slipped to v0.11:** #513 (re-measure #479 — requires the shipped package) and #514 (README
+documentation-thrash investigation, still open). #500 (decisions.md clobber guard) shipped as
+planned. #469 (per-turn ratios) stays a carried tracking stub.

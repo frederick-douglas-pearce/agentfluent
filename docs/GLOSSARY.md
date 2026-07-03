@@ -233,6 +233,14 @@ has no native marker for approval-pending state -- see
 `anthropics/claude-code#55240` for the upstream proposal that
 would replace the heuristic with structural detection.
 
+**Recommendation fork (v0.10).** The most actionable fix depends on
+what the agent's config already has. When the agent has **no
+`duration_ms` timing hook**, the recommendation forks to
+`target_hooks` (add one -- slow calls go undetected at runtime
+without it). Otherwise, when a concrete one-tier-down model exists,
+it forks to `target_model` naming that model (#170); failing both,
+it falls back to a `target_prompt` task-scoping suggestion.
+
 **Example:**
 
 ```
@@ -243,9 +251,9 @@ Agent 'pm' has 45.2s/tool_use, 3.1×IQR above Q3 of 14.6s.
 
 **Threshold:** Q3 + 1.5 × IQR (Tukey rule), computed on active_duration_per_tool_use
 
-**Recommendation target:** `prompt`
+**Recommendation target:** `hooks | model | prompt`
 
-**Related:** [`token_outlier`](#token_outlier), [`model_mismatch`](#model_mismatch)
+**Related:** [`token_outlier`](#token_outlier), [`model_mismatch`](#model_mismatch), [`target_hooks`](#target_hooks), [`target_model`](#target_model)
 
 ### `tool_error_sequence`
 
@@ -350,6 +358,19 @@ extracts that call's `input` dict and surfaces it as a paste-ready
 user copies it manually -- see D002). Adding `input_examples` to a
 tool definition improves accuracy from 72% to 90% on complex
 parameter handling (Anthropic benchmark).
+
+**Gating and built-in-tool annotation (v0.10, #510).** The first
+attempt must be a *real* error to fire -- this suppresses no-error
+paging / query-refinement sequences that merely change the input
+shape without an error preceding them. A fire on a built-in Claude
+Code *tool* (e.g. `Read`) is annotated **informational**: the
+`input_examples` fix lives on the tool definition, which a user
+cannot edit for a built-in, so the action reads "no action on the
+built-in itself; the fix applies only if the same pattern recurs on a
+custom SDK/MCP tool you own." (This built-in-*tool* axis is
+orthogonal to the built-in-*agent* distinction -- a built-in tool can
+be called from a custom agent; the rule branches on the tool, not the
+agent.)
 
 **Example:**
 
@@ -1087,6 +1108,32 @@ outcome.
 **Aliases:** `description`
 
 **Related:** [`unused_agent`](#unused_agent)
+
+### `target_hooks`
+
+**Short:** Add or edit a hook in the agent's `hooks:` frontmatter -- specifically a
+`PostToolUse` hook that surfaces a runtime field the diagnostics need.
+
+**Detail:** Introduced in v0.10. The recommendation engine reaches the **hooks**
+config surface it was previously blind to. Used for `duration_outlier`
+when the agent has **no `PostToolUse` hook gating on `duration_ms`**: slow
+tool calls go undetected at runtime with no timing hook, so the fix is to
+add one (log or gate on `duration_ms`) to surface slow calls before they
+compound. AgentFluent inspects hook field coverage via a `hook_inspector`
+that reads the agent definition's `PostToolUse` hooks and reports whether
+they reference the target field (`HookFieldCoverage`). This is the first
+recommendation into the hooks surface -- foundational and extensible (the
+inspector generalizes to other fields via `KNOWN_HOOK_FIELDS`), not
+exhaustive hook analysis. The `duration_outlier` correlator forks to
+`hooks` only on explicit *not-covered* evidence and when it can cite the
+agent's config file; unknown coverage falls through to the `model`/`prompt`
+branches. **Limitation:** project-level hooks in `.claude/settings.json`
+are not currently inspected -- only per-agent-definition `hooks:`
+frontmatter.
+
+**Aliases:** `hooks`
+
+**Related:** [`duration_outlier`](#duration_outlier), [`target_model`](#target_model), [`target_prompt`](#target_prompt)
 
 
 ---
