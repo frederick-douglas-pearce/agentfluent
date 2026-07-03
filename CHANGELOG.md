@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.10.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.9.0...v0.10.0) (2026-07-03)
+
+
+### Features
+
+* **config:** add HookFieldCoverage model and hook_inspector module ([#424](https://github.com/frederick-douglas-pearce/agentfluent/issues/424)) ([c83de50](https://github.com/frederick-douglas-pearce/agentfluent/commit/c83de5019cfd638c672a5a4ef71708f9b2f8d8a9))
+* **diagnostics:** name a concrete target model in model-routing recommendations ([#560](https://github.com/frederick-douglas-pearce/agentfluent/issues/560)) ([568905e](https://github.com/frederick-douglas-pearce/agentfluent/commit/568905e0c0f01d346f2b12a6127818ddbcef7470))
+* **diagnostics:** recommend a duration_ms timing hook in DurationOutlierRule ([#425](https://github.com/frederick-douglas-pearce/agentfluent/issues/425)) ([1806106](https://github.com/frederick-douglas-pearce/agentfluent/commit/18061069fbcb0e0a71d87df3de1135a7aeed66f5))
+* **diagnostics:** wire hook_inspector into run_diagnostics pipeline ([#426](https://github.com/frederick-douglas-pearce/agentfluent/issues/426)) ([3a8808d](https://github.com/frederick-douglas-pearce/agentfluent/commit/3a8808db95b6497ab6d3d334dcfc7b891f19bfcc))
+
+
+### Bug Fixes
+
+* **diagnostics:** gate PARAMETER_RETRY on first-attempt error, annotate built-in tools ([#555](https://github.com/frederick-douglas-pearce/agentfluent/issues/555)) ([9bbc868](https://github.com/frederick-douglas-pearce/agentfluent/commit/9bbc868e4e412c7e0e4e2524451563497aec92d0))
+* **pricing:** bill 1-hour cache writes at 2x base, not the 5m rate ([#542](https://github.com/frederick-douglas-pearce/agentfluent/issues/542)) ([8c5b2e8](https://github.com/frederick-douglas-pearce/agentfluent/commit/8c5b2e87d4ee9f2bce2e6320fd1ab4a94bd4660d))
+
 ## [0.9.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.8.0...v0.9.0) (2026-06-06) — "Count Every Turn"
 
 The release theme adds the missing foundational metric — **model turns** — at every level of the analytics stack, and pairs it with **Advanced Tool Use diagnostics** that explain *why* an agent's round-trips are wasteful.
