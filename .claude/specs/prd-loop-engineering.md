@@ -208,7 +208,7 @@ uncertainty — never merely because of `mode:`). The two modes:
   #565); it cannot run headless (§13/§14).
 
 The set of graduated routes is recorded in a `graduated-routes:` header field beside `mode:`
-(default `none`; e.g. `graduated-routes: docs`). Under `mode: calibration` it is inert. *Which*
+(default `none`; e.g. `graduated-routes: docs, research`, per D047). Under `mode: calibration` it is inert. *Which*
 routes graduate and the criteria for promoting one (#562) are out of scope here; this field only
 gives the merge gate (§7.1 step 11) a place to read the human's decision from.
 
@@ -642,7 +642,7 @@ runs as its Route when the dependency closes (§1, §7.3).
 | AC-verify | fresh subagent (+`/verify`) | every code/research issue | done/not-done + gaps |
 | Code review | CODE_REVIEW | every code issue | findings → fixes |
 | Security | local `/security-review` or label | by route | clean/findings |
-| Merge | user (calibration) → orchestrator (later) | CI+security green | squash |
+| Merge | user (calibration / non-graduated route) → orchestrator (auto: graduated routes, D047) | CI+security green | squash |
 
 **Convergence:** the run is complete when every `queue.md` row is terminal (`done` |
 `deferred` | `blocked`). The **completion sentinel** is a final `progress.md` block titled
