@@ -193,9 +193,11 @@ uncertainty — never merely because of `mode:`). The two modes:
   (§7.1 step 11). Plan gate conditional.
 - **`escalation-only`** — the human loosens the **merge gate per route**: a route the human has
   *graduated* auto-merges when CI + AC-verifier + review are green and the version bump is
-  ≤ patch (a `docs`/`chore` change produces no bump, which qualifies). Initially only `docs`;
-  `research` graduates after its first clean end-to-end loop run (to date it has only been
-  *reconciled*, never driven — see the v0.10.0 retrospective, #562). The human merge gate is
+  ≤ patch (a `docs`/`chore` change produces no bump, which qualifies). *Which* routes are
+  currently graduated is a mutable human decision, recorded per-run in the `graduated-routes:`
+  header and in the decision log (see **D047** for the first graduation — `docs`+`research`) —
+  never frozen into this mechanism definition (the #584 lesson: graduation *state* is evidence,
+  not a rule). The human merge gate is
   **retained** for every non-graduated route and, regardless of route, for any of: a `feat:`/
   breaking change, a risky/irreversible change, a touched security surface, a contested review
   finding, or a `hold` row — **and, by default-deny, whenever route graduation or any
@@ -206,7 +208,7 @@ uncertainty — never merely because of `mode:`). The two modes:
   #565); it cannot run headless (§13/§14).
 
 The set of graduated routes is recorded in a `graduated-routes:` header field beside `mode:`
-(default `none`; e.g. `graduated-routes: docs`). Under `mode: calibration` it is inert. *Which*
+(default `none`; e.g. `graduated-routes: docs, research`, per D047). Under `mode: calibration` it is inert. *Which*
 routes graduate and the criteria for promoting one (#562) are out of scope here; this field only
 gives the merge gate (§7.1 step 11) a place to read the human's decision from.
 
@@ -479,10 +481,10 @@ Address findings ≥ the project's confidence bar.
 
 ## 11. Merge
 Read the run `mode` and `graduated-routes` from the `queue.md` header. The merge gate is the
-**only** gate `mode` changes (§6.1). A row is **auto-merge-eligible** only when ALL of these
-hold:
+**only** gate `mode` changes (§5 is conditional in every mode). A row is **auto-merge-eligible**
+only when ALL of these hold:
 - `mode: escalation-only`, AND
-- the row's Route is listed in the header's `graduated-routes` field (§6.1), AND
+- the row's Route is listed in the header's `graduated-routes` field, AND
 - the version bump is ≤ patch — a `docs`/`chore` change produces no bump, which qualifies, AND
 - the row is **not** `hold`, AND
 - none of the always-escalate conditions apply: a `feat:`/breaking change, a risky/irreversible
@@ -492,12 +494,13 @@ hold:
 **not** auto-merge-eligible — fall back to the human merge gate.
 
 If the row is **not** auto-merge-eligible — which includes *every* row under `mode: calibration`
-(the default) and any `hold` row — **STOP and ask the human before merging; never auto-merge.**
-**If the human holds the merge (now or in any later invocation), WRITE the hold to the row before
-stopping** — set Status `hold` (record the reason in Notes) so it persists across `/clear`;
-resume (step 0.3), §1, and this gate all key on Status `hold` and honor it until the human clears
-it (restoring the row's prior status). When the row **is** auto-merge-eligible (or the human has
-approved), and CI + security are green AND the row is not `hold`:
+(the default) and any `hold` row — STOP and ask the human before merging; never auto-merge.
+**If the human holds the merge (now or in any later invocation),
+WRITE the hold to the row before stopping** — set Status `hold` (record the reason in Notes) so
+it persists across `/clear`; resume (step 0.3), §1, and this gate all key on Status `hold` and
+honor it until the human clears it (restoring the row's prior status). When the row **is**
+auto-merge-eligible (or the human has approved), and CI + security are green AND the row is not
+`hold`:
 squash-merge with an explicit `--subject` carrying the correct `COMMIT_CONV` scope,
 `--delete-branch`. Confirm the issue closed.
 
@@ -577,10 +580,13 @@ Promote to a dedicated `ac-verifier` agent only if the composed approach proves 
 3. For each issue: determine route (§7.3) and dependencies (parse "Depends on"/"blocked by"
    refs in the body; respect epic ordering notes).
 4. Topologically order by dependency, then by `PRIORITY_LABELS` (tiebreak issue-number asc).
-   Write `queue.md` (§6.1) with header `mode: calibration` (default; the human loosens to
-   `escalation-only` after calibration — step 11 reads this to gate **the merge gate**, per
-   route; it never affects the plan gate), plus `graduated-routes: none`, `iteration-cap: none`,
-   and `subagent-cap: none` (the budget caps, #565; the human sets them when loosening).
+   Write `queue.md` (§6.1) with header `mode: calibration` **unless the human has already
+   graduated routes for this project** — check the decision log (e.g. **D047**: `docs`+`research`
+   graduated) and, if so, init `mode: escalation-only` + the graduated `graduated-routes:`
+   instead, so a prior graduation persists across runs rather than silently resetting to
+   calibration. Step 11 reads `mode`/`graduated-routes` to gate **the merge gate**, per route; it
+   never affects the plan gate. Also set `iteration-cap: none` and `subagent-cap: none` (the
+   budget caps, #565; the human sets them when loosening).
 5. Append an "init" block to `progress.md`. (Ledger is gitignored — not committed.)
 
 ### 7.6 Resume after `/clear` or compaction
@@ -637,7 +643,7 @@ runs as its Route when the dependency closes (§1, §7.3).
 | AC-verify | fresh subagent (+`/verify`) | every code/research issue | done/not-done + gaps |
 | Code review | CODE_REVIEW | every code issue | findings → fixes |
 | Security | local `/security-review` or label | by route | clean/findings |
-| Merge | user (calibration) → orchestrator (later) | CI+security green | squash |
+| Merge | user (calibration / non-graduated route) → orchestrator (auto: graduated routes, D047) | CI+security green | squash |
 
 **Convergence:** the run is complete when every `queue.md` row is terminal (`done` |
 `deferred` | `blocked`). The **completion sentinel** is a final `progress.md` block titled
