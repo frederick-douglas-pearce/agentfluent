@@ -481,10 +481,10 @@ Address findings ≥ the project's confidence bar.
 
 ## 11. Merge
 Read the run `mode` and `graduated-routes` from the `queue.md` header. The merge gate is the
-**only** gate `mode` changes (§6.1). A row is **auto-merge-eligible** only when ALL of these
-hold:
+**only** gate `mode` changes (§5 is conditional in every mode). A row is **auto-merge-eligible**
+only when ALL of these hold:
 - `mode: escalation-only`, AND
-- the row's Route is listed in the header's `graduated-routes` field (§6.1), AND
+- the row's Route is listed in the header's `graduated-routes` field, AND
 - the version bump is ≤ patch — a `docs`/`chore` change produces no bump, which qualifies, AND
 - the row is **not** `hold`, AND
 - none of the always-escalate conditions apply: a `feat:`/breaking change, a risky/irreversible
@@ -494,12 +494,13 @@ hold:
 **not** auto-merge-eligible — fall back to the human merge gate.
 
 If the row is **not** auto-merge-eligible — which includes *every* row under `mode: calibration`
-(the default) and any `hold` row — **STOP and ask the human before merging; never auto-merge.**
-**If the human holds the merge (now or in any later invocation), WRITE the hold to the row before
-stopping** — set Status `hold` (record the reason in Notes) so it persists across `/clear`;
-resume (step 0.3), §1, and this gate all key on Status `hold` and honor it until the human clears
-it (restoring the row's prior status). When the row **is** auto-merge-eligible (or the human has
-approved), and CI + security are green AND the row is not `hold`:
+(the default) and any `hold` row — STOP and ask the human before merging; never auto-merge.
+**If the human holds the merge (now or in any later invocation),
+WRITE the hold to the row before stopping** — set Status `hold` (record the reason in Notes) so
+it persists across `/clear`; resume (step 0.3), §1, and this gate all key on Status `hold` and
+honor it until the human clears it (restoring the row's prior status). When the row **is**
+auto-merge-eligible (or the human has approved), and CI + security are green AND the row is not
+`hold`:
 squash-merge with an explicit `--subject` carrying the correct `COMMIT_CONV` scope,
 `--delete-branch`. Confirm the issue closed.
 
