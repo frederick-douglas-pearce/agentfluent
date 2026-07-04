@@ -193,9 +193,11 @@ uncertainty — never merely because of `mode:`). The two modes:
   (§7.1 step 11). Plan gate conditional.
 - **`escalation-only`** — the human loosens the **merge gate per route**: a route the human has
   *graduated* auto-merges when CI + AC-verifier + review are green and the version bump is
-  ≤ patch (a `docs`/`chore` change produces no bump, which qualifies). Initially only `docs`;
-  `research` graduates after its first clean end-to-end loop run (to date it has only been
-  *reconciled*, never driven — see the v0.10.0 retrospective, #562). The human merge gate is
+  ≤ patch (a `docs`/`chore` change produces no bump, which qualifies). *Which* routes are
+  currently graduated is a mutable human decision, recorded per-run in the `graduated-routes:`
+  header and in the decision log (see **D047** for the first graduation — `docs`+`research`) —
+  never frozen into this mechanism definition (the #584 lesson: graduation *state* is evidence,
+  not a rule). The human merge gate is
   **retained** for every non-graduated route and, regardless of route, for any of: a `feat:`/
   breaking change, a risky/irreversible change, a touched security surface, a contested review
   finding, or a `hold` row — **and, by default-deny, whenever route graduation or any
@@ -577,10 +579,13 @@ Promote to a dedicated `ac-verifier` agent only if the composed approach proves 
 3. For each issue: determine route (§7.3) and dependencies (parse "Depends on"/"blocked by"
    refs in the body; respect epic ordering notes).
 4. Topologically order by dependency, then by `PRIORITY_LABELS` (tiebreak issue-number asc).
-   Write `queue.md` (§6.1) with header `mode: calibration` (default; the human loosens to
-   `escalation-only` after calibration — step 11 reads this to gate **the merge gate**, per
-   route; it never affects the plan gate), plus `graduated-routes: none`, `iteration-cap: none`,
-   and `subagent-cap: none` (the budget caps, #565; the human sets them when loosening).
+   Write `queue.md` (§6.1) with header `mode: calibration` **unless the human has already
+   graduated routes for this project** — check the decision log (e.g. **D047**: `docs`+`research`
+   graduated) and, if so, init `mode: escalation-only` + the graduated `graduated-routes:`
+   instead, so a prior graduation persists across runs rather than silently resetting to
+   calibration. Step 11 reads `mode`/`graduated-routes` to gate **the merge gate**, per route; it
+   never affects the plan gate. Also set `iteration-cap: none` and `subagent-cap: none` (the
+   budget caps, #565; the human sets them when loosening).
 5. Append an "init" block to `progress.md`. (Ledger is gitignored — not committed.)
 
 ### 7.6 Resume after `/clear` or compaction

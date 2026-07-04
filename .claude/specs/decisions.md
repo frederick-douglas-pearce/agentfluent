@@ -1026,3 +1026,47 @@ gate so misdirected effort is caught before code (#573).
 spec `value-review-437-verbosity.md`, [postmortem](https://www.anthropic.com/engineering/april-23-postmortem).
 
 ---
+
+## D047: Graduate `docs` + `research` to `escalation-only` auto-merge (release-loop)
+
+**Date:** 2026-07-04
+**Context:** The v0.10.0 release-loop run (14 issues to terminal, zero regressions, zero bad
+merges) ran entirely under `mode: calibration` — the human approved every merge. The
+retrospective (#562) established that all high-value human intervention landed **upstream** at
+triage/plan; the calibration merge gate rubber-stamped ~11 of 14 rows, its one load-bearing
+event being #437's hold → DEFER (a *value* catch on a `feat:`, the route that stays gated). The
+`escalation-only` + `graduated-routes` semantics are pinned (§6.1 / §7.1 step 11, #563) and
+per-iteration budget journaling is in place (§6.1 / §6.2, #565). The two evidence gaps that had
+blocked graduation are now closed: `research` was driven **start-to-finish for the first time**
+(#520/#521 — previously only *reconciled*), and the two red-path recovery paths auto-merge
+relies on (§7.1 step 7 AC-verifier FAIL→re-verify, step 8 CI red→fix-until-green) were validated
+by a controlled, architect-reviewed exercise (#583).
+**Decision:** Graduate **`docs` and `research`** to auto-merge under `mode: escalation-only`. The
+next run (v0.11.0) inits with `mode: escalation-only` + `graduated-routes: docs, research` (§7.5
+now reads this decision at init so it persists across runs). A graduated-route row auto-merges
+**only** when CI + AC-verifier + review are green AND the bump is ≤ patch AND it is not `hold`
+AND none of the always-escalate conditions apply (`feat:`/breaking, risky/irreversible, security
+surface, contested review finding); **default-deny** on any uncertainty (§6.1 / §7.1 step 11).
+The **plan gate stays conditional/human in every mode** (unchanged — that is where the human
+value landed). **`code`/`feat:` keeps the human merge gate**, pending its own per-route promotion
+criteria (#562).
+**Scope of the #583 evidence:** validates the step 7/8 *control flow* (loopback + fix-until-green),
+NOT AC-verifier *sensitivity* (the induced gap was deliberately obvious). Now that the
+docs/research human merge gate is off, sensitivity assurance — if wanted — comes from
+spot-auditing the first N auto-merged rows (tracked in #562), not from #583. Residual risk is
+low: docs/research don't break runtime, and the CI-green precondition still guards against
+merging red.
+**Rationale:** Graduate the part the evidence earned, not all-or-nothing. Docs/research are
+no-bump, low-blast-radius, and cleared an independent AC-verifier + CI gate that carry without a
+human. The human merge gate added value once in 14 tries — on a `feat:`. The flip removes ~half
+the run's rubber-stamp merge gates while keeping human eyes where they paid off (triage/plan, and
+every `code`/`feat:` merge). Cost asymmetry favors it: reversible (flip back to `calibration`),
+and bad-merge risk stays covered by default-deny/always-escalate + budget caps (#565).
+**Companion (not a blocker):** #584 (RUN PARKED sentinel + one-directional milestone-delta
+surfacing) should land alongside autonomy — the "converged-pending-release" re-scan instability
+compounds under a reduced re-fire cadence — but does not gate this flip.
+**Reference:** #562 (retrospective umbrella), #563 (mode semantics), #565 (budget journaling),
+#520/#521 (research E2E), #583 (red-path validation, closed), #584 (companion), #437 / D046 (the
+load-bearing merge-gate hold), spec §6.1 / §7.1 step 11 / §7.5.
+
+---
