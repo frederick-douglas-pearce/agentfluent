@@ -75,3 +75,35 @@ def test_release_loop_skill_matches_spec_mirror() -> None:
             "the operative copy that runs at loop time, so it is the authority "
             "when resolving a genuine conflict.",
         )
+
+
+# The RUN PARKED resting state + bidirectional curated-subset invariant (#584 /
+# D048). Byte-identity alone cannot catch BOTH copies dropping these semantics
+# together, so this content-presence guard pins the load-bearing tokens/phrases
+# that a future edit must not silently delete from the operating procedure.
+_REQUIRED_LOOP_SEMANTICS = (
+    "RUN PARKED",  # the resting-state sentinel
+    "RUN RESUMED",  # the explicit-release (un-park) sentinel
+    "`parked`",  # the first-class non-terminal Status token
+    "awaiting:",  # the Notes marker carrying the external condition
+    "Milestone-roster reconciliation",  # the surface-once curation step
+    "- surfaced-join:",  # greppable join-dedup record
+    "- surfaced-leave:",  # greppable leave-dedup record
+)
+
+
+@pytest.mark.parametrize("needle", _REQUIRED_LOOP_SEMANTICS)
+def test_release_loop_semantics_present(needle: str) -> None:
+    """The PARKED / curated-subset semantics must survive in the live skill.
+
+    Complements the byte-identity guard above: that test only proves the two
+    copies AGREE; this proves they still SAY the #584 semantics (a joint
+    deletion would pass byte-identity but silently regress the procedure).
+    """
+    skill_text = SKILL_PATH.read_text(encoding="utf-8")
+    assert needle in skill_text, (
+        f"The release-loop procedure lost a load-bearing #584 token/phrase: "
+        f"{needle!r} is no longer in {SKILL_PATH.relative_to(REPO_ROOT)}. If this "
+        "removal is intentional, update tests/unit/test_loop_skill_drift.py "
+        "(_REQUIRED_LOOP_SEMANTICS) and record the decision in decisions.md."
+    )
