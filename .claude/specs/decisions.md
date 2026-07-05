@@ -1099,9 +1099,11 @@ both drift directions were manual.
    peers). §0 reads the **most recent** of `{RUN COMPLETE, RUN PARKED, RUN RESUMED}` (last-wins, the
    log being append-only) and, on `RUN PARKED`, takes a cheap path — milestone reconciliation +
    `queue.md` selectability re-derivation, **no** per-row live reconcile / resume — until the human
-   **explicitly** un-parks (a concrete mutation: flip `parked`→`routed`, clear the marker, append
-   `RUN RESUMED`) or a pulled-in joiner / cleared dep makes work selectable. A bare `/loop` re-fire
-   does not un-park.
+   **explicitly** un-parks a **named** condition (a concrete, **condition-scoped** mutation: flip
+   only the `parked` rows awaiting that condition → `routed`, clear their marker, append `RUN
+   RESUMED`; rows gated on other conditions stay parked, so a partial release never prematurely
+   un-gates them — architect finding N1) or a pulled-in joiner / cleared dep makes work selectable.
+   A bare `/loop` re-fire does not un-park.
 3. **Bidirectional curated-subset invariant** — the init queue is authoritative; milestone drift is
    **surfaced to the human once, never auto-applied** (joiners via `- surfaced-join:` records +
    optional `queued` row on "pull in"; leavers via `- surfaced-leave:` + a `kept:`/`deferred`
@@ -1121,6 +1123,6 @@ separate post-release run to reach a clean `RUN COMPLETE`) and the §13/§14 hea
 async-ask, both reusing this resting-state machinery rather than a parallel one.
 **Reference:** #584 (this work + architect review), D047 (companion — autonomy flip), #562 (Finding
 F / retrospective umbrella), #559 (idea-3 + `.claude/` no-milestone convention), #514/#520/#521
-(the observed bidirectional drift), spec §6.1 / §7.1 step 0-2 / §7.3 / §7.6 / §8 / §9.
+(the observed bidirectional drift), spec §6.1 / §7.1 §0–§2 / §7.3 / §7.6 / §8 / §9.
 
 ---

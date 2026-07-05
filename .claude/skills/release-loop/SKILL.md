@@ -19,19 +19,24 @@ fresh invocation resumes correctly. Read the project parameters in
    - `RUN COMPLETE` (§9) → report done and STOP; do not re-scan (the run is terminal).
    - `RUN PARKED — awaiting <condition>` (§9) — the run finished all *workable* rows and rests on
      an external event:
-     - **If this invocation explicitly releases the park** (the human states the condition is met —
-       "the cut is out, resume"): perform the concrete un-park mutation — flip every `parked` row
-       back to `routed` (retain its Route, clear its `awaiting:` Notes marker) so §1 selects it —
-       append a `RUN RESUMED` sentinel (now the last-wins sentinel), and continue to step 2. A bare
-       re-fire (e.g. the `/loop` driver) does NOT release the park.
+     - **If this invocation explicitly releases the park** (the human names a met condition — "the
+       cut is out, resume"): perform the concrete un-park mutation, **scoped to the released
+       condition** — flip back to `routed` (retain Route, clear the `awaiting:` marker) ONLY the
+       `parked` rows whose `awaiting:` condition the human named; leave rows still gated on *other*
+       conditions `parked` with their markers intact (if which rows a release covers is ambiguous,
+       ask — do NOT flip all, that would prematurely release a still-unmet gate). Append a `RUN
+       RESUMED` sentinel (now last-wins) and continue to step 2; any rows left parked simply
+       re-append `RUN PARKED` at the next §1 pass (last-wins over `RUN RESUMED`), which the existing
+       machinery handles. A bare re-fire (e.g. the `/loop` driver) does NOT release the park.
      - **Otherwise take the cheap parked path (no full re-scan):** read `queue.md` + the FULL
        `progress.md`, run the §1 milestone-roster reconciliation (the one scan a parked run still
        owes — this is how milestone drift is still caught), then **re-derive selectability from
        `queue.md` alone** (no git/PR reconcile). If that produced selectable work (a joiner the
-       human pulled in, or an in-run dep that has since cleared) fall through to §1; otherwise STOP
-       and report "parked — awaiting <condition>" **without** running §0 step 3 resume or any
-       per-row live reconcile — skipping resume is provably safe here (a valid PARKED state has
-       every non-`parked` row terminal, so no interrupted pipeline row can coexist).
+       human pulled in, or an in-run dep that has since cleared) fall through to §1 **at selection**
+       (the reconciliation just ran — do not repeat it); otherwise STOP and report "parked —
+       awaiting <condition>" **without** running §0 step 3 resume or any per-row live reconcile —
+       skipping resume is provably safe here (a valid PARKED state has every non-`parked` row
+       terminal, so no interrupted pipeline row can coexist).
    - `RUN RESUMED` or no sentinel → continue to step 2 (a released or never-parked run runs
      normally).
 2. Read `queue.md` (note its `mode:` / `graduated-routes:` header and any `hold`/`parked` rows) and the tail of `progress.md`.

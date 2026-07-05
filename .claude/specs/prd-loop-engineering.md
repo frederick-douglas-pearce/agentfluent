@@ -187,7 +187,7 @@ the pipeline and the terminal set: **`hold`** — a durable, human-set merge-hol
 `/clear`; and **`parked`** — a row whose work is gated on an **external event** (a release cut, a
 dogfood window — *not* an in-run dependency), with the awaited condition in Notes as
 `awaiting: <condition>`. Both retain their Route and are released only by the human (a `hold` by
-clearing the hold at the merge gate; a `parked` row by explicit un-park, §7.1 step 0/1 — which
+clearing the hold at the merge gate; a `parked` row by explicit un-park, §7.1 step 0.1 — which
 flips it back to `routed`). While any `hold` **or `parked`** row remains the run is NOT complete
 (§9 distinguishes the resting `RUN PARKED` state from terminal `RUN COMPLETE`), but neither blocks
 selecting other queued work (§7.1 steps 0–1).
@@ -372,19 +372,24 @@ fresh invocation resumes correctly. Read the project parameters in
    - `RUN COMPLETE` (§9) → report done and STOP; do not re-scan (the run is terminal).
    - `RUN PARKED — awaiting <condition>` (§9) — the run finished all *workable* rows and rests on
      an external event:
-     - **If this invocation explicitly releases the park** (the human states the condition is met —
-       "the cut is out, resume"): perform the concrete un-park mutation — flip every `parked` row
-       back to `routed` (retain its Route, clear its `awaiting:` Notes marker) so §1 selects it —
-       append a `RUN RESUMED` sentinel (now the last-wins sentinel), and continue to step 2. A bare
-       re-fire (e.g. the `/loop` driver) does NOT release the park.
+     - **If this invocation explicitly releases the park** (the human names a met condition — "the
+       cut is out, resume"): perform the concrete un-park mutation, **scoped to the released
+       condition** — flip back to `routed` (retain Route, clear the `awaiting:` marker) ONLY the
+       `parked` rows whose `awaiting:` condition the human named; leave rows still gated on *other*
+       conditions `parked` with their markers intact (if which rows a release covers is ambiguous,
+       ask — do NOT flip all, that would prematurely release a still-unmet gate). Append a `RUN
+       RESUMED` sentinel (now last-wins) and continue to step 2; any rows left parked simply
+       re-append `RUN PARKED` at the next §1 pass (last-wins over `RUN RESUMED`), which the existing
+       machinery handles. A bare re-fire (e.g. the `/loop` driver) does NOT release the park.
      - **Otherwise take the cheap parked path (no full re-scan):** read `queue.md` + the FULL
        `progress.md`, run the §1 milestone-roster reconciliation (the one scan a parked run still
        owes — this is how milestone drift is still caught), then **re-derive selectability from
        `queue.md` alone** (no git/PR reconcile). If that produced selectable work (a joiner the
-       human pulled in, or an in-run dep that has since cleared) fall through to §1; otherwise STOP
-       and report "parked — awaiting <condition>" **without** running §0 step 3 resume or any
-       per-row live reconcile — skipping resume is provably safe here (a valid PARKED state has
-       every non-`parked` row terminal, so no interrupted pipeline row can coexist).
+       human pulled in, or an in-run dep that has since cleared) fall through to §1 **at selection**
+       (the reconciliation just ran — do not repeat it); otherwise STOP and report "parked —
+       awaiting <condition>" **without** running §0 step 3 resume or any per-row live reconcile —
+       skipping resume is provably safe here (a valid PARKED state has every non-`parked` row
+       terminal, so no interrupted pipeline row can coexist).
    - `RUN RESUMED` or no sentinel → continue to step 2 (a released or never-parked run runs
      normally).
 2. Read `queue.md` (note its `mode:` / `graduated-routes:` header and any `hold`/`parked` rows) and the tail of `progress.md`.
@@ -672,7 +677,7 @@ The next `/release-loop` invocation's §0 resume step (step 3) reads `queue.md` 
 `queued`/`routed`/`hold`/`parked`), finishes it before selecting new work. A `hold` **or `parked`**
 row is **excluded** — a `hold` is a deliberate, durable human merge-hold and a `parked` row is
 gated on an external event (§6.1), neither an interruption; leave them (a `hold` until the human
-clears it at §7.1 step 11; a `parked` row until explicit un-park at §7.1 step 0/1) and neither
+clears it at §7.1 step 11; a `parked` row until explicit un-park at §7.1 step 0.1) and neither
 blocks other work. A run resting under a `RUN PARKED` sentinel is likewise **not** an interrupted
 row — §7.1 step 0 short-circuits it on the cheap parked path and never enters this resume scan
 (safe: a valid PARKED state has no non-terminal pipeline row). The on-disk
@@ -704,7 +709,7 @@ signature, not status re-entry — see Guardrails).
 `blocked` and `parked` are **Status overlays, not Routes**: a row keeps its semantic Route (`code`/
 `research`/`docs`) while resting on an unmet in-run dependency (`blocked`) or an external event
 (`parked`). Skip it; a `blocked` row returns to selection when its dependency closes (§1, §7.3), a
-`parked` row when the human un-parks it (§7.1 step 0/1).
+`parked` row when the human un-parks it (§7.1 step 0.1).
 
 **Mechanical rules (both learned in the #500 run — §11):**
 - `.claude/`-only change → local `/security-review`, not the label (workflow excludes
@@ -738,9 +743,10 @@ order (last-wins, since the log is append-only) and acts only on it:
   terminal but ≥1 `parked` row awaits an external event (a release cut, a dogfood window). A
   re-invocation short-circuits (§7.1 step 0): it runs only the cheap milestone-roster reconciliation
   + a `queue.md` selectability re-derivation, then re-reports parked **without** the expensive
-  per-row live reconcile / resume — until the human explicitly releases the park (which flips the
-  `parked` rows to `routed` and appends a superseding `RUN RESUMED` sentinel) or a pulled-in
-  joiner / cleared dep makes work selectable again. This is what stops a release-gated run from
+  per-row live reconcile / resume — until the human explicitly releases a **named** condition
+  (which flips only the `parked` rows awaiting *that* condition back to `routed`, appends a
+  superseding `RUN RESUMED` sentinel, and leaves rows gated on other conditions parked) or a
+  pulled-in joiner / cleared dep makes work selectable again. This is what stops a release-gated run from
   re-reaching a *new* conclusion on every re-fire (the #584 "converged-pending-release"
   instability). Distinct from an *interrupted* row needing resume (§7.6): a valid PARKED state has
   no non-terminal pipeline row, so resume is safely skipped.
