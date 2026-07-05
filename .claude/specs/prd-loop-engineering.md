@@ -327,9 +327,11 @@ Add a source-fidelity note if the rationale leans on any externally-cited source
 
 ## 7. C3 — `/release-loop` orchestrator skill
 
-Create `.claude/skills/release-loop/SKILL.md`. Below is the **complete, ready-to-drop-in
-content** (the body IS the orchestrator's operating procedure). A builder may copy it
-verbatim, adjusting only `Project Parameters` references.
+The live skill lives at `.claude/skills/release-loop/SKILL.md`; the block below is a
+**byte-identical mirror** of it (the body IS the orchestrator's operating procedure), kept
+here so the spec stays self-contained and ready-to-drop-in. The two copies are CI-guarded
+to stay byte-for-byte identical (`tests/unit/test_loop_skill_drift.py`) — **edit both
+together**; on a conflict `SKILL.md` is the operative copy and this block mirrors it.
 
 ````markdown
 ---
