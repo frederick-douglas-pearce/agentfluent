@@ -1070,3 +1070,57 @@ compounds under a reduced re-fire cadence — but does not gate this flip.
 load-bearing merge-gate hold), spec §6.1 / §7.1 step 11 / §7.5.
 
 ---
+
+## D048: `RUN PARKED` resting state + bidirectional curated-subset invariant (release-loop)
+
+**Date:** 2026-07-05
+**Context:** Under D047 (docs+research graduated to `escalation-only` auto-merge) + a reduced
+re-fire cadence (#562 Finding F), a release-loop run that has finished all *workable* rows but
+retains rows gated on an **external event** (a release cut, a dogfood window) had no terminal
+resting state. Skill §0 recognized only `RUN COMPLETE`; a "converged-pending-release" run therefore
+re-ran select + live-reconcile against an ever-changing world (milestone membership, PR/CI status)
+on **every** re-invocation and could reach a **new** conclusion each time. In the v0.10.0 run this
+literally pulled #520/#521 in mid-stream, and milestone drift ran **both** directions (#514 left
+scope; the #424/#425/#426 hook chain + #520/#521 joined) — each caught only by a manual human
+cross-check. #584's parenthetical claim that the eject-on-leave half was "already in-skill via the
+#514 block" was **refuted** on inspection (grep found no milestone-membership re-check anywhere);
+both drift directions were manual.
+**Decision:** Codify three things in the skill (§7.1) + its byte-identical spec mirror + prose
+(§6.1/§7.3/§7.6/§8/§9), architect-reviewed (#584 comment thread):
+1. **`parked` Status token** — a first-class **non-terminal, resting** status (modeled on `hold`,
+   not a `blocked` substate) for a row gated on an external event, with the awaited condition in
+   Notes as `awaiting: <condition>`. Chosen over a `blocked`+Notes-marker because the token leaves
+   `blocked`'s terminal meaning untouched at every enumeration site (convergence, iteration-cap
+   counting, resume predicate) and gives the future headless "park-and-continue" async-ask (§13/§14)
+   a machine-clean state to enumerate.
+2. **`RUN PARKED — awaiting <condition>` sentinel + short-circuit** — appended when the only
+   non-terminal rows are `parked` (branch order hold → parked → complete → pending; parked tested
+   BEFORE complete so a gated row is not swallowed as terminal, and requires `done`/`deferred`
+   peers). §0 reads the **most recent** of `{RUN COMPLETE, RUN PARKED, RUN RESUMED}` (last-wins, the
+   log being append-only) and, on `RUN PARKED`, takes a cheap path — milestone reconciliation +
+   `queue.md` selectability re-derivation, **no** per-row live reconcile / resume — until the human
+   **explicitly** un-parks (a concrete mutation: flip `parked`→`routed`, clear the marker, append
+   `RUN RESUMED`) or a pulled-in joiner / cleared dep makes work selectable. A bare `/loop` re-fire
+   does not un-park.
+3. **Bidirectional curated-subset invariant** — the init queue is authoritative; milestone drift is
+   **surfaced to the human once, never auto-applied** (joiners via `- surfaced-join:` records +
+   optional `queued` row on "pull in"; leavers via `- surfaced-leave:` + a `kept:`/`deferred`
+   curation decision, with in-flight leavers finish-then-reconsider so no PR/branch is orphaned).
+   Corollary Notes discipline: write a `parked`/`blocked` row's Notes as the durable **curation
+   decision**, never the mutable live evidence (the v0.10.0 row-12 destabilizer).
+**Scope:** `.claude/` loop-harness tooling only (`chore(loop):`, **no release milestone**, per
+#559). No interaction with the D047 auto-merge path — `parked` rows never reach the merge gate;
+PARKED is purely complementary (it suppresses the wasteful re-scans a reduced re-fire cadence would
+amplify).
+**Rationale:** A resting state that is idempotent under re-fire is the precondition for loosening
+the human's presence (D047) without the run silently re-deciding scope each cycle. The token +
+last-wins sentinel + explicit-only un-park make park/un-park a closed, deadlock-free cycle;
+surface-once-never-auto keeps the human the sole curator of run scope.
+**Forward:** sets up #559 idea-3 (eject the genuinely post-release tail — #504/#513 — into a
+separate post-release run to reach a clean `RUN COMPLETE`) and the §13/§14 headless park-and-continue
+async-ask, both reusing this resting-state machinery rather than a parallel one.
+**Reference:** #584 (this work + architect review), D047 (companion — autonomy flip), #562 (Finding
+F / retrospective umbrella), #559 (idea-3 + `.claude/` no-milestone convention), #514/#520/#521
+(the observed bidirectional drift), spec §6.1 / §7.1 step 0-2 / §7.3 / §7.6 / §8 / §9.
+
+---

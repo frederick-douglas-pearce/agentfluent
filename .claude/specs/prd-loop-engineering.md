@@ -181,11 +181,27 @@ can be Route `research`, Status `blocked`). **Pipeline statuses** — advanced b
 orchestrator as the issue moves through §7.1, so an interrupted run leaves a non-terminal
 status resume keys on (§7.6): `queued → routed → planning → plan-approved → implementing →
 in-pr → in-review`. **Terminal statuses** — the run converges when every row is terminal:
-`done`; `deferred` (Route `stub-defer`); `blocked` (parked — an unmet dependency, or
-`blocked: too-large` awaiting a split). **`hold`** is a separate **non-terminal, parked**
-status: a durable, human-set merge-hold that survives `/clear`. While any `hold` row remains
-the run is NOT complete, but a held row does not block selecting other queued work (§7.1
-steps 0–1). The header carries a `mode:` field that gates **the merge gate only** — it does
+`done`; `deferred` (Route `stub-defer`); `blocked` (an unmet in-run dependency, or
+`blocked: too-large` awaiting a split). **Two non-terminal, resting statuses** sit outside both
+the pipeline and the terminal set: **`hold`** — a durable, human-set merge-hold that survives
+`/clear`; and **`parked`** — a row whose work is gated on an **external event** (a release cut, a
+dogfood window — *not* an in-run dependency), with the awaited condition in Notes as
+`awaiting: <condition>`. Both retain their Route and are released only by the human (a `hold` by
+clearing the hold at the merge gate; a `parked` row by explicit un-park, §7.1 step 0/1 — which
+flips it back to `routed`). While any `hold` **or `parked`** row remains the run is NOT complete
+(§9 distinguishes the resting `RUN PARKED` state from terminal `RUN COMPLETE`), but neither blocks
+selecting other queued work (§7.1 steps 0–1).
+
+**Curated-subset invariant.** The queue built at init (§7.5) is the authoritative work set;
+milestone membership may drift afterward, and that drift is **surfaced to the human once, never
+auto-applied** — neither auto-added on join nor auto-ejected on leave (§7.1 step 1 milestone-roster
+reconciliation). A corollary is a Notes discipline: **write a `parked`/`blocked` row's Notes as the
+durable curation DECISION** (`awaiting: v0.11.0 cut`, `deliberately out of <run> at init
+(curation)`, `kept: out-of-<run> roster (curation)`), **never the mutable live evidence** ("not in
+milestone", "no PR yet") — the latter is contradicted by a later live re-check and destabilizes
+resume (the v0.10.0 row-12 failure).
+
+The header carries a `mode:` field that gates **the merge gate only** — it does
 **not** change the plan gate, which is conditional in *every* mode (§7.1 step 5 / skill §5: the
 plan gate stops only on ambiguous ACs, risk/irreversibility, agent disagreement, or genuine
 uncertainty — never merely because of `mode:`). The two modes:
@@ -241,6 +257,7 @@ _Last updated: <ISO8601 by orchestrator>_
 | 3 | #522 representative SDK agent | research | blocked | #518 | — | needs S1a findings |
 | 4 | #510 PARAMETER_RETRY fixes | code | queued | — | — | high |
 | 5 | #469 per-turn ratios | stub-defer | deferred | dogfood | — | D041 — do not implement |
+| 6 | #513 post-release re-measure | code | parked | — | — | awaiting: v0.10.0 dogfood window |
 ```
 
 ### 6.2 `progress.md` — append-only journal (survives /clear + compaction)
@@ -347,19 +364,40 @@ fresh invocation resumes correctly. Read the project parameters in
 `.claude/specs/prd-loop-engineering.md` §4.0.
 
 ## 0. Load or initialize state
-1. Identify the active run (most recent `LEDGER_ROOT/<run>/`). If it already carries a
-   `RUN COMPLETE` sentinel (§9), report done and STOP — do not re-scan. If no run exists, ask
-   the user which milestone/label to run, then INITIALIZE per §7.5 of the spec.
-2. Read `queue.md` (note its `mode:` / `graduated-routes:` header and any `hold` rows) and the tail of `progress.md`.
+1. Identify the active run (most recent `LEDGER_ROOT/<run>/`). If none exists, ask the user which
+   milestone/label to run, then INITIALIZE per §7.5 of the spec. Otherwise scan the FULL
+   `progress.md` for the **most recent** run-state sentinel — the last of `{RUN COMPLETE, RUN
+   PARKED, RUN RESUMED}` by append order (the log is append-only, so a superseded sentinel still
+   sits above; last one wins) — and act only on it:
+   - `RUN COMPLETE` (§9) → report done and STOP; do not re-scan (the run is terminal).
+   - `RUN PARKED — awaiting <condition>` (§9) — the run finished all *workable* rows and rests on
+     an external event:
+     - **If this invocation explicitly releases the park** (the human states the condition is met —
+       "the cut is out, resume"): perform the concrete un-park mutation — flip every `parked` row
+       back to `routed` (retain its Route, clear its `awaiting:` Notes marker) so §1 selects it —
+       append a `RUN RESUMED` sentinel (now the last-wins sentinel), and continue to step 2. A bare
+       re-fire (e.g. the `/loop` driver) does NOT release the park.
+     - **Otherwise take the cheap parked path (no full re-scan):** read `queue.md` + the FULL
+       `progress.md`, run the §1 milestone-roster reconciliation (the one scan a parked run still
+       owes — this is how milestone drift is still caught), then **re-derive selectability from
+       `queue.md` alone** (no git/PR reconcile). If that produced selectable work (a joiner the
+       human pulled in, or an in-run dep that has since cleared) fall through to §1; otherwise STOP
+       and report "parked — awaiting <condition>" **without** running §0 step 3 resume or any
+       per-row live reconcile — skipping resume is provably safe here (a valid PARKED state has
+       every non-`parked` row terminal, so no interrupted pipeline row can coexist).
+   - `RUN RESUMED` or no sentinel → continue to step 2 (a released or never-parked run runs
+     normally).
+2. Read `queue.md` (note its `mode:` / `graduated-routes:` header and any `hold`/`parked` rows) and the tail of `progress.md`.
 3. **Resume before selecting (spec §7.6).** If any row sits in an *interrupted* status —
-   non-terminal and NOT `queued`/`routed`/`hold` (i.e. `planning`/`plan-approved`/
+   non-terminal and NOT `queued`/`routed`/`hold`/`parked` (i.e. `planning`/`plan-approved`/
    `implementing`/`in-pr`/`in-review`) — a prior iteration was cut off. Reconcile it against
    LIVE git/PR state as the source of truth — branch exists? PR open? already merged? CI
    status? — plus the working tree (status is only a coarse anchor; git wins on conflict),
    then re-enter the pipeline at the matching stage and FINISH that issue BEFORE selecting a
-   new one. This is what makes "one PR at a time" hold across `/clear`/compaction. A `hold`
-   row is NOT an interruption: skip it here, leave it held — it stays parked until the human
-   releases the hold and does not block working other issues.
+   new one. This is what makes "one PR at a time" hold across `/clear`/compaction. A `hold` or
+   `parked` row is NOT an interruption: skip it here — a `hold` stays held until the human
+   releases the merge, a `parked` row stays gated until its external condition is released (step
+   1); neither blocks working other issues.
 
 ## 1. Select
 **Budget cap (iteration start, retrospective).** Read `iteration-cap:` / `subagent-cap:` from the
@@ -371,18 +409,44 @@ count ≥ `iteration-cap`, OR the **prior** iteration's journaled `- Budget:` li
 it and proceed (the human who invoked is the budget authority); **the driver halts.** Inert while
 both caps are `none`.
 
+**Milestone-roster reconciliation (iteration start).** The queue built at init (§7.5) is the
+authoritative work set — the *curated subset*; milestone membership may drift afterward, and drift
+is **surfaced to the human once, never auto-applied** — neither auto-added on join nor auto-ejected
+on leave. Compute the delta between the live `BACKLOG_SOURCE` roster (one `gh issue list
+--milestone <run> --state open`) and `queue.md`, deduping against prior curation records via a
+FULL-file scan of `progress.md` (not the tail) for exact `- surfaced-join:` / `- surfaced-leave:`
+lines:
+- **Joined** (in the milestone, no `queue.md` row, not already surfaced) → surface once: "#N joined
+  <run> after init — pull in, or leave out? (never auto-added)." Record `- surfaced-join: #N` in a
+  `## <ISO8601> — curation` block. Only on the human's "pull in" add a `queued` row; a bare surface
+  never adds one.
+- **Left** (a non-terminal `queue.md` row whose issue is no longer in the milestone, not already
+  recorded) → surface once: "#N left <run> — eject, or keep? (never auto-ejected)." Record
+  `- surfaced-leave: #N`. On "keep", write the decision to the row's Notes (`kept: out-of-<run>
+  roster (curation)`) so it self-dedups; on "eject", an in-flight leaver (`planning`..`in-review`,
+  open PR) is **finish-then-reconsider**, not a bare eject (only a pre-pipeline row ejects cleanly —
+  close/clean its PR+branch first), then set the row `deferred` with a curation Notes reason.
+This paragraph is the sub-unit the §0 step 1 parked path invokes standalone.
+
 A row is **selectable** if its status is `queued`/`routed`, OR it is `blocked` on an unmet
 dependency that has SINCE cleared (all its `Depends on` issues are now `done` — re-route it via
-§2; this does NOT apply to a `blocked: too-large` park, which waits on a split). Among
-selectable rows pick by `PRIORITY_LABELS` order, tiebreak issue-number ascending. If none are
-selectable:
-- If EVERY row is terminal (`done`/`deferred`/`blocked`), append the §9 `RUN COMPLETE —
+§2; this does NOT apply to a `blocked: too-large` park, which waits on a split). A `parked` row is
+never selectable here — it is released only by explicit human un-park (§0 step 1). Among selectable
+rows pick by `PRIORITY_LABELS` order, tiebreak issue-number ascending. If none are selectable,
+determine the resting state from the remaining non-terminal rows (test in this order):
+- Any `hold` row present → report "<n> held — awaiting human merge-release" and STOP **without** a
+  sentinel (a held row needs the human now; the run is neither complete nor cleanly parked).
+- Else if ≥1 `parked` row is present AND every non-`parked` row is `done`/`deferred` → append the §9
+  `RUN PARKED — awaiting <condition(s)>` sentinel to `progress.md` (name the awaited condition(s) +
+  the parked rows) and STOP. This is a **resting, non-terminal** state: the next invocation
+  short-circuits on it (§0 step 1) instead of re-reconciling. (Tested BEFORE COMPLETE so a
+  release-gated row is not swallowed as terminal; it requires truly-terminal peers — a plain
+  in-run-`blocked` row present routes to pending below, not to a false park.)
+- Else if EVERY row is terminal (`done`/`deferred`/`blocked`) → append the §9 `RUN COMPLETE —
   <run-slug>` sentinel to `progress.md` (counts + any blocked/deferred items) and STOP
   (convergence).
-- Else if the only non-terminal rows are `hold`, report "<n> held — awaiting human
-  merge-release" and STOP **without** the sentinel (the run is not complete).
-- Else (rows still blocked on open in-run dependencies) report what's pending and STOP
-  without the sentinel.
+- Else (rows still `blocked` on an open in-run dependency, or `blocked: too-large` awaiting a split)
+  → report what's pending and STOP without a sentinel.
 **Size guard:** before entering the pipeline, estimate scope from the issue body — if it
 plausibly touches many files or spans multiple unrelated acceptance-criteria clusters (won't
 fit one context window), mark it `blocked: too-large`, escalate to SCOPE_AGENT to split, and
@@ -391,11 +455,19 @@ within an iteration to conserve the parent's context.
 
 ## 2. Triage / route (if not already routed)
 Run §7.3 to set the row's **Route** (`code`/`research`/`docs`/`stub-defer`) and its **initial
-Status** (Route and Status are distinct — §6.1): `stub-defer` → Status `deferred` (terminal);
-an unmet dependency → Status `blocked` (parked; record the dep, or `too-large`, in Notes — the
-Route is retained so the row resumes as that route when the dependency clears, §1); otherwise →
-Status `routed`. If the Status is `deferred` or `blocked`, journal why and go back to §1 — do
-not implement.
+Status** (Route and Status are distinct — §6.1): `stub-defer` → Status `deferred` (terminal); an
+unmet in-run dependency → Status `blocked` (record the dep, or `too-large`, in Notes — the Route is
+retained so the row resumes as that route when the dependency clears, §1); a row whose work is
+gated on an **external event** (a release cut, a dogfood window — not an in-run issue) → Status
+`parked` with Notes `awaiting: <condition>` (non-terminal, resting; released only by explicit human
+un-park, §0 step 1); otherwise → Status `routed`. If the Status is `deferred`/`blocked`/`parked`,
+journal why and go back to §1 — do not implement.
+
+**Write parked/blocked Notes as the curation DECISION, never the mutable evidence.** The durable
+*why* (`awaiting: v0.11.0 cut`, `deliberately out of <run> at init (curation)`, `kept: out-of-<run>
+roster (curation)`) survives a later live re-check; the mutable live evidence ("not in milestone",
+"no PR yet") is contradicted by the next re-check and destabilizes resume (the v0.10.0 row-12
+failure).
 
 ## 3. Plan
 Set the row status to `planning`. Fetch the issue (`gh issue view <N>`). Write
@@ -560,9 +632,12 @@ distinct columns (§6.1), so a dependency-blocked research issue is Route `resea
    leakage into the package).
 4. Otherwise (`bug`/`enhancement` touching `src/`) → `code` (full pipeline).
 
-**Initial Status:** Route `stub-defer` → `deferred` (terminal). Else if any `Depends on` issue
-is not `done` → `blocked` (parked; record the dep in Notes; the semantic Route is retained so
-the row resumes as that route once the dependency clears, §1). Else → `routed`.
+**Initial Status:** Route `stub-defer` → `deferred` (terminal). Else if the row's work is gated on
+an **external event** (a release cut, a dogfood window — not an in-run issue) → `parked` with Notes
+`awaiting: <condition>` (non-terminal, resting; released only by explicit human un-park, §7.1 step
+0/1). Else if any `Depends on` issue is not `done` → `blocked` (record the dep in Notes; the
+semantic Route is retained so the row resumes as that route once the dependency clears, §1). Else →
+`routed`.
 
 ### 7.4 C5 — AC-verifier
 Default: **compose existing tools**, don't mint an agent.
@@ -594,9 +669,13 @@ Promote to a dedicated `ac-verifier` agent only if the composed approach proves 
 ### 7.6 Resume after `/clear` or compaction
 The next `/release-loop` invocation's §0 resume step (step 3) reads `queue.md` + tail of
 `progress.md` and, finding any *interrupted* row (non-terminal and NOT
-`queued`/`routed`/`hold`), finishes it before selecting new work. A `hold` row is **excluded**
-— it is a deliberate, durable human merge-hold, not an interruption; leave it parked (it stays
-held until the human clears it, §7.1 step 11) and it does not block other work. The on-disk
+`queued`/`routed`/`hold`/`parked`), finishes it before selecting new work. A `hold` **or `parked`**
+row is **excluded** — a `hold` is a deliberate, durable human merge-hold and a `parked` row is
+gated on an external event (§6.1), neither an interruption; leave them (a `hold` until the human
+clears it at §7.1 step 11; a `parked` row until explicit un-park at §7.1 step 0/1) and neither
+blocks other work. A run resting under a `RUN PARKED` sentinel is likewise **not** an interrupted
+row — §7.1 step 0 short-circuits it on the cheap parked path and never enters this resume scan
+(safe: a valid PARKED state has no non-terminal pipeline row). The on-disk
 ledger row status is only a **coarse anchor** (which stage); the **live git/PR state is the
 source of truth** for the details (the ledger is uncommitted, §6.4): for an in-flight row,
 check whether its branch exists, whether a PR is open (or already merged), and the PR's CI
@@ -622,9 +701,10 @@ signature, not status re-entry — see Guardrails).
 | `docs` | skip architect + security; light review; `docs:` scope |
 | `stub-defer` | do NOT implement; journal why; leave in backlog (Status `deferred`) |
 
-`blocked` is a **Status overlay, not a Route**: a row keeps its semantic Route (`code`/
-`research`/`docs`) while parked on an unmet dependency. Skip it; it returns to selection and
-runs as its Route when the dependency closes (§1, §7.3).
+`blocked` and `parked` are **Status overlays, not Routes**: a row keeps its semantic Route (`code`/
+`research`/`docs`) while resting on an unmet in-run dependency (`blocked`) or an external event
+(`parked`). Skip it; a `blocked` row returns to selection when its dependency closes (§1, §7.3), a
+`parked` row when the human un-parks it (§7.1 step 0/1).
 
 **Mechanical rules (both learned in the #500 run — §11):**
 - `.claude/`-only change → local `/security-review`, not the label (workflow excludes
@@ -647,10 +727,28 @@ runs as its Route when the dependency closes (§1, §7.3).
 | Security | local `/security-review` or label | by route | clean/findings |
 | Merge | user (calibration / non-graduated route) → orchestrator (auto: graduated routes, D047) | CI+security green | squash |
 
-**Convergence:** the run is complete when every `queue.md` row is terminal (`done` |
-`deferred` | `blocked`). The **completion sentinel** is a final `progress.md` block titled
-`RUN COMPLETE — <run-slug>` summarizing counts (done/deferred/blocked) and listing any
-blocked items + reasons; on reaching it, the orchestrator stops and reports. **Guardrails:**
+**Convergence & the resting states.** When nothing is selectable, §7.1 step 1 classifies the run
+into one of four outcomes (tested in order: hold → parked → complete → pending) and appends a
+`progress.md` **run-state sentinel**; §7.1 step 0 reads the **most recent** sentinel by append
+order (last-wins, since the log is append-only) and acts only on it:
+- **`RUN COMPLETE — <run-slug>`** (terminal) — every row is terminal (`done`/`deferred`/`blocked`).
+  Summarizes counts + any blocked/deferred items; the orchestrator stops and reports, and a later
+  re-invocation short-circuits without re-scanning.
+- **`RUN PARKED — awaiting <condition>`** (resting, **non-terminal**) — all *workable* rows are
+  terminal but ≥1 `parked` row awaits an external event (a release cut, a dogfood window). A
+  re-invocation short-circuits (§7.1 step 0): it runs only the cheap milestone-roster reconciliation
+  + a `queue.md` selectability re-derivation, then re-reports parked **without** the expensive
+  per-row live reconcile / resume — until the human explicitly releases the park (which flips the
+  `parked` rows to `routed` and appends a superseding `RUN RESUMED` sentinel) or a pulled-in
+  joiner / cleared dep makes work selectable again. This is what stops a release-gated run from
+  re-reaching a *new* conclusion on every re-fire (the #584 "converged-pending-release"
+  instability). Distinct from an *interrupted* row needing resume (§7.6): a valid PARKED state has
+  no non-terminal pipeline row, so resume is safely skipped.
+- **held / pending** (no sentinel) — a `hold` row needs the human now, or a row is still `blocked`
+  on an open in-run dependency; the orchestrator reports and stops without a sentinel (the run is
+  not complete and not cleanly parked).
+
+**Guardrails:**
 iteration/budget caps live in the `queue.md` header (`iteration-cap:`/`subagent-cap:`, §6.1) and
 are checked at iteration start against the ledger — **advisory in manual re-invoke (journaled +
 surfaced, not gating — the human who invoked is the budget authority), halted by the driver**;
