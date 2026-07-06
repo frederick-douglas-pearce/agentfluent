@@ -1126,3 +1126,24 @@ F / retrospective umbrella), #559 (idea-3 + `.claude/` no-milestone convention),
 (the observed bidirectional drift), spec §6.1 / §7.1 §0–§2 / §7.3 / §7.6 / §8 / §9.
 
 ---
+
+## D049: v0.11 scoping — SDK ingestion as headline (full scope), #112 pulled in, partial pricing bump, dogfood-runner over scout-port
+
+**Date:** 2026-07-06
+**Context:** v0.10 closed the Agent SDK **discovery** epic (#517) — the durable deliverable was the descriptive findings doc (`agent-sdk-session-format-findings.md`), not a shipped capability. Its §8 enumerated the unticketed downstream parser follow-ups. The pre-existing v0.11.0 milestone held ~11 issues that were almost entirely the pricing/cost-lever work (#545/#546/#547/#536/#539), retry calibration (#580/#581), and dogfood/docs (#549/#514/#513/#469) — none of it the SDK ingestion Fred chose to prioritize for v0.11. Scoping questions: (1) does SDK ingestion land in v0.11 and at what depth; (2) does #112 (SDK main-session model routing) get pulled in or stay downstream; (3) how to resolve the SDK-vs-pricing milestone collision.
+
+**Decisions:**
+- **Full SDK scope in v0.11**, as the release headline ("Recognize the Primary Audience"). New epic `epic:agent-sdk-ingestion` (#589) with stories: **S0** repo-tracked Agent SDK **dogfood-runner** + cadence (#590, build first), **S1** surface `entrypoint` + sdk/cli/unknown classification (#591), **S2** SDK-vs-CC indicator in `analyze` — CLI badge + JSON emitting **both** `session_kind` and raw `entrypoint` (#592), **S3** surface `toolUseResult.resolvedModel` (#593), **S4** SDK line types → `SKIP_TYPES` + `status` doc nit (#594), **S5** multi-level trace-to-invocation linker with the `totalTokens` inclusivity/double-counting question settled as a named AC sub-task (#595).
+- **#112 pulled INTO v0.11** as the first consumer of S1/S3 (not left downstream); its pre-discovery ACs revised per findings §7.
+- **Partial pricing bump:** keep the pricing *foundation* (#545/#546/#547) in v0.11; move the two discretionary cost-levers #536 (fast-mode) + #539 (server-tool surcharges) to v0.12, where they consolidate under the existing `epic:cost-coverage` (#535) — so no epic is split.
+- **Dogfood-runner (S0) chosen over a research-scout port** as the durable SDK-session source. Distinct from #522 (a synthetic matrix *generator* for discovery): S0 does *real work* (runs `agentfluent analyze` over a **bounded rolling window**, reusing the `--since` surface per D024/D025, and dovetails with `diff`), where session data is a byproduct. It is scheduled on a cadence from day one so SDK history accrues *during* the dev cycle.
+- **Separate low-priority backlog item:** a competitive-landscape research agent (#596, no milestone), scoped tightly to competing tools so it does not overlap the anthropic-feature-watch pipeline.
+
+**Rationale:**
+- SDK ingestion is the direct sequel to v0.10's discovery and the load-bearing primitive that gates D013 correctness (main-session diagnostics must target SDK mains, not CC-interactive mains). Full scope was Fred's explicit call — comprehensiveness over a limited cut, "no rush" to prod — so the release also builds the first consumer (#112) and the heavy trace linker (S5) rather than deferring them.
+- Full pricing bump would stall the #545 genai-prices foundation that v0.12's cost-lever epic builds on; full coexist leaves v0.11 with two competing marquees. Partial bump keeps the foundation moving while giving SDK the clean headline, and lands the discretionary levers where they thematically belong.
+- The dogfood-runner is durable (dogfood is a permanent need, unlike the scout, which is migrating to `claude-code-sessions`), automates the manual post-release dogfood ritual, is self-reinforcing, and dogfoods the exact v0.11 surfaces (subagent trace linker + model routing). The bounded rolling window points AgentFluent's own regression-detection value proposition inward: a spike against a recent baseline is an early warning that the whole-corpus baseline would drown out.
+
+**Reference:** epic #589 (S0 #590, S1 #591, S2 #592, S3 #593, S4 #594, S5 #595); #112 (pulled in, ACs revised); #536/#539 (bumped to v0.12 under #535); #596 (competitive-landscape agent, backlog); findings `agent-sdk-session-format-findings.md` §2/§3/§4/§7/§8; governing D013 (main-session scope), D001 (Python-only), D045 (pricing base+overlay), D024/D025 (date-range filtering); spec `prd-v0.11.md`.
+
+---
