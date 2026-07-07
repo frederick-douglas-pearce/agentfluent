@@ -14,6 +14,17 @@
 set -euo pipefail
 
 MARKER="# agentfluent-dogfood-runner (S0/#590) — managed by install-cron.sh"
+strip_existing() { crontab -l 2>/dev/null | grep -vF "$MARKER" || true; }
+
+# --uninstall needs neither the schedule nor the window, so handle it BEFORE any
+# DOGFOOD_CRON / DOGFOOD_WINDOW validation — otherwise a stale/invalid env var in
+# the caller's shell (e.g. `export DOGFOOD_WINDOW=1w`) would make removal exit 1.
+if [[ "${1:-}" == "--uninstall" ]]; then
+  strip_existing | crontab -
+  echo "Removed the dogfood-runner cron entry."
+  exit 0
+fi
+
 # Daily at 12:30 local — a midday time is likely to hit while the machine is on,
 # unlike 3am. Cron does not back-fill missed runs; the overlapping rolling window
 # self-heals the next day. Override with $DOGFOOD_CRON.
@@ -59,14 +70,6 @@ REPO_DIR="$(cd -P "$(dirname "$SOURCE")/../.." && pwd)"
 STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
 LOG_DIR="$STATE_HOME/agentfluent/dogfood"
 
-strip_existing() { crontab -l 2>/dev/null | grep -vF "$MARKER" || true; }
-
-if [[ "${1:-}" == "--uninstall" ]]; then
-  strip_existing | crontab -
-  echo "Removed the dogfood-runner cron entry."
-  exit 0
-fi
-
 UV_BIN="$(command -v uv || true)"
 if [[ -z "$UV_BIN" ]]; then
   echo "error: 'uv' not found on PATH — install uv first (https://docs.astral.sh/uv/)." >&2
@@ -85,7 +88,13 @@ _baked_path() {
   for bin in uv node claude; do
     resolved="$(command -v "$bin" 2>/dev/null)" && dirs+=("$(dirname "$resolved")")
   done
-  printf '%s\n' "${dirs[@]}" /usr/local/bin /usr/bin /bin | awk 'NF && !seen[$0]++' | paste -sd:
+  # Base dirs after the resolved ones: the Claude Code synthesis subprocess may
+  # shell out to auxiliary tools (git, ripgrep, …). Include the common user/brew
+  # bin dirs so those resolve under cron too; non-existent entries are harmless in
+  # PATH. awk dedups (order-preserving) and paste joins with ':'.
+  printf '%s\n' "${dirs[@]}" \
+    "$HOME/.local/bin" "$HOME/.cargo/bin" /opt/homebrew/bin /usr/local/bin /usr/bin /bin \
+    | awk 'NF && !seen[$0]++' | paste -sd:
 }
 BAKED_PATH="$(_baked_path)"
 # Single-quote every interpolated value in the emitted command so that spaces or

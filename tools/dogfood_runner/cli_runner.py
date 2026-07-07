@@ -233,7 +233,7 @@ class CliRunner:
 
     def enumerate_slugs(self) -> list[str]:
         """Project-slugs to fan out over (``agentfluent list --format json``)."""
-        cmd, result = self._execute(["list", "--format", "json"])
+        _, result = self._execute(["list", "--format", "json"])
         if result.returncode == EXIT_NO_DATA:
             return []  # no corpus / no projects — nothing to dogfood, not an error
         if result.returncode != EXIT_OK:
