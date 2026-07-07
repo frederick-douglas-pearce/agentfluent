@@ -11,8 +11,10 @@ from agentfluent.core.paths import (
     DEFAULT_CLAUDE_CONFIG_DIR,
     XDG_CACHE_HOME_ENV_VAR,
     XDG_CONFIG_HOME_ENV_VAR,
+    XDG_STATE_HOME_ENV_VAR,
     agentfluent_cache_dir,
     agentfluent_config_dir,
+    agentfluent_state_dir,
     settings_path_for,
     validate_claude_config_dir,
 )
@@ -80,3 +82,17 @@ class TestAgentfluentCacheDir:
     ) -> None:
         monkeypatch.setenv(XDG_CACHE_HOME_ENV_VAR, str(tmp_path))
         assert agentfluent_cache_dir() == tmp_path / "agentfluent"
+
+
+class TestAgentfluentStateDir:
+    def test_default_under_home_local_state(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv(XDG_STATE_HOME_ENV_VAR, raising=False)
+        assert agentfluent_state_dir() == Path.home() / ".local" / "state" / "agentfluent"
+
+    def test_honors_xdg_state_home(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> None:
+        monkeypatch.setenv(XDG_STATE_HOME_ENV_VAR, str(tmp_path))
+        assert agentfluent_state_dir() == tmp_path / "agentfluent"
