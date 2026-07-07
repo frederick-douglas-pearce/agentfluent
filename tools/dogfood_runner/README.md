@@ -103,8 +103,28 @@ DOGFOOD_CRON="0 13 * * *" tools/dogfood_runner/install-cron.sh
 tools/dogfood_runner/install-cron.sh --uninstall
 ```
 
+The cron entry bakes the install-time `PATH` (so the SDK's `claude`/node subprocess
+resolves under cron's minimal environment). The **narrative synthesis** additionally
+needs local Claude auth (`ANTHROPIC_API_KEY`, or Claude Code credentials under
+`~/.claude`) present in the cron environment — without it the deterministic gate
+still runs and reports; only synthesis is skipped (logged to `cron.log`).
+
 An event-based trigger (on merge to `main`) is a noted future enhancement, not part
 of S0.
+
+### Notes / limitations
+
+- **Cross-version snapshots aren't diffed.** A release that bumps the `analyze
+  --json` envelope version makes the next run's baseline incompatible; the runner
+  detects the version mismatch and skips the diff (like a first run) rather than
+  letting `diff`'s exit 1 spuriously red the gate. The window re-establishes on the
+  following run.
+- **Keep `--window` stable across runs.** Snapshots aren't keyed by window, so
+  changing `--window` between runs diffs mismatched windows (a misleading but not
+  red comparison). The cron uses a fixed window; only ad-hoc runs risk this.
+- **Zero slugs is surfaced, not red.** An empty corpus is legitimate, so it stays
+  exit 0 — but the report prints a `WARNING` so a misconfigured corpus path under
+  cron is visible in `cron.log` rather than passing as a clean run.
 
 ## Layout
 

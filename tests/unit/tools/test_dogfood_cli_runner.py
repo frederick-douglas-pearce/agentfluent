@@ -242,3 +242,54 @@ def test_render_gate_report_includes_status_and_slugs(tmp_path: Path) -> None:
     assert "window=3d" in text
     assert "status: ok" in text
     assert "slug" in text
+
+
+def test_run_gate_skips_diff_across_envelope_version_bump(tmp_path: Path) -> None:
+    # Run 1 writes a v2 snapshot.
+    v2 = json.dumps({"version": "2", "command": "analyze", "data": {"total_cost": 1.0}})
+    cr.run_gate(
+        cr.CliRunner(base_cmd=["af"], run=QueueRunner([_cp(0, v2)])),
+        window="3d", runstamp="20260101T000000Z", slugs=["slug"], state_root=tmp_path,
+    )
+    # Run 2 produces a v3 envelope. diff would exit 1 on the mismatch (→ red); the
+    # runner must skip it (like a first run), NOT call diff and NOT go red.
+    v3 = json.dumps({"version": "3", "command": "analyze", "data": {"total_cost": 1.0}})
+    runner = QueueRunner([_cp(0, v3)])  # ONLY analyze — a diff call would exhaust the queue
+    report = cr.run_gate(
+        cr.CliRunner(base_cmd=["af"], run=runner),
+        window="3d", runstamp="20260102T000000Z", slugs=["slug"], state_root=tmp_path,
+    )
+    assert report.results[0].diff is None  # diff skipped across the version bump
+    assert not report.is_red
+    assert len(runner.calls) == 1  # analyze only; diff never invoked
+
+
+def test_run_gate_continues_after_one_slug_fails(tmp_path: Path) -> None:
+    # slug1's analyze returns unparseable JSON (→ DogfoodError); slug2 succeeds.
+    runner = QueueRunner([_cp(0, "not json"), _cp(0, _analyze_stdout())])
+    cli = cr.CliRunner(base_cmd=["af"], run=runner)
+    report = cr.run_gate(
+        cli, window="3d", runstamp="20260101T000000Z", slugs=["s1", "s2"], state_root=tmp_path
+    )
+    assert len(report.errors) == 1 and report.errors[0].startswith("s1:")
+    assert [r.slug for r in report.results] == ["s2"]  # s2 still ran
+    assert report.is_red  # a per-slug failure is a real red
+
+
+def test_run_gate_launch_failure_is_surfaced_not_uncaught(tmp_path: Path) -> None:
+    def missing_uv(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        raise FileNotFoundError("uv")
+
+    cli = cr.CliRunner(base_cmd=["uv"], run=missing_uv)
+    report = cr.run_gate(
+        cli, window="3d", runstamp="20260101T000000Z", slugs=["slug"], state_root=tmp_path
+    )
+    assert report.is_red
+    assert report.errors and "could not launch CLI" in report.errors[0]
+
+
+def test_render_warns_on_zero_slugs_without_error() -> None:
+    report = cr.GateReport(window="3d", results=[], errors=[])
+    text = cr.render_gate_report(report)
+    assert "status: ok" in text  # not hard-red — empty corpus is legitimate
+    assert "no project-slugs analyzed" in text  # but surfaced loudly

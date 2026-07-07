@@ -37,10 +37,14 @@ if [[ -z "$UV_BIN" ]]; then
 fi
 
 mkdir -p "$LOG_DIR"
-# Bake absolute paths (cron has a minimal PATH) and run via -m from the repo root
-# so the tools.* package imports resolve. Synthesis needs local Claude auth; if it
-# is unavailable the gate still runs and the synthesis step is skipped (logged).
-CRON_LINE="$SCHEDULE cd $REPO_DIR && $UV_BIN run --group research python -m tools.dogfood_runner.runner >> $LOG_DIR/cron.log 2>&1 $MARKER"
+# Cron runs with a minimal PATH (typically /usr/bin:/bin), but the SDK synthesis
+# step spawns the `claude`/node CLI, which usually lives elsewhere (~/.local/bin,
+# nvm/fnm, etc.). Bake the install-time PATH into the entry so those resolve; the
+# deterministic gate itself only needs $UV_BIN (already absolute). Run via -m from
+# the repo root so the tools.* package imports resolve.
+BAKED_PATH="$PATH"
+CRON_CMD="cd $REPO_DIR && PATH='$BAKED_PATH' $UV_BIN run --group research python -m tools.dogfood_runner.runner >> $LOG_DIR/cron.log 2>&1"
+CRON_LINE="$SCHEDULE $CRON_CMD $MARKER"
 
 { strip_existing; echo "$CRON_LINE"; } | crontab -
 echo "Installed dogfood-runner cron entry:"
@@ -48,3 +52,9 @@ echo "  schedule: $SCHEDULE"
 echo "  command : cd $REPO_DIR && uv run --group research python -m tools.dogfood_runner.runner"
 echo "  log     : $LOG_DIR/cron.log"
 echo "Verify with: crontab -l | grep dogfood-runner"
+echo
+echo "NOTE: the SDK narrative synthesis needs local Claude auth (ANTHROPIC_API_KEY,"
+echo "or Claude Code credentials under ~/.claude) available in the cron environment."
+echo "Without it, the deterministic gate still runs and reports; only the synthesis"
+echo "step is skipped (logged to cron.log). Add secrets via the crontab or a sourced"
+echo "env file if you want nightly synthesis to run."

@@ -169,6 +169,21 @@ def _parse_json(text: str) -> dict[str, Any]:
     return parsed
 
 
+def _envelope_version(text: str) -> str | None:
+    """Best-effort read of the ``version`` field of an ``analyze --json`` envelope.
+
+    Returns ``None`` if the text is unparseable or lacks a version — used only to
+    decide whether two snapshots are diff-compatible, so a ``None`` conservatively
+    means "don't diff", never a false verdict.
+    """
+    try:
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    version = parsed.get("version") if isinstance(parsed, dict) else None
+    return str(version) if version is not None else None
+
+
 class CliRunner:
     """Thin, deterministic adapter over the real ``agentfluent`` CLI."""
 
@@ -203,6 +218,10 @@ class CliRunner:
             raise DogfoodError(
                 f"CLI timed out after {self._timeout_s}s: {' '.join(cmd)}"
             ) from exc
+        except OSError as exc:
+            # e.g. `uv` not on PATH → FileNotFoundError. Surface it per-slug as a
+            # DogfoodError rather than letting it abort the whole run uncaught.
+            raise DogfoodError(f"could not launch CLI ({' '.join(cmd)}): {exc}") from exc
         return cmd, result
 
     def enumerate_slugs(self) -> list[str]:
@@ -322,10 +341,28 @@ def _run_one_slug(
         baseline = latest_snapshot(slug, root=state_root)
         snapshot = new_snapshot_path(slug, runstamp, root=state_root)
         snapshot.write_text(outcome.stdout)
-        if baseline is not None:
+        if baseline is not None and _diff_compatible(baseline, outcome.stdout):
             diff_outcome = cli.diff(slug, baseline, snapshot, fail_on=fail_on)
         prune_snapshots(slug, keep=retention, root=state_root)
     return SlugResult(slug=slug, analyze=outcome, diff=diff_outcome, snapshot=snapshot)
+
+
+def _diff_compatible(baseline: Path, current_stdout: str) -> bool:
+    """True only if the baseline snapshot shares the current envelope version.
+
+    `agentfluent diff` exit 1s on an envelope-version mismatch (a release that
+    bumps the `analyze --json` schema), and exit 1 classifies as ERROR → a red
+    gate. That would spuriously red the first run after every schema bump, when
+    the analysis itself is healthy. Cross-version snapshots aren't meaningfully
+    comparable anyway, so skip the diff (treat like a first run) rather than let
+    a benign stale baseline masquerade as an analysis failure.
+    """
+    try:
+        baseline_version = _envelope_version(baseline.read_text())
+    except OSError:
+        return False
+    current_version = _envelope_version(current_stdout)
+    return baseline_version is not None and baseline_version == current_version
 
 
 def render_gate_report(report: GateReport) -> str:
@@ -339,6 +376,15 @@ def render_gate_report(report: GateReport) -> str:
         f"status: {'RED (analysis error)' if report.is_red else 'ok'}",
         f"slugs analyzed: {len(report.results)}",
     ]
+    # Zero slugs with no error is an ambiguous green: a legitimately empty corpus
+    # is indistinguishable from a misconfigured corpus path (wrong HOME/config dir
+    # under cron). Not hard-red (empty is valid), but surface it loudly so it is
+    # visible in cron.log instead of passing as a clean run.
+    if not report.results and not report.errors:
+        lines.append(
+            "WARNING: no project-slugs analyzed — corpus is empty or the "
+            "configured path is wrong (check HOME / --claude-config-dir)."
+        )
     for result in report.results:
         a = result.analyze
         parts = [f"  [{a.verdict.value}] {result.slug}"]
