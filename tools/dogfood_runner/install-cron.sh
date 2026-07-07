@@ -18,6 +18,17 @@ MARKER="# agentfluent-dogfood-runner (S0/#590) — managed by install-cron.sh"
 # unlike 3am. Cron does not back-fill missed runs; the overlapping rolling window
 # self-heals the next day. Override with $DOGFOOD_CRON.
 SCHEDULE="${DOGFOOD_CRON:-30 12 * * *}"
+# Validate the schedule before it is spliced into the crontab line. Cron parses the
+# first five whitespace-separated tokens as the schedule and treats the REST as the
+# command, so an unsanitized $DOGFOOD_CRON like "* * * * * rm -rf ~ #" would inject
+# arbitrary commands. Constrain to exactly five standard cron fields (digits and
+# * , - / only); anything fancier, edit the crontab directly.
+_CRON_FIELD='[0-9*,/-]+'
+if ! [[ "$SCHEDULE" =~ ^${_CRON_FIELD}([[:space:]]+${_CRON_FIELD}){4}$ ]]; then
+  echo "error: DOGFOOD_CRON must be a 5-field cron schedule using only [0-9 * , - /]" >&2
+  echo "       (got: '$SCHEDULE')." >&2
+  exit 1
+fi
 
 # Resolve the script's real location (follow a symlink if it was installed as one)
 # before deriving the repo root, so `cd $REPO_DIR` in the baked entry is always the
@@ -60,7 +71,12 @@ mkdir -p "$LOG_DIR"
 # deterministic gate itself only needs $UV_BIN (already absolute). Run via -m from
 # the repo root so the tools.* package imports resolve.
 BAKED_PATH="$PATH"
-CRON_CMD="cd $REPO_DIR && XDG_STATE_HOME='$STATE_HOME' PATH='$BAKED_PATH' $UV_BIN run --group research python -m tools.dogfood_runner.runner >> $LOG_DIR/cron.log 2>&1"
+# Single-quote every interpolated value in the emitted command so that spaces or
+# shell metacharacters in a path/env var (REPO_DIR, STATE_HOME, PATH, UV_BIN,
+# LOG_DIR) are treated as literals when cron's /bin/sh parses the line, rather than
+# breaking the entry or injecting commands. (A literal single quote in one of these
+# paths would still break it, but that is pathological for a filesystem path.)
+CRON_CMD="cd '$REPO_DIR' && XDG_STATE_HOME='$STATE_HOME' PATH='$BAKED_PATH' '$UV_BIN' run --group research python -m tools.dogfood_runner.runner >> '$LOG_DIR/cron.log' 2>&1"
 CRON_LINE="$SCHEDULE $CRON_CMD $MARKER"
 
 # cron treats an unescaped `%` in the command as a literal newline (it truncates the
