@@ -47,10 +47,17 @@ from tools.dogfood_runner.paths import (
 # an already-installed ``agentfluent`` console script).
 DEFAULT_BASE_CMD: tuple[str, ...] = ("uv", "run", "agentfluent")
 
-# Bounded rolling window (AC): analyze the last few days, NOT the whole corpus.
-# A few-day window on a daily cadence overlaps enough to catch sudden deltas
-# cleanly. Configurable; this is a build-time default, not a filing decision.
-DEFAULT_WINDOW = "3d"
+# Bounded rolling window (AC): analyze the last N days, NOT the whole corpus.
+# 7 days chosen for a daily cron over a sporadically-worked corpus: a shorter
+# window drops any project not touched in the last few days (perpetual EMPTY, no
+# accruing history), and — more importantly — cron only fires when the machine is
+# on, so consecutive runs need window overlap for the window-over-window diff; a
+# 7d window tolerates a gap of up to ~6 days between runs before the baseline stops
+# overlapping. With a daily cadence, consecutive 7d windows still differ by one day,
+# so day-over-day delta sensitivity is essentially unchanged. Configurable
+# (`--window`, or `DOGFOOD_WINDOW` for the cron) — a build-time default, not a
+# filing decision.
+DEFAULT_WINDOW = "7d"
 
 # Cap a single CLI invocation so a hung analyze can't wedge the cron run forever.
 DEFAULT_TIMEOUT_S = 600

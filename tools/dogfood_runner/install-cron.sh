@@ -18,6 +18,15 @@ MARKER="# agentfluent-dogfood-runner (S0/#590) — managed by install-cron.sh"
 # unlike 3am. Cron does not back-fill missed runs; the overlapping rolling window
 # self-heals the next day. Override with $DOGFOOD_CRON.
 SCHEDULE="${DOGFOOD_CRON:-30 12 * * *}"
+# Rolling analysis window passed to `analyze --since`. Default 7d — robust to a
+# sporadically-worked corpus and to missed cron days (see DEFAULT_WINDOW in
+# cli_runner.py). Override with $DOGFOOD_WINDOW. Restricted to a relative
+# Nd/Nh/Nm form since it is spliced into the crontab command.
+WINDOW="${DOGFOOD_WINDOW:-7d}"
+if ! [[ "$WINDOW" =~ ^[0-9]+[dhm]$ ]]; then
+  echo "error: DOGFOOD_WINDOW must be a relative window like 7d, 48h, or 90m (got: '$WINDOW')." >&2
+  exit 1
+fi
 # Validate the schedule before it is spliced into the crontab line. Cron parses the
 # first five whitespace-separated tokens as the schedule and treats the REST as the
 # command, so an unsanitized $DOGFOOD_CRON like "* * * * * rm -rf ~ #" would inject
@@ -67,16 +76,24 @@ fi
 mkdir -p "$LOG_DIR"
 # Cron runs with a minimal PATH (typically /usr/bin:/bin), but the SDK synthesis
 # step spawns the `claude`/node CLI, which usually lives elsewhere (~/.local/bin,
-# nvm/fnm, etc.). Bake the install-time PATH into the entry so those resolve; the
-# deterministic gate itself only needs $UV_BIN (already absolute). Run via -m from
-# the repo root so the tools.* package imports resolve.
-BAKED_PATH="$PATH"
+# nvm/fnm, etc.). Baking the FULL interactive $PATH overflows crontab's line-length
+# limit ("command too long"), so bake only the dirs that actually matter — where
+# uv/node/claude resolve at install time — plus the base dirs. Run via -m from the
+# repo root so the tools.* package imports resolve.
+_baked_path() {
+  local bin resolved dirs=()
+  for bin in uv node claude; do
+    resolved="$(command -v "$bin" 2>/dev/null)" && dirs+=("$(dirname "$resolved")")
+  done
+  printf '%s\n' "${dirs[@]}" /usr/local/bin /usr/bin /bin | awk 'NF && !seen[$0]++' | paste -sd:
+}
+BAKED_PATH="$(_baked_path)"
 # Single-quote every interpolated value in the emitted command so that spaces or
 # shell metacharacters in a path/env var (REPO_DIR, STATE_HOME, PATH, UV_BIN,
 # LOG_DIR) are treated as literals when cron's /bin/sh parses the line, rather than
 # breaking the entry or injecting commands. (A literal single quote in one of these
 # paths would still break it, but that is pathological for a filesystem path.)
-CRON_CMD="cd '$REPO_DIR' && XDG_STATE_HOME='$STATE_HOME' PATH='$BAKED_PATH' '$UV_BIN' run --group research python -m tools.dogfood_runner.runner >> '$LOG_DIR/cron.log' 2>&1"
+CRON_CMD="cd '$REPO_DIR' && XDG_STATE_HOME='$STATE_HOME' PATH='$BAKED_PATH' '$UV_BIN' run --group research python -m tools.dogfood_runner.runner --window '$WINDOW' >> '$LOG_DIR/cron.log' 2>&1"
 CRON_LINE="$SCHEDULE $CRON_CMD $MARKER"
 
 # cron treats an unescaped `%` in the command as a literal newline (it truncates the
@@ -87,7 +104,8 @@ CRON_LINE="${CRON_LINE//%/\\%}"
 { strip_existing; echo "$CRON_LINE"; } | crontab -
 echo "Installed dogfood-runner cron entry:"
 echo "  schedule: $SCHEDULE"
-echo "  command : cd $REPO_DIR && uv run --group research python -m tools.dogfood_runner.runner"
+echo "  window  : $WINDOW"
+echo "  command : cd $REPO_DIR && uv run --group research python -m tools.dogfood_runner.runner --window $WINDOW"
 echo "  log     : $LOG_DIR/cron.log"
 echo "Verify with: crontab -l | grep dogfood-runner"
 echo

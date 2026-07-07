@@ -66,7 +66,7 @@ uv run --group research python -m tools.dogfood_runner.runner
 uv run python -m tools.dogfood_runner.runner --no-synthesis
 
 # Options:
-#   --window 7d        rolling window passed to `analyze --since` (default 3d)
+#   --window 7d        rolling window passed to `analyze --since` (default 7d)
 #   --fail-on critical regression severity threshold for `diff` (default warning)
 #   --retention 14     snapshots kept per slug (default 14)
 ```
@@ -103,8 +103,14 @@ DOGFOOD_CRON="0 13 * * *" tools/dogfood_runner/install-cron.sh
 tools/dogfood_runner/install-cron.sh --uninstall
 ```
 
-The cron entry bakes the install-time `PATH` (so the SDK's `claude`/node subprocess
-resolves under cron's minimal environment). The **narrative synthesis** additionally
+The default window is **7d** (see `DEFAULT_WINDOW`): robust to a sporadically-worked
+corpus and to missed cron days (cron only fires when the machine is on, and the
+window-over-window diff needs consecutive runs to overlap — a 7d window tolerates a
+~6-day gap). Override with `DOGFOOD_WINDOW=5d tools/dogfood_runner/install-cron.sh`.
+
+The cron entry bakes a **minimal** `PATH` — only the dirs where `uv`/`node`/`claude`
+resolve at install time, plus the base dirs (baking the full interactive `PATH`
+overflows crontab's line-length limit). The **narrative synthesis** additionally
 needs local Claude auth (`ANTHROPIC_API_KEY`, or Claude Code credentials under
 `~/.claude`) present in the cron environment — without it the deterministic gate
 still runs and reports; only synthesis is skipped (logged to `cron.log`).
