@@ -69,11 +69,6 @@ packages = ["src/agentfluent"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Put the repo root on sys.path so tests can import the maintainer-only
-# ``tools/`` package (the dogfood-runner, #590). ``uv run pytest`` invokes the
-# pytest console script, which does NOT add the CWD the way ``python -m pytest``
-# would, so this is required for ``import tools.dogfood_runner.*`` to resolve.
-pythonpath = ["."]
 markers = [
     "integration: tests that require real session data (deselect with '-m \"not integration\"')",
 ]

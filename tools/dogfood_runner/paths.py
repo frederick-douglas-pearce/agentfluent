@@ -16,13 +16,27 @@ in ``agentfluent.core.paths``::
 
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 
-AGENTFLUENT_SUBDIR = "agentfluent"
+# Reuse agentfluent's XDG state root (the config/cache/state triad in core.paths)
+# rather than hand-rolling a third XDG resolver here — one source of truth for the
+# fallback convention and the ``agentfluent`` subdir name.
+from agentfluent.core.paths import (
+    XDG_STATE_HOME_ENV_VAR,  # re-exported for tests that set the env var
+    agentfluent_state_dir,
+)
+
+__all__ = [
+    "XDG_STATE_HOME_ENV_VAR",
+    "dogfood_state_dir",
+    "latest_snapshot",
+    "new_snapshot_path",
+    "prune_snapshots",
+    "slug_dir",
+]
+
 DOGFOOD_SUBDIR = "dogfood"
-XDG_STATE_HOME_ENV_VAR = "XDG_STATE_HOME"
 
 SNAPSHOT_PREFIX = "snapshot-"
 SNAPSHOT_SUFFIX = ".json"
@@ -39,10 +53,8 @@ _SAFE_SLUG_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def dogfood_state_dir() -> Path:
-    """Root of the dogfood snapshot tree (``<state>/agentfluent/dogfood``)."""
-    xdg = os.environ.get(XDG_STATE_HOME_ENV_VAR)
-    base = Path(xdg) if xdg else Path.home() / ".local" / "state"
-    return base / AGENTFLUENT_SUBDIR / DOGFOOD_SUBDIR
+    """Root of the dogfood snapshot tree (``<agentfluent-state>/dogfood``)."""
+    return agentfluent_state_dir() / DOGFOOD_SUBDIR
 
 
 def slug_dir(slug: str, *, root: Path | None = None) -> Path:

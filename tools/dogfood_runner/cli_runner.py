@@ -235,7 +235,10 @@ class CliRunner:
                 f"{result.stderr.strip()}"
             )
         payload = _parse_json(result.stdout)
-        projects = payload.get("data", {}).get("projects", [])
+        # `.get("data", {})` would return None if `data` is present-but-null (the
+        # default only applies to a MISSING key), so `None.get(...)` would raise.
+        data = payload.get("data") or {}
+        projects = data.get("projects", []) if isinstance(data, dict) else []
         return [p["slug"] for p in projects if isinstance(p, dict) and p.get("slug")]
 
     def analyze(self, slug: str, since: str, *, until: str | None = None) -> AnalyzeOutcome:
@@ -297,6 +300,7 @@ def run_gate(
     Deterministic given its inputs (the CLI seam and ``runstamp`` are injected),
     so it is fully unit-testable without the SDK or a live model.
     """
+    enumerated = slugs is None
     try:
         target_slugs = list(slugs) if slugs is not None else cli.enumerate_slugs()
     except DogfoodError as exc:
@@ -304,6 +308,16 @@ def run_gate(
 
     results: list[SlugResult] = []
     errors: list[str] = []
+    # A run that ENUMERATED the corpus but found zero slugs is a failure (red), not
+    # a clean run: `list` is not window-filtered, so zero slugs means
+    # ~/.claude/projects is empty or the configured path is wrong (a broken cron) —
+    # which must not report green on the exit code a monitor keys on. An explicit
+    # `slugs=[]` (a caller's deliberate choice) is left benign.
+    if enumerated and not target_slugs:
+        errors.append(
+            "no project-slugs found — corpus is empty or the configured path is "
+            "wrong (check HOME / --claude-config-dir)"
+        )
     for slug in target_slugs:
         try:
             results.append(
@@ -317,8 +331,11 @@ def run_gate(
                     fail_on=fail_on,
                 )
             )
-        except DogfoodError as exc:
-            # A per-slug failure is surfaced, never swallowed; other slugs still run.
+        except (DogfoodError, OSError, ValueError) as exc:
+            # Surface per-slug — a CLI error (DogfoodError), a snapshot I/O failure
+            # (OSError: full disk / bad perms / unlink race), or an unsafe slug
+            # (ValueError from the traversal guard) — WITHOUT aborting the run, so
+            # the remaining slugs are still analyzed.
             errors.append(f"{slug}: {exc}")
     return GateReport(window=window, results=results, errors=errors)
 

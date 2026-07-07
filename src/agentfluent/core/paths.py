@@ -24,6 +24,7 @@ SUBAGENTS_SUBDIR = "subagents"
 AGENTFLUENT_SUBDIR = "agentfluent"
 XDG_CONFIG_HOME_ENV_VAR = "XDG_CONFIG_HOME"
 XDG_CACHE_HOME_ENV_VAR = "XDG_CACHE_HOME"
+XDG_STATE_HOME_ENV_VAR = "XDG_STATE_HOME"
 
 
 def projects_dir_for(config_root: Path | None) -> Path | None:
@@ -140,4 +141,20 @@ def agentfluent_cache_dir() -> Path:
     """
     xdg = os.environ.get(XDG_CACHE_HOME_ENV_VAR)
     base = Path(xdg) if xdg else Path.home() / ".cache"
+    return base / AGENTFLUENT_SUBDIR
+
+
+def agentfluent_state_dir() -> Path:
+    """Canonical AgentFluent state root.
+
+    Honors ``$XDG_STATE_HOME`` when set, else falls back to
+    ``~/.local/state/agentfluent``. Completes the XDG triad alongside
+    ``agentfluent_config_dir`` (persistent config) and
+    ``agentfluent_cache_dir`` (disposable cache): state is data that
+    persists across runs but is neither user-configured nor precious —
+    e.g. the dogfood-runner's rolling analysis snapshots
+    (``<root>/dogfood/<slug>/snapshot-*.json``).
+    """
+    xdg = os.environ.get(XDG_STATE_HOME_ENV_VAR)
+    base = Path(xdg) if xdg else Path.home() / ".local" / "state"
     return base / AGENTFLUENT_SUBDIR

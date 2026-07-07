@@ -288,8 +288,51 @@ def test_run_gate_launch_failure_is_surfaced_not_uncaught(tmp_path: Path) -> Non
     assert report.errors and "could not launch CLI" in report.errors[0]
 
 
+def test_run_gate_enumerated_empty_corpus_is_red(tmp_path: Path) -> None:
+    # enumerate() returns [] (NO_DATA / no projects dir). With slugs ENUMERATED
+    # (not explicitly passed), zero slugs is a broken run — a misconfigured corpus
+    # path under cron must not report green on the exit code a monitor keys on.
+    cli = cr.CliRunner(base_cmd=["af"], run=QueueRunner([_cp(cr.EXIT_NO_DATA)]))
+    report = cr.run_gate(cli, window="3d", runstamp="20260101T000000Z", state_root=tmp_path)
+    assert report.is_red
+    assert report.errors and "no project-slugs found" in report.errors[0]
+
+
+def test_run_gate_explicit_empty_slugs_stays_benign(tmp_path: Path) -> None:
+    # A caller deliberately passing slugs=[] is not a misconfiguration → not red.
+    cli = cr.CliRunner(base_cmd=["af"], run=QueueRunner([]))
+    report = cr.run_gate(
+        cli, window="3d", runstamp="20260101T000000Z", slugs=[], state_root=tmp_path
+    )
+    assert not report.is_red
+    assert not report.errors
+
+
+def test_run_gate_snapshot_write_failure_is_surfaced_not_uncaught(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A full disk / bad perms makes the snapshot write raise OSError — it must be
+    # surfaced per-slug (red), never abort the whole run uncaught.
+    def boom(_self: object, _text: str, *a: object, **k: object) -> int:
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(Path, "write_text", boom)
+    cli = cr.CliRunner(base_cmd=["af"], run=QueueRunner([_cp(0, _analyze_stdout())]))
+    report = cr.run_gate(
+        cli, window="3d", runstamp="20260101T000000Z", slugs=["slug"], state_root=tmp_path
+    )
+    assert report.is_red
+    assert report.errors and "No space left" in report.errors[0]
+
+
+def test_enumerate_slugs_tolerates_null_data() -> None:
+    payload = json.dumps({"version": "2", "command": "list-projects", "data": None})
+    cli = cr.CliRunner(base_cmd=["af"], run=QueueRunner([_cp(0, payload)]))
+    assert cli.enumerate_slugs() == []  # no crash on data: null
+
+
 def test_render_warns_on_zero_slugs_without_error() -> None:
     report = cr.GateReport(window="3d", results=[], errors=[])
     text = cr.render_gate_report(report)
-    assert "status: ok" in text  # not hard-red — empty corpus is legitimate
+    assert "status: ok" in text  # not hard-red — a deliberate empty run is legitimate
     assert "no project-slugs analyzed" in text  # but surfaced loudly
