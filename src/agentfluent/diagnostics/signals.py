@@ -60,6 +60,51 @@ def detect_is_error_from_text(text: str | None) -> bool:
     return bool(ERROR_REGEX.search(text[:ERROR_DETECTION_WINDOW_CHARS]))
 
 
+# File-reading tools whose *successful* output is file/source content — so a
+# leading-window keyword match is a false positive (#580): the head of a Read is
+# the top of the file, and a Grep hit line is `path:line:content`. On a
+# self-referential corpus (agents reading AgentFluent's own error-handling
+# source) that head IS error vocabulary, which the generic windowed
+# ``detect_is_error_from_text`` misreads as a real error.
+FILE_READING_TOOLS = frozenset({"Read", "Grep", "Glob"})
+
+# Structured error signatures a genuine Read/Grep/Glob failure *leads* with.
+# Case-sensitive on purpose: these are literal Claude Code / Node system strings
+# (lowercase ``<tool_use_error>`` wrapper, uppercase errno codes) — matching them
+# case-insensitively would re-admit the very source-content FPs this guards. The
+# v0.10 dogfood's 15 genuine fires all begin with one of these forms while all
+# 10 FPs carry the keyword mid-line (#580; analysis.md). ``ENOENT``/``EACCES``
+# are included defensively alongside the observed ``EISDIR`` at zero FP cost.
+# Leading ``\s*`` anchors the match after optional whitespace without copying the
+# (potentially multi-KB) result body via ``lstrip()``.
+LEADING_ERROR_REGEX = re.compile(
+    r"\s*(?:"
+    r"<tool_use_error>"
+    r"|EISDIR|ENOENT|EACCES"
+    r"|File does not exist"
+    r"|File content .*? exceeds maximum"
+    r")",
+)
+
+
+def detect_is_error_for_tool(text: str | None, tool_name: str) -> bool:
+    """Synthesize ``is_error`` with tool-aware anchoring (#580).
+
+    For file-reading tools (``FILE_READING_TOOLS``) a successful result is
+    file/source content, so only a result that *begins* with a structured
+    error signature (after leading whitespace) counts as an error — merely
+    *containing* error vocabulary in the leading window does not. All other
+    tools keep the unchanged windowed behavior of
+    ``detect_is_error_from_text`` (preserving the #241 mcp_assessment path).
+    ``None``/empty always return False.
+    """
+    if not text:
+        return False
+    if tool_name in FILE_READING_TOOLS:
+        return bool(LEADING_ERROR_REGEX.match(text))
+    return detect_is_error_from_text(text)
+
+
 def iter_error_matches(
     text: str | None,
     *,

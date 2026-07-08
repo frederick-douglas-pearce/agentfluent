@@ -30,7 +30,7 @@ from typing import Any
 from agentfluent.analytics.pricing import SYNTHETIC_MODELS
 from agentfluent.core.parser import parse_session
 from agentfluent.core.session import ContentBlock, SessionMessage, Usage
-from agentfluent.diagnostics.signals import detect_is_error_from_text
+from agentfluent.diagnostics.signals import detect_is_error_for_tool
 from agentfluent.traces.discovery import AGENT_FILENAME_PATTERN
 from agentfluent.traces.models import (
     INPUT_DATA_MAX_CHARS,
@@ -101,17 +101,19 @@ def _truncate_result(text: str | None) -> str:
     return text[:RESULT_SUMMARY_MAX_CHARS]
 
 
-def _detect_is_error(block: ContentBlock) -> bool:
+def _detect_is_error(block: ContentBlock, tool_name: str) -> bool:
     """Detect whether a tool_result block represents an error.
 
     Explicit ``is_error`` field is authoritative when present (True or
-    False). When missing, fall back to ``detect_is_error_from_text``
-    (shared helper bounded by ``ERROR_DETECTION_WINDOW_CHARS``; see
-    #238 / #241 for the FP-defense rationale).
+    False). When missing, fall back to ``detect_is_error_for_tool``, which
+    is tool-aware: file-reading tools (Read/Grep/Glob) require the result to
+    *begin* with a structured error signature, so a successfully-read file
+    whose head is error vocabulary is not misread as a failure (#580).
+    Other tools keep the windowed behavior (see #238 / #241).
     """
     if block.is_error is not None:
         return block.is_error
-    return detect_is_error_from_text(block.text)
+    return detect_is_error_for_tool(block.text, tool_name)
 
 
 def _sum_usage(messages: list[SessionMessage]) -> Usage:
@@ -169,7 +171,7 @@ def _pair_tool_calls(messages: list[SessionMessage]) -> list[SubagentToolCall]:
             entry = results.get(block.id)
             if entry is not None:
                 result_block, result_ts = entry
-                is_error = _detect_is_error(result_block)
+                is_error = _detect_is_error(result_block, block.name or "")
                 result_text = result_block.text
             else:
                 is_error = False

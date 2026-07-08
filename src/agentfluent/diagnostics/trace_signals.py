@@ -256,10 +256,13 @@ def _build_parameter_retry_signal(
 
     The first attempt must carry ``is_error=True`` — the parser-supplied flag,
     which the parser also synthesizes from result text via
-    ``signals.detect_is_error_from_text``. That synthesis covers generic error
-    vocabulary (``failed``/``error``/``unable to``/…), NOT every validation-only
-    phrasing; a first call that sets neither ``is_error`` nor a generic error
-    token is treated as paging/refinement, not a parameter retry. This is a
+    ``signals.detect_is_error_for_tool``. That synthesis covers generic error
+    vocabulary (``failed``/``error``/``unable to``/…) for most tools, but on
+    file-reading tools (Read/Grep/Glob) it requires the result to *begin* with a
+    structured error signature — so a successful read whose head is error
+    vocabulary is not misread as a first-attempt failure (#580). A first call
+    that sets neither ``is_error`` nor a qualifying error signature is treated as
+    paging/refinement, not a parameter retry. This is a
     deliberate precision trade-off (#510): it drops the prior keyword-regex
     fallback (``invalid``/``validation``/``schema``/…) that fired on
     *successful* results whose text merely looked validation-flavored — the

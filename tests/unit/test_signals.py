@@ -1,9 +1,16 @@
 """Tests for behavior signal extraction."""
 
+import pytest
+
 from agentfluent.agents.models import AgentInvocation
 from agentfluent.config.models import Severity
 from agentfluent.diagnostics.models import SignalType
-from agentfluent.diagnostics.signals import extract_signals
+from agentfluent.diagnostics.signals import (
+    FILE_READING_TOOLS,
+    detect_is_error_for_tool,
+    detect_is_error_from_text,
+    extract_signals,
+)
 
 
 def _inv(
@@ -315,4 +322,96 @@ class TestInvocationIdPropagation:
         signals = extract_signals([*peers, slow])
         outlier = next(s for s in signals if s.signal_type == SignalType.DURATION_OUTLIER)
         assert outlier.invocation_id == "ag-slow"
+
+
+# The v0.10 dogfood's 15 genuine first-attempt failures (#580) reduce to these
+# 4 distinct structured-signature forms (each fire leads with one). Testing the
+# forms — not 15 literal transcripts — is the load-bearing coverage: all must
+# still synthesize is_error=True on a file-reading tool.
+_GENUINE_FIRES = [
+    "<tool_use_error>InputValidationError: offset must be a number, got array",
+    "<tool_use_error>InputValidationError: missing required parameter 'pattern'",
+    "EISDIR: illegal operation on a directory, read",
+    "File does not exist.",
+    "File does not exist. Did you mean src/agentfluent/traces/parser.py?",
+    "File content (28451 tokens) exceeds maximum allowed tokens (25000). "
+    "Please use offset and limit to read specific portions.",
+]
+
+# The 10 self-referential false positives (#580): successful Read/Grep of
+# AgentFluent's own error-handling source, whose head carries error vocabulary
+# but does NOT lead with a structured signature (a grep hit line leads with the
+# filename; a Read leads with a line-number or a docstring/keyword). None may
+# synthesize is_error=True on a file-reading tool.
+_CONTENT_FPS = [
+    # architect -> Grep hit: leads with the filename, not a signature.
+    "parser.py:33:from agentfluent.diagnostics.signals import "
+    "detect_is_error_from_text",
+    "signals.py:44:# Real error messages lead with the indicator",
+    # Explore -> Read of a class whose docstring names the signal.
+    'class ParameterRetryRule:\n    """PARAMETER_RETRY -> recommend input_examples',
+    # candidate-verifier -> Read of a module docstring about error detection.
+    '"""Behavior signal extraction from agent invocations.\n\n'
+    "Detects error patterns in output text",
+    # architect -> Read of a function definition.
+    "def compute_error_rate(invocations: list[AgentInvocation]) -> float:",
+    # architect -> Read of the release-loop skill frontmatter (line-numbered).
+    "1\t---\n2\tname: release-loop\n3\tdescription: Run one routed iteration",
+    # pm -> Read of the run_diagnostics pipeline docstring (x2 in corpus).
+    '"""Run the diagnostics pipeline: signals -> correlation -> recommendations."""',
+    "run_diagnostics wires the error-pattern signal into the pipeline",
+    # A Read whose first line mentions an errno mid-line (not leading).
+    "The parser maps EISDIR and ENOENT to is_error in traces/parser.py",
+    # A Grep hit whose content line contains the literal wrapper string.
+    "signals.py:52:    r\"<tool_use_error>|EISDIR|ENOENT|EACCES\"",
+]
+
+
+class TestDetectIsErrorForTool:
+    """#580: tool-aware is_error synthesis anchored to a leading signature."""
+
+    @pytest.mark.parametrize("tool", sorted(FILE_READING_TOOLS))
+    @pytest.mark.parametrize("text", _GENUINE_FIRES)
+    def test_genuine_fires_still_fire_on_file_reading_tools(
+        self, tool: str, text: str,
+    ) -> None:
+        assert detect_is_error_for_tool(text, tool) is True
+
+    @pytest.mark.parametrize("tool", sorted(FILE_READING_TOOLS))
+    @pytest.mark.parametrize("text", _CONTENT_FPS)
+    def test_content_fps_suppressed_on_file_reading_tools(
+        self, tool: str, text: str,
+    ) -> None:
+        assert detect_is_error_for_tool(text, tool) is False
+
+    def test_leading_whitespace_before_signature_still_fires(self) -> None:
+        assert detect_is_error_for_tool("   \n  EISDIR: is a directory", "Read") is True
+
+    def test_signature_is_case_sensitive(self) -> None:
+        # Lowercase errno is source prose, not a system error string.
+        assert detect_is_error_for_tool("eisdir mentioned in a comment", "Read") is False
+
+    def test_non_file_reading_tool_keeps_windowed_behavior(self) -> None:
+        # Bash delegates to detect_is_error_from_text: a leading generic keyword
+        # still fires (the file-reading anchor does not apply).
+        assert detect_is_error_for_tool("Error: command not found", "Bash") is True
+        assert (
+            detect_is_error_for_tool("Error: command not found", "Bash")
+            == detect_is_error_from_text("Error: command not found")
+        )
+
+    def test_non_file_reading_mid_keyword_matches_windowed(self) -> None:
+        text = "wrote output; the word failed appears here"
+        assert detect_is_error_for_tool(text, "Bash") == detect_is_error_from_text(text)
+
+    def test_generic_keyword_leading_on_read_does_not_fire(self) -> None:
+        # The core #580 regression: "error"/"failed" at the top of a Read is
+        # source content, not a tool failure.
+        assert detect_is_error_for_tool("error handling utilities", "Read") is False
+        assert detect_is_error_for_tool("failed attempts are logged", "Grep") is False
+
+    def test_none_and_empty_return_false(self) -> None:
+        assert detect_is_error_for_tool(None, "Read") is False
+        assert detect_is_error_for_tool("", "Read") is False
+        assert detect_is_error_for_tool("   ", "Read") is False
 
