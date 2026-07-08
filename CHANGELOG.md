@@ -1,12 +1,5 @@
 # Changelog
 
-## [0.10.1](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.10.0...v0.10.1) (2026-07-08)
-
-
-### Bug Fixes
-
-* anchor is_error synthesis to a leading error signature on file-reading tools ([#580](https://github.com/frederick-douglas-pearce/agentfluent/issues/580)) ([#602](https://github.com/frederick-douglas-pearce/agentfluent/issues/602)) ([b6e5fe9](https://github.com/frederick-douglas-pearce/agentfluent/commit/b6e5fe9b34d0a13071d3d63552429277aacdc99e))
-
 ## [0.10.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.9.0...v0.10.0) (2026-07-03) — "Close the Hook Gap"
 
 The release theme reaches a config surface the recommendation engine was previously blind to: **hooks**. AgentFluent's premise is that the config *is* the agent — prompt, tools, model, MCP servers, and hooks — but until now the diagnostics could see and prescribe every surface on that list except the last. v0.10 closes that blind spot. A new `hook_inspector` reads each agent definition's `PostToolUse` hooks and reports whether they surface a given field (`HookFieldCoverage`, #424); when a duration outlier fires on an agent with **no `duration_ms` timing hook**, `DurationOutlierRule` now recommends adding one through the new **`target=hooks`** recommendation surface (#425), wired into the diagnostics pipeline by #426 (epic #423). This is the *first* recommendation into the hooks surface — foundational and extensible (the inspector generalizes to other fields via `KNOWN_HOOK_FIELDS`), not exhaustive hook analysis; project-level `.claude/settings.json` hooks are not yet inspected. The same through-line — recommendations that name a concrete fix — sharpens model routing: model-mismatch and duration recommendations now name a **specific** one-tier-down model (e.g. `claude-haiku-4-5`) instead of a vague "use a faster model" (#560/#170).
