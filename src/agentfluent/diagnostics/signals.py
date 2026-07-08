@@ -72,14 +72,18 @@ FILE_READING_TOOLS = frozenset({"Read", "Grep", "Glob"})
 # Case-sensitive on purpose: these are literal Claude Code / Node system strings
 # (lowercase ``<tool_use_error>`` wrapper, uppercase errno codes) — matching them
 # case-insensitively would re-admit the very source-content FPs this guards. The
-# v0.10 dogfood confirmed all 15 genuine fires begin with one of these while all
+# v0.10 dogfood's 15 genuine fires all begin with one of these forms while all
 # 10 FPs carry the keyword mid-line (#580; analysis.md). ``ENOENT``/``EACCES``
 # are included defensively alongside the observed ``EISDIR`` at zero FP cost.
+# Leading ``\s*`` anchors the match after optional whitespace without copying the
+# (potentially multi-KB) result body via ``lstrip()``.
 LEADING_ERROR_REGEX = re.compile(
+    r"\s*(?:"
     r"<tool_use_error>"
     r"|EISDIR|ENOENT|EACCES"
     r"|File does not exist"
-    r"|File content .*? exceeds maximum",
+    r"|File content .*? exceeds maximum"
+    r")",
 )
 
 
@@ -97,7 +101,7 @@ def detect_is_error_for_tool(text: str | None, tool_name: str) -> bool:
     if not text:
         return False
     if tool_name in FILE_READING_TOOLS:
-        return bool(LEADING_ERROR_REGEX.match(text.lstrip()))
+        return bool(LEADING_ERROR_REGEX.match(text))
     return detect_is_error_from_text(text)
 
 

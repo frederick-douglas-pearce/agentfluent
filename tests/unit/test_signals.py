@@ -324,9 +324,10 @@ class TestInvocationIdPropagation:
         assert outlier.invocation_id == "ag-slow"
 
 
-# The 15 genuine first-attempt failures from the v0.10 dogfood (#580): each
-# renders leading with a structured error signature. All must still synthesize
-# is_error=True on a file-reading tool.
+# The v0.10 dogfood's 15 genuine first-attempt failures (#580) reduce to these
+# 4 distinct structured-signature forms (each fire leads with one). Testing the
+# forms — not 15 literal transcripts — is the load-bearing coverage: all must
+# still synthesize is_error=True on a file-reading tool.
 _GENUINE_FIRES = [
     "<tool_use_error>InputValidationError: offset must be a number, got array",
     "<tool_use_error>InputValidationError: missing required parameter 'pattern'",
