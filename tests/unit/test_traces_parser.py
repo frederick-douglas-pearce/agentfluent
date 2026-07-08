@@ -9,7 +9,9 @@ from typing import Any
 
 import pytest
 
+from agentfluent.diagnostics.models import SignalType
 from agentfluent.diagnostics.signals import ERROR_DETECTION_WINDOW_CHARS
+from agentfluent.diagnostics.trace_signals import extract_trace_signals
 from agentfluent.traces.models import (
     INPUT_DATA_MAX_CHARS,
     INPUT_SUMMARY_MAX_CHARS,
@@ -369,6 +371,145 @@ class TestIsErrorDetection:
             ],
         )
         assert parse_subagent_trace(path).tool_calls[0].is_error is True
+
+
+class TestFileReadingIsErrorAnchor:
+    """#580: file-reading tools synthesize is_error only when the result begins
+    with a structured error signature — not when error vocabulary merely appears
+    in the head of a successfully-read file."""
+
+    def test_read_error_vocab_head_does_not_synthesize(
+        self, write_jsonl: WriteJSONL,
+    ) -> None:
+        # Successful Read of AgentFluent's own error-handling source: the head
+        # is error vocabulary but not a structured signature.
+        path = write_jsonl(
+            "agent-x.jsonl",
+            [
+                _user("go"),
+                _assistant([_tool_use("t1", "Read", {"file_path": "signals.py"})]),
+                _user([_tool_result("t1", "error handling: def compute_error_rate(x)")]),
+            ],
+        )
+        assert parse_subagent_trace(path).tool_calls[0].is_error is False
+
+    def test_grep_hit_line_does_not_synthesize(
+        self, write_jsonl: WriteJSONL,
+    ) -> None:
+        # Grep content-mode output leads with `path:line:` — never a signature.
+        hit = "parser.py:33:from agentfluent.diagnostics.signals import detect_is_error"
+        path = write_jsonl(
+            "agent-x.jsonl",
+            [
+                _user("go"),
+                _assistant([_tool_use("t1", "Grep", {"pattern": "error"})]),
+                _user([_tool_result("t1", hit)]),
+            ],
+        )
+        assert parse_subagent_trace(path).tool_calls[0].is_error is False
+
+    def test_read_leading_structured_signature_still_fires(
+        self, write_jsonl: WriteJSONL,
+    ) -> None:
+        path = write_jsonl(
+            "agent-x.jsonl",
+            [
+                _user("go"),
+                _assistant([_tool_use("t1", "Read", {"file_path": "/nope"})]),
+                _user([_tool_result("t1", "File does not exist.")]),
+            ],
+        )
+        assert parse_subagent_trace(path).tool_calls[0].is_error is True
+
+    def test_non_file_reading_tool_leading_keyword_still_fires(
+        self, write_jsonl: WriteJSONL,
+    ) -> None:
+        # Bash is unaffected by the file-reading anchor (windowed path).
+        path = write_jsonl(
+            "agent-x.jsonl",
+            [
+                _user("go"),
+                _assistant([_tool_use("t1", "Bash", {"command": "cat x"})]),
+                _user([_tool_result("t1", "error: no such file or directory")]),
+            ],
+        )
+        assert parse_subagent_trace(path).tool_calls[0].is_error is True
+
+
+class TestFileReadingAnchorDownstream:
+    """#580: suppressing the phantom is_error keeps PARAMETER_RETRY,
+    total_errors, and RetrySequence error fields honest for the shared
+    is_error consumers (architect review Q4)."""
+
+    def _growing_shape_reads(self, write_jsonl: WriteJSONL) -> Path:
+        # Three consecutive Reads whose param SHAPE grows (adds offset, then
+        # limit) — so PARAMETER_RETRY's shape gate is satisfied and the ONLY
+        # thing that can suppress the signal is the is_error gate — and whose
+        # heads are error vocabulary (the self-referential FP shape).
+        return write_jsonl(
+            "agent-x.jsonl",
+            [
+                _user("go"),
+                _assistant(
+                    [_tool_use("t1", "Read", {"file_path": "signals.py"})],
+                    message_id="m1",
+                ),
+                _user([_tool_result("t1", "error-handling module docstring here")]),
+                _assistant(
+                    [_tool_use("t2", "Read", {"file_path": "signals.py", "offset": 40})],
+                    message_id="m2",
+                ),
+                _user([_tool_result("t2", "failed lookups fall through to regex")]),
+                _assistant(
+                    [
+                        _tool_use(
+                            "t3",
+                            "Read",
+                            {"file_path": "signals.py", "offset": 40, "limit": 50},
+                        ),
+                    ],
+                    message_id="m3",
+                ),
+                _user([_tool_result("t3", "the error detection window bounds FPs")]),
+            ],
+        )
+
+    def _identical_reads(self, write_jsonl: WriteJSONL) -> Path:
+        # Three identical-input Reads with error-vocab heads: forms a
+        # RetrySequence so the retry._build_retry_sequence path is exercised.
+        msgs: list[dict[str, Any]] = [_user("go")]
+        for i in range(1, 4):
+            msgs.append(
+                _assistant(
+                    [_tool_use(f"t{i}", "Read", {"file_path": "signals.py"})],
+                    message_id=f"m{i}",
+                ),
+            )
+            msgs.append(_user([_tool_result(f"t{i}", "error patterns are detected here")]))
+        return write_jsonl("agent-x.jsonl", msgs)
+
+    def test_no_parameter_retry_from_self_referential_reads(
+        self, write_jsonl: WriteJSONL,
+    ) -> None:
+        trace = parse_subagent_trace(self._growing_shape_reads(write_jsonl))
+        signals = extract_trace_signals(trace)
+        assert not any(s.signal_type == SignalType.PARAMETER_RETRY for s in signals)
+
+    def test_total_errors_drops_to_zero(self, write_jsonl: WriteJSONL) -> None:
+        trace = parse_subagent_trace(self._growing_shape_reads(write_jsonl))
+        assert trace.total_errors == 0
+
+    def test_retry_sequence_carries_no_error_message(
+        self, write_jsonl: WriteJSONL,
+    ) -> None:
+        trace = parse_subagent_trace(self._identical_reads(write_jsonl))
+        # The identical-input run forms a sequence; with the FP suppressed it
+        # reports no errors and eventual success (retry._build_retry_sequence).
+        assert trace.retry_sequences, "expected a retry sequence from 3 identical Reads"
+        for seq in trace.retry_sequences:
+            assert seq.first_error_message is None
+            assert seq.last_error_message is None
+            assert seq.eventual_success is True
 
 
 class TestUsageAggregation:
