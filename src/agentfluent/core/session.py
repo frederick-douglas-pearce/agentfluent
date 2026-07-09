@@ -8,7 +8,7 @@ formats into a consistent structure.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -175,6 +175,15 @@ class SessionMessage(BaseModel):
     usage: Usage | None = None
     """Token usage. Only on assistant messages."""
 
+    entrypoint: str | None = None
+    """Runtime that produced this line: ``"sdk-py"`` (Agent SDK, Python),
+    ``"cli"`` (Claude Code interactive), a future ``"sdk-ts"``, etc. A
+    top-level line field present on every user/assistant line in current
+    formats; ``None`` when absent (pre-pin format or drift). This is the
+    intrinsic SDK-vs-Claude-Code discriminator (D013) — see
+    ``classify_session``. Kept a first-class field (alongside ``model``/
+    ``usage``) rather than on ``metadata``, which is agent-result-scoped."""
+
     metadata: ToolResultMetadata | None = None
     """Agent invocation metadata. Populated on `user`-type messages that carry
     a top-level `toolUseResult` key (the real Claude Code shape for Agent
@@ -194,6 +203,49 @@ class SessionMessage(BaseModel):
             for b in self.content_blocks
             if b.type == "tool_use" and b.name
         ]
+
+
+SessionClass = Literal["sdk", "cli", "unknown"]
+"""How a session was produced: an Agent SDK run (``sdk``), Claude Code
+interactive (``cli``), or indeterminate (``unknown``)."""
+
+
+def classify_session(messages: list[SessionMessage]) -> SessionClass:
+    """Derive the session's runtime class from its messages' ``entrypoint``.
+
+    Keys on the intrinsic ``entrypoint`` discriminator (D013), the reliable
+    SDK-vs-Claude-Code marker established in
+    ``.claude/specs/agent-sdk-session-format-findings.md`` §2
+    (``entrypoint == "sdk-py"`` on 119/119 SDK corpus lines vs ``"cli"`` for
+    Claude Code interactive).
+
+    Over the set of non-``None`` entrypoints seen across ``messages``:
+
+    - none present -> ``"unknown"`` (pre-pin format or drift; no exception).
+    - any ``startswith("sdk")`` -> ``"sdk"``. The prefix match is deliberate:
+      a future ``"sdk-ts"`` classifies as SDK with no TypeScript-specific
+      probe (forward-compat).
+    - any exact ``"cli"`` -> ``"cli"``. Exact (not a prefix) so an
+      unrecognized value fails safe to ``"unknown"`` rather than being
+      mislabelled Claude Code.
+    - otherwise -> ``"unknown"``.
+
+    Real single-file sessions are homogeneous (findings 119/119), so the
+    sdk-before-cli precedence only matters for a theoretical mixed session;
+    it resolves that case deterministically toward ``sdk``.
+
+    Discriminator values confirmed against ``claude-agent-sdk==0.2.106`` /
+    CLI ``2.1.185`` (captured 2026-06-22); Claude Code may evolve the
+    ``entrypoint`` vocabulary, so re-verify on upgrade.
+    """
+    entrypoints = {m.entrypoint for m in messages if m.entrypoint}
+    if not entrypoints:
+        return "unknown"
+    if any(e.startswith("sdk") for e in entrypoints):
+        return "sdk"
+    if "cli" in entrypoints:
+        return "cli"
+    return "unknown"
 
 
 def index_tool_results_by_id(

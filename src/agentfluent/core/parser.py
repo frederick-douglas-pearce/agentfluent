@@ -194,6 +194,7 @@ def _parse_user_message(data: dict[str, Any]) -> SessionMessage:
         type="user",
         timestamp=parse_timestamp(data.get("timestamp")),
         content_blocks=_normalize_content(message.get("content")),
+        entrypoint=data.get("entrypoint"),
         metadata=metadata,
     )
 
@@ -251,6 +252,7 @@ def _parse_assistant_message(data: dict[str, Any]) -> SessionMessage:
         message_id=message.get("id"),
         model=message.get("model"),
         content_blocks=_normalize_content(message.get("content")),
+        entrypoint=data.get("entrypoint"),
         usage=usage,
     )
 
@@ -330,6 +332,7 @@ def _merge_fragment_group(fragments: list[SessionMessage]) -> SessionMessage:
         message_id=fragments[0].message_id,
         model=fragments[0].model,
         content_blocks=blocks,
+        entrypoint=fragments[0].entrypoint,
         usage=winner.usage,
     )
 

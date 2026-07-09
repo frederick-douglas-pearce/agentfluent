@@ -218,6 +218,29 @@ class TestBlockPerLineMerge:
         assert merged.usage is not None
         assert merged.usage.output_tokens == 100
 
+    def test_merge_preserves_entrypoint(self) -> None:
+        # #591 S1: the merged message must carry `entrypoint` through from
+        # its fragments (fragments[0]); the block-per-line path reconstructs
+        # a fresh SessionMessage, so a dropped field would silently classify
+        # a real (message_id-bearing) SDK session as `unknown`.
+        frags = [
+            SessionMessage(
+                type="assistant", message_id="m", entrypoint="sdk-py",
+                content_blocks=[ContentBlock(type="text", text="hello")],
+                usage=Usage(output_tokens=100),
+            ),
+            SessionMessage(
+                type="assistant", message_id="m", entrypoint="sdk-py",
+                content_blocks=[
+                    ContentBlock(type="tool_use", id="t1", name="Bash"),
+                ],
+                usage=Usage(output_tokens=100),
+            ),
+        ]
+        result = deduplicate_messages(frags)
+        assert len(result) == 1
+        assert result[0].entrypoint == "sdk-py"
+
     def test_duplicate_tool_use_ids_in_fragments_are_deduped(self) -> None:
         # Defensive: if the same tool_use_id appears in two fragments of
         # the same message (shouldn't normally happen, but guard against
