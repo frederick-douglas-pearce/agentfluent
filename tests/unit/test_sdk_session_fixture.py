@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from agentfluent.core.parser import parse_session
+from agentfluent.core.session import classify_session
 from agentfluent.traces.discovery import discover_session_subagents
 
 _FIXTURE = Path(__file__).parent.parent / "fixtures" / "sdk_session"
@@ -65,10 +66,15 @@ class TestParsesCleanly:
 
 class TestDiscriminator:
     def test_entrypoint_is_sdk_py_on_every_line(self) -> None:
-        # `entrypoint` is a top-level line field the parser does not surface on
-        # SessionMessage, so assert it on the raw bytes (matches the D013 marker).
+        # `entrypoint` is a top-level line field carrying the D013 marker.
+        # Assert on the raw bytes...
         assert all(obj.get("entrypoint") == "sdk-py" for obj in _raw(_MAIN_JSONL))
         assert all(obj.get("entrypoint") == "sdk-py" for obj in _raw(_CHILD_JSONL))
+        # ...and that the parser now surfaces it on SessionMessage and the
+        # session classifies as `sdk` (#591 S1).
+        main_msgs = parse_session(_MAIN_JSONL)
+        assert all(m.entrypoint == "sdk-py" for m in main_msgs)
+        assert classify_session(main_msgs) == "sdk"
 
     def test_prompt_source_marks_the_prompt_line(self) -> None:
         prompt_line = _raw(_MAIN_JSONL)[0]
