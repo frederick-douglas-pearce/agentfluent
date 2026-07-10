@@ -257,7 +257,7 @@ lives on a sibling `toolUseResult` key (camelCase fields):
     ]
   },
   "toolUseResult": {
-    "status": "success",
+    "status": "completed",
     "prompt": "...",
     "agentId": "uuid",
     "agentType": "general-purpose",

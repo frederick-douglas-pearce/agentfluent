@@ -263,6 +263,11 @@ class TestSkipTypes:
             "bash_progress",
             "system",
             "create",
+            # SDK/CC session bookkeeping lines (#594)
+            "queue-operation",
+            "attachment",
+            "last-prompt",
+            "ai-title",
         }
         assert SKIP_TYPES == expected
 
