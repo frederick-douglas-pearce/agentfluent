@@ -140,6 +140,11 @@ class ToolResultMetadata(BaseModel):
     tool_uses: int | None = Field(None, alias="totalToolUseCount")
     duration_ms: int | None = Field(None, alias="totalDurationMs")
     agent_id: str | None = Field(None, alias="agentId")
+    resolved_model: str | None = Field(None, alias="resolvedModel")
+    """The child agent's concrete resolved model on an ``Agent`` tool result
+    (e.g. a haiku child under a sonnet main). ``None`` when ``resolvedModel`` is
+    absent. Surfaced for #112 model-routing diagnostics so a configured subagent
+    model can be verified without a cross-file join into the child trace (#593)."""
     tool_stats: dict[str, int] | None = Field(None, alias="toolStats")
     """Per-tool invocation counts keyed by tool name (e.g.
     ``{"Read": 3, "Bash": 1}``). ``None`` when ``toolStats`` is absent

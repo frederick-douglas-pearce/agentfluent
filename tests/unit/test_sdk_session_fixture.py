@@ -12,9 +12,10 @@ fixture carries together:
   ``ClaudeAgentOptions.model`` (``claude-sonnet-4-6``), exposed by the production
   parser as ``SessionMessage.model``.
 * **Model divergence ("the #112 artifact")** — a sonnet main delegates to a haiku
-  child; ``toolUseResult.resolvedModel`` reports the *child's* model. That field
-  is dropped by the current parser (``extra="ignore"``); it lives in the bytes as
-  a forward test-bed. Assert it against the raw bytes, not the parsed model.
+  child; ``toolUseResult.resolvedModel`` reports the *child's* model. The parser
+  now surfaces it as ``ToolResultMetadata.resolved_model`` (#593 S3), so #112 can
+  verify a configured subagent model with no cross-file join; asserted against both
+  the raw bytes (source of truth) and the parsed metadata.
 
 These tests assert the fixture parses cleanly, that discovery finds the child,
 and that the load-bearing fields are present. The parser/router that consumes
@@ -28,7 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from agentfluent.core.parser import parse_session
-from agentfluent.core.session import classify_session
+from agentfluent.core.session import ToolResultMetadata, classify_session
 from agentfluent.traces.discovery import discover_session_subagents
 
 _FIXTURE = Path(__file__).parent.parent / "fixtures" / "sdk_session"
@@ -84,14 +85,23 @@ class TestDiscriminator:
 
 class TestModelDivergence:
     def test_resolved_model_reports_the_child_model(self) -> None:
-        # resolvedModel is dropped by the parser (extra="ignore"); it is the
-        # field #112 will need, so it lives in the bytes as a forward test-bed.
+        # `resolvedModel` reports the *child's* concrete model — the #112 artifact.
+        # Assert against the raw bytes (source of truth)...
         result_lines = [obj for obj in _raw(_MAIN_JSONL) if "toolUseResult" in obj]
         assert len(result_lines) == 1
         tur = result_lines[0]["toolUseResult"]
         assert tur["resolvedModel"] == _CHILD_MODEL
         assert tur["resolvedModel"] != _MAIN_MODEL
         assert tur["status"] == "completed"
+
+    def test_parser_surfaces_resolved_model_on_metadata(self) -> None:
+        # ...and that the parser now surfaces it (#593 S3) so #112 needs no
+        # cross-file join into the child trace.
+        msgs = parse_session(_MAIN_JSONL)
+        metas = [m.metadata for m in msgs if m.metadata is not None]
+        assert len(metas) == 1
+        assert metas[0].resolved_model == _CHILD_MODEL
+        assert metas[0].resolved_model != _MAIN_MODEL
 
     def test_child_trace_ran_the_resolved_model(self) -> None:
         child_models = [
@@ -100,6 +110,19 @@ class TestModelDivergence:
             if obj.get("type") == "assistant"
         ]
         assert child_models == [_CHILD_MODEL]
+
+
+class TestResolvedModelField:
+    """Unit-level locks for the #593 field, independent of the fixture."""
+
+    def test_alias_populates_resolved_model(self) -> None:
+        meta = ToolResultMetadata.model_validate({"resolvedModel": _CHILD_MODEL})
+        assert meta.resolved_model == _CHILD_MODEL
+
+    def test_absent_resolved_model_is_none(self) -> None:
+        # A tool result with no `resolvedModel` parses without crashing.
+        meta = ToolResultMetadata.model_validate({"agentId": "x", "totalTokens": 1})
+        assert meta.resolved_model is None
 
 
 class TestDiscoveryAndLinkage:
