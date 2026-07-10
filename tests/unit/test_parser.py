@@ -141,6 +141,55 @@ class TestSkipTypes:
         assert "file-history-snapshot" not in types
         assert "create" not in types
 
+    # Issue #594 (S4): the four SDK/CC session line types below are now skipped
+    # *intentionally* (in SKIP_TYPES), not via the debug-`else` fall-through in
+    # parse_session. This test locks both the extraction invariant (no change to
+    # user/assistant data) and the intentional-skip property (no "Unknown message
+    # type" debug record) — the latter is what distinguishes the fix from the
+    # prior else-fallthrough that also happened to drop them.
+    _SDK_SKIP_TYPES = ("queue-operation", "attachment", "last-prompt", "ai-title")
+
+    def test_sdk_line_types_skipped_intentionally(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        lines = [json.dumps({"type": t}) for t in self._SDK_SKIP_TYPES]
+        lines.insert(
+            2,
+            json.dumps(
+                {"type": "user", "message": {"role": "user", "content": "hi"}}
+            ),
+        )
+        lines.append(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "hello"}],
+                    },
+                }
+            )
+        )
+        path = tmp_path / "sdk_skip.jsonl"
+        path.write_text("\n".join(lines) + "\n")
+
+        with caplog.at_level(logging.DEBUG, logger="agentfluent.core.parser"):
+            messages = parse_session(path)
+
+        # (a) the four SDK types are absent from the parsed output ...
+        assert [m.type for m in messages] == ["user", "assistant"]
+        # ... and (b) the surviving user/assistant data is unchanged.
+        assert messages[0].text == "hi"
+        assert messages[1].text == "hello"
+
+        # (c) intentional skip: the debug-`else` branch is NOT reached for any of
+        # the four types (they were filtered at iter_raw_messages).
+        debug_text = " ".join(
+            r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG
+        )
+        for skip_type in self._SDK_SKIP_TYPES:
+            assert f"Unknown message type '{skip_type}'" not in debug_text
+
 
 class TestMalformedInput:
     def test_skips_bad_lines(self, malformed_session_path: Path) -> None:

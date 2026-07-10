@@ -290,5 +290,12 @@ SKIP_TYPES: frozenset[str] = frozenset(
         "bash_progress",
         "system",
         "create",
+        # SDK/CC session bookkeeping lines (confirmed against
+        # claude-agent-sdk==0.2.106 / CLI 2.1.185, #594): skipped intentionally
+        # rather than falling through to the debug-`else` branch in parse_session.
+        "queue-operation",
+        "attachment",
+        "last-prompt",
+        "ai-title",
     }
 )
