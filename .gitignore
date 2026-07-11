@@ -23,7 +23,9 @@ data/
 .claude/worktrees/
 # Loop-engineering harness ledger: local working state (queue/progress/plans),
 # never committed -- committing collides with branch protection (see
-# .claude/specs/prd-loop-engineering.md section 6.4).
+# .claude/skills/release-loop/loop-engine.md -> Ledger format -> Lifecycle & commit policy).
+# NOTE: trailing slash scopes this to the LEDGER_ROOT dir only -- it must NOT swallow the
+# tracked .claude/loop.config.md file. Do not simplify to a bare `.claude/loop`.
 .claude/loop/
 
 # IDE
