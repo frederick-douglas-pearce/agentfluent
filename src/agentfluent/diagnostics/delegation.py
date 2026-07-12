@@ -42,6 +42,7 @@ except ImportError:  # pragma: no cover — exercised via the install-path test
     pass
 
 from agentfluent.agents.models import is_general_purpose
+from agentfluent.analytics.pricing import MODEL_HAIKU, MODEL_OPUS, MODEL_SONNET
 from agentfluent.diagnostics._clustering import (
     SKLEARN_AVAILABLE,
     SklearnMissingError,
@@ -52,9 +53,6 @@ from agentfluent.diagnostics._clustering import (
     top_tfidf_terms,
 )
 from agentfluent.diagnostics._complexity import (
-    MODEL_HAIKU,
-    MODEL_OPUS,
-    MODEL_SONNET,
     aggregate_cluster_stats,
     classify_complexity,
     recommend_model_for_complexity,
@@ -128,8 +126,10 @@ _PROMPT_BODY_SNIPPET_CHARS = 500
 # tracked in `scripts/calibration/threshold_validation.ipynb` (#140).
 DEFAULT_TOOL_FREQUENCY_THRESHOLD = 0.5
 
-# MODEL_HAIKU/SONNET/OPUS are re-exported from _complexity.py — see #185
-# for the consolidation. Pre-#185 they lived here directly.
+# MODEL_HAIKU/SONNET/OPUS are imported from analytics.pricing (their source
+# since the #545/#252 fold) and re-exported here via __all__ so downstream
+# importers (e.g. parent_workload.py) keep working. Pre-#185 they lived here
+# directly; #185 moved them to _complexity.py; #545 promoted them to pricing.py.
 
 
 @dataclass

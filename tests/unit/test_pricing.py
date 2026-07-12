@@ -209,3 +209,140 @@ class TestGetKnownModels:
         models = get_known_models()
         assert "opus" not in models
         assert "sonnet" not in models
+
+
+# Golden base rates (USD per 1M tokens): input, output, cache_creation_5m, cache_read.
+# These are the pre-migration `_PRICING` values -- the regression lock for the genai-prices
+# swap (#545). COVERAGE PROBE (genai-prices==0.0.71, 2026-07-11): all 8 ids below are
+# covered upstream with base-tier rates equal to these values; the local `_RESIDUAL` is
+# therefore empty. `claude-sonnet-4-5-20250929` is context-tiered upstream (>200K surcharge);
+# the adapter takes the standard (base) tier. If a pin bump changes any value, this test
+# goes red -- that is the intended gate for #82.
+_GOLDEN_RATES: dict[str, tuple[float, float, float, float]] = {
+    "claude-opus-4-8": (5.0, 25.0, 6.25, 0.50),
+    "claude-opus-4-7": (5.0, 25.0, 6.25, 0.50),
+    "claude-opus-4-6": (5.0, 25.0, 6.25, 0.50),
+    "claude-opus-4-5-20251101": (5.0, 25.0, 6.25, 0.50),
+    "claude-sonnet-4-6": (3.0, 15.0, 3.75, 0.30),
+    "claude-sonnet-4-5-20250929": (3.0, 15.0, 3.75, 0.30),
+    "claude-sonnet-4-20250514": (3.0, 15.0, 3.75, 0.30),
+    "claude-haiku-4-5-20251001": (1.0, 5.0, 1.25, 0.10),
+}
+
+
+class TestGoldenRateRegression:
+    """The no-op bar: post-migration rates equal the pre-migration `_PRICING` values."""
+
+    @pytest.mark.parametrize("model,expected", list(_GOLDEN_RATES.items()))
+    def test_rate_equals_pre_migration(
+        self, model: str, expected: tuple[float, float, float, float]
+    ) -> None:
+        pricing = get_pricing(model)
+        assert pricing is not None, f"{model} lost pricing in the migration"
+        got = (
+            pricing.input,
+            pricing.output,
+            pricing.cache_creation_5m,
+            pricing.cache_read,
+        )
+        assert got == expected
+
+    def test_golden_set_is_exactly_the_curated_registry(self) -> None:
+        # Every known model has a golden lock, and no golden id is unknown.
+        assert set(_GOLDEN_RATES) == set(get_known_models())
+
+
+class TestCuratedRegistry:
+    def test_known_models_is_the_curated_eight(self) -> None:
+        assert get_known_models() == sorted(_GOLDEN_RATES)
+
+    def test_upstream_catalog_not_leaked(self) -> None:
+        # genai-prices carries many older ids (claude-2, claude-3-*) -- they must NOT appear.
+        known = get_known_models()
+        assert "claude-2" not in known
+        assert "claude-3-opus-latest" not in known
+        assert all(m.startswith("claude-opus-4") or m.startswith("claude-sonnet-4")
+                   or m.startswith("claude-haiku-4") for m in known)
+
+    @pytest.mark.parametrize("canonical", ["claude-opus-4-7", "claude-sonnet-4-6",
+                                           "claude-haiku-4-5-20251001"])
+    def test_canonical_targets_never_none(self, canonical: str) -> None:
+        # model_routing savings math breaks on a None -- recommendation targets must price.
+        assert get_pricing(canonical) is not None
+
+
+class TestCacheCreation1hNonCollapse:
+    """The 1h dimension (#534) is derived (2x input), never collapsed onto the 5m rate."""
+
+    @pytest.mark.parametrize("model", list(_GOLDEN_RATES))
+    def test_1h_is_2x_input_and_distinct_from_5m(self, model: str) -> None:
+        pricing = get_pricing(model)
+        assert pricing is not None
+        assert pricing.cache_creation_1h == pytest.approx(2.0 * pricing.input)
+        assert pricing.cache_creation_1h != pricing.cache_creation_5m
+
+
+class TestModelConstants:
+    """#252 fold: MODEL_* live in pricing.py; the re-export chain stays green."""
+
+    def test_single_source_across_chain(self) -> None:
+        from agentfluent.analytics import pricing as p
+        from agentfluent.diagnostics import _complexity, delegation
+
+        assert (
+            p.MODEL_OPUS
+            == _complexity.MODEL_OPUS
+            == delegation.MODEL_OPUS
+            == "claude-opus-4-7"
+        )
+        assert (
+            p.MODEL_SONNET
+            == _complexity.MODEL_SONNET
+            == delegation.MODEL_SONNET
+            == "claude-sonnet-4-6"
+        )
+        assert (
+            p.MODEL_HAIKU
+            == _complexity.MODEL_HAIKU
+            == delegation.MODEL_HAIKU
+            == "claude-haiku-4-5"
+        )
+
+    def test_model_opus_intentionally_lags_opus_alias(self) -> None:
+        from agentfluent.analytics.pricing import MODEL_OPUS
+
+        # MODEL_OPUS (routing target) differs from the `opus` default-pricing alias (-> 4-8).
+        assert MODEL_OPUS == "claude-opus-4-7"
+        assert get_pricing("opus") is not None  # alias still resolves (to 4-8)
+        assert get_pricing(MODEL_OPUS) is not None
+
+
+class TestResidualFallback:
+    """The documented local-overlay escape hatch when genai-prices lacks a model.
+
+    ``_RESIDUAL`` is empty at genai-prices==0.0.71 (full upstream coverage), so these
+    tests simulate an upstream miss to lock the fallback contract for a future uncovered
+    model.
+    """
+
+    def test_residual_used_when_upstream_misses(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from agentfluent.analytics import pricing
+
+        sentinel = ModelPricing(
+            input=9.0, output=9.0, cache_creation_5m=9.0, cache_read=9.0
+        )
+        # Known model, but force the upstream lookup to miss and supply a residual entry.
+        monkeypatch.setattr(pricing, "_resolve_rates", lambda ref, timestamp=None: None)
+        monkeypatch.setitem(pricing._RESIDUAL, "claude-opus-4-8", sentinel)
+        assert pricing.get_pricing("claude-opus-4-8") is sentinel
+
+    def test_known_but_uncovered_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from agentfluent.analytics import pricing
+
+        # Known id, no upstream, no residual -> None (degrade gracefully, never crash).
+        monkeypatch.setattr(pricing, "_resolve_rates", lambda ref, timestamp=None: None)
+        assert pricing.get_pricing("claude-opus-4-8") is None
