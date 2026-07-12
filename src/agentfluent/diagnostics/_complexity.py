@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import BaseModel
 
 from agentfluent.agents.models import WRITE_TOOLS
+from agentfluent.analytics.pricing import MODEL_HAIKU, MODEL_OPUS, MODEL_SONNET
 from agentfluent.diagnostics.signals import iter_error_matches
 
 if TYPE_CHECKING:
@@ -28,11 +29,10 @@ if TYPE_CHECKING:
 ComplexityTier = Literal["simple", "moderate", "complex"]
 
 
-# Model recommendation per tier — the one mapping both consumers use.
-# Kept undated to match the pricing module's _ALIASES resolution.
-MODEL_HAIKU = "claude-haiku-4-5"
-MODEL_SONNET = "claude-sonnet-4-6"
-MODEL_OPUS = "claude-opus-4-7"
+# Model recommendation per tier — the one mapping both consumers use. The MODEL_HAIKU/
+# SONNET/OPUS constants are defined in analytics.pricing (promoted there, #252 fold) and
+# imported above; delegation.py / model_routing.py keep importing them from here, so the
+# existing re-export chain stays green.
 
 
 # Complexity thresholds. Initial values per backlog E5-S1 guidance.
