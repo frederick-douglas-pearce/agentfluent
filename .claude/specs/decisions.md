@@ -1163,3 +1163,21 @@ F / retrospective umbrella), #559 (idea-3 + `.claude/` no-milestone convention),
 **Reference:** #590 (S0), epic #589, D049 (S0 chosen over scout-port), D037 (scout cadence; #451 mechanism deferred), D024/D025 (`--since` reuse), D013 (main-session scope); architect review comment on #590; spec `prd-v0.11.md` §4 (S0), §9 (Risk R). Follow-up: flag to PM that the #590 "same surface as #451" AC was under-specified; comment on #451 that S0 resolved its own scheduling independently.
 
 ---
+
+## D051: Distribute the release-loop harness as a Claude Code plugin
+
+**Date:** 2026-07-10
+**Context:** The release-loop harness is battle-tested in AgentFluent (multiple release runs) and already ~90% generic — `SKILL.md` references every project-specific value by parameter name, and `prd-loop-engineering.md` §4.0 isolates those in one Project Parameters table with a §4.4 porting checklist. But the only reuse path today is copy-pasting the skill + the 869-line spec + the guard hook into each repo and hand-editing them, which drifts immediately with no shared upgrade path. Fred wants the same core loop (pm scopes → architect reviews → implement → code-review → human PR signoff) on his other projects.
+
+**Decisions:**
+- **Package the generic engine as a Claude Code plugin**, consumed via a small per-project `loop.config.md`, over a seed/template repo or a copier/cookiecutter template. A plugin is the ecosystem-native mechanism (bundles skill + engine doc + guard hook), gives central updates that propagate (no fork drift), and mirrors the already-working "install once, use everywhere" model of the user-global pm/architect subagents. Confirmed packaging: `.claude-plugin/plugin.json` manifest; root `skills/`/`hooks/`/`commands/`; `${CLAUDE_PLUGIN_ROOT}` for bundled reads (hook + engine doc); `${CLAUDE_PROJECT_DIR}/.claude/loop.config.md` for per-project config; `.claude-plugin/marketplace.json` for distribution via `/plugin marketplace add` + `/plugin install`.
+- **Split the spec first, as a standalone prerequisite gate (#612), decoupled from the plugin epic (#611).** `prd-loop-engineering.md` splits into a generic `loop-engine.md` (control flow, gate/convergence/resume semantics, ledger format) + a per-project `loop.config.md` (§4.0 + §7.2 + §7.3 + §7.1-step-10). Done **in-place in AgentFluent first** and **validated by ≥1–2 real loop iterations with no regression** — that parity result is the explicit go/no-go for building the plugin. The split has standalone value (cleaner live-loop docs, ~40-line config surface) even if the plugin is never built.
+- **The plugin is the Claude-Code-native step that precedes** any Agent SDK / headless graduation (`prd-loop-engineering.md` §13), not a competing path.
+- **Placeholder plugin/marketplace repo:** `frederick-douglas-pearce/loop-harness` (name provisional; confirm before #613 scaffolds).
+- **Excluded from the plugin:** the AgentFluent-specific research pipeline (`anthropic-research`, `candidate-verifier`, `promote-candidates`); loop *semantics* changes (packaging + refactor only); the pm/architect subagents (stay user-global, referenced by config as `SCOPE_AGENT`/`DESIGN_AGENT`).
+
+**Rationale:** A single installable engine + documented config seam gives a real upgrade path (`/plugin` reinstall) instead of N drifting forks — the exact failure mode that pushed pm/architect user-global. Splitting the spec first de-risks the whole bet: the engine/config cut is a shared-interface decision (architect-gated at impl time), and proving it on the live loop before packaging means a wrong cut is caught on one project, not multiplied across the plugin's construction stories. No release milestone — maintainer tooling, no PyPI artifact (#559 precedent).
+
+**Reference:** epic #611; gate #612 (split, validated-first); construction #613–#617; `prd-loop-plugin.md`; source `prd-loop-engineering.md` (§4.0, §4.4, §13), `.claude/skills/release-loop/SKILL.md`, `.claude/hooks/guard_append_only.py`; loop trail #500 / #517 / #559; CI drift-guard `tests/unit/test_loop_skill_drift.py`.
+
+---
