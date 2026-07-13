@@ -15,7 +15,11 @@ trace-specific signal types:
 - `STUCK_PATTERN` — 4+ consecutive identical calls to the same tool.
   Indicates a missing exit condition in the prompt.
 - `RETRY_LOOP` — a `RetrySequence` with `attempts >= 3` that is not
-  `STUCK_PATTERN`. Indicates missing error-recovery guidance.
+  `STUCK_PATTERN` AND whose LEADING call errored. Indicates missing
+  error-recovery guidance. The leading-`is_error` gate (#581) separates
+  genuine error recovery from legitimate paging (an agent reading
+  successive line-ranges — every call `is_error=False` — is not a retry),
+  mirroring PARAMETER_RETRY's first-attempt gate.
 - `TOOL_ERROR_SEQUENCE` — 2+ consecutive `is_error=True` results that
   are not covered by a STUCK or RETRY sequence. Indicates missing
   fallback instructions.
@@ -396,6 +400,19 @@ def _extract_retry_and_stuck(
                 ),
             )
         else:
+            # RETRY_LOOP only counts genuine error recovery, not legitimate
+            # paging (#581): a same-tool run is a retry only if its LEADING
+            # call errored — the same first-attempt gate PARAMETER_RETRY uses
+            # (`_extract_parameter_retries`). A paging run (successive
+            # line-ranges, every call `is_error=False`) is suppressed and,
+            # crucially, left OUT of `covered` (mirrors PARAMETER_RETRY's
+            # return-None-no-cover) so a genuine error sub-run inside a
+            # similarity-grouped sequence can still surface as
+            # TOOL_ERROR_SEQUENCE. STUCK stays ungated: it requires identical
+            # inputs, which drifting paging never matches, and an identical
+            # no-error repeat is a real missing-exit-condition loop.
+            if not calls[0].is_error:
+                continue
             signals.append(
                 _build_retry_signal(
                     agent_type, seq, calls, invocation_id=invocation_id,
