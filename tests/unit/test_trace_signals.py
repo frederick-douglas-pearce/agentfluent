@@ -270,11 +270,77 @@ class TestRetryLoop:
         assert not any(s.signal_type == SignalType.STUCK_PATTERN for s in signals)
 
 
+class TestRetryLoopLeadingErrorGate:
+    """#581: RETRY_LOOP fires only when the run's LEADING call errored, so a
+    legitimate paging run (successive line-ranges, no error) is not counted."""
+
+    def test_paging_run_no_leading_error_does_not_emit_retry(self) -> None:
+        # Agent pages through successive line-ranges of one file — every call
+        # succeeds (is_error=False). This is not error recovery; no RETRY_LOOP.
+        trace = _trace(
+            calls=[
+                _tc(tool="Read", inp="read lines 1-40", res="ok"),
+                _tc(tool="Read", inp="read lines 41-80", res="ok"),
+                _tc(tool="Read", inp="read lines 81-120", res="ok"),
+            ],
+            sequences=[_rs(tool="Read", attempts=3, indices=[0, 1, 2])],
+        )
+        signals = extract_trace_signals(trace)
+        assert not any(s.signal_type == SignalType.RETRY_LOOP for s in signals)
+        # Nothing else should fire either: no errors → no TOOL_ERROR_SEQUENCE.
+        assert not any(
+            s.signal_type == SignalType.TOOL_ERROR_SEQUENCE for s in signals
+        )
+
+    def test_error_recovery_leading_error_emits_retry(self) -> None:
+        # Same similarity-grouped run, but the leading call errored — genuine
+        # error recovery. RETRY_LOOP fires.
+        trace = _trace(
+            calls=[
+                _tc(tool="Read", inp="read foo.py", res="No such file", err=True),
+                _tc(tool="Read", inp="read foo.py", res="No such file", err=True),
+                _tc(tool="Read", inp="read foo.py", res="ok"),
+            ],
+            sequences=[
+                _rs(tool="Read", attempts=3, indices=[0, 1, 2], first_err="No such file"),
+            ],
+        )
+        signals = extract_trace_signals(trace)
+        loops = [s for s in signals if s.signal_type == SignalType.RETRY_LOOP]
+        assert len(loops) == 1
+        assert loops[0].detail["retry_count"] == 3
+
+    def test_suppressed_paging_leaves_error_tail_uncovered(self) -> None:
+        # Mixed run: leading call succeeds (so RETRY is suppressed), but a
+        # genuine error sub-run follows. Because the suppressed sequence is NOT
+        # added to `covered`, the error tail still surfaces as
+        # TOOL_ERROR_SEQUENCE (#581 decision 2).
+        trace = _trace(
+            calls=[
+                _tc(tool="Read", inp="read a 1-40", res="ok"),
+                _tc(tool="Read", inp="read a 41-80", res="boom", err=True),
+                _tc(tool="Read", inp="read a 81-120", res="boom", err=True),
+            ],
+            sequences=[_rs(tool="Read", attempts=3, indices=[0, 1, 2])],
+        )
+        signals = extract_trace_signals(trace)
+        assert not any(s.signal_type == SignalType.RETRY_LOOP for s in signals)
+        errseqs = [
+            s for s in signals if s.signal_type == SignalType.TOOL_ERROR_SEQUENCE
+        ]
+        assert len(errseqs) == 1
+        # Only the uncovered error tail [1, 2], not the leading success.
+        assert errseqs[0].detail["error_count"] == 2
+        assert errseqs[0].detail["start_index"] == 1
+
+
 class TestStuckPattern:
     def test_three_identical_is_retry_not_stuck(self) -> None:
         # attempts=3 is below STUCK threshold (>=4) regardless of identical inputs.
+        # Leading call errors (#581 gate) so the RETRY branch is reached; the
+        # point under test is the STUCK-vs-RETRY threshold, not the gate.
         trace = _trace(
-            calls=[_tc(inp="ls") for _ in range(3)],
+            calls=[_tc(inp="ls", err=(i == 0)) for i in range(3)],
             sequences=[_rs(attempts=3)],
         )
         signals = extract_trace_signals(trace)
@@ -283,6 +349,10 @@ class TestStuckPattern:
         assert SignalType.STUCK_PATTERN not in types
 
     def test_four_identical_is_stuck(self) -> None:
+        # No leading error, yet STUCK still fires: STUCK is intentionally NOT
+        # gated on is_error (#581 decision 1). An identical no-progress repeat
+        # is a missing-exit-condition loop regardless of error; only the RETRY
+        # branch takes the leading-is_error gate.
         trace = _trace(
             calls=[_tc(inp="ls /missing") for _ in range(4)],
             sequences=[_rs(attempts=4)],
@@ -296,9 +366,10 @@ class TestStuckPattern:
 
     def test_four_near_identical_is_retry_not_stuck(self) -> None:
         # One-char drift — passes RETRY's 0.80 similarity but fails STUCK's
-        # exact-match requirement.
+        # exact-match requirement. Leading call errors (#581 gate) so the RETRY
+        # branch is reached; the point under test is the STUCK-vs-RETRY split.
         trace = _trace(
-            calls=[_tc(inp=f"ls /tmp/{i}") for i in range(4)],
+            calls=[_tc(inp=f"ls /tmp/{i}", err=(i == 0)) for i in range(4)],
             sequences=[_rs(attempts=4)],
         )
         signals = extract_trace_signals(trace)
