@@ -62,25 +62,29 @@ If you write your own prompts each session, use CodeFluent. If your prompts live
 
 ## Screenshots
 
+<!-- Image URLs MUST be absolute (raw.githubusercontent.com), not relative (images/*.svg).
+     PyPI renders this README as standalone HTML with no repo base URL, so relative paths
+     break on the PyPI project page (they render fine on GitHub). Keep these absolute. -->
+
 **Execution Analytics** — `agentfluent analyze --project <name> --no-diagnostics`
 
-![Execution Analytics: token usage, Cost by Model with parent vs subagent Origin column, tool frequency, and Agent Invocations tables](images/demo-analyze.svg)
+![Execution Analytics: token usage, Cost by Model with parent vs subagent Origin column, tool frequency, and Agent Invocations tables](https://raw.githubusercontent.com/frederick-douglas-pearce/agentfluent/main/images/demo-analyze.svg)
 
 **Behavior Diagnostics** — `agentfluent analyze --project <name>` (diagnostics on by default)
 
-![Behavior Diagnostics: Diagnostic Signals + Top-N priority fixes summary above the aggregated Recommendations table + Offload Candidates section ranking parent-thread tool-burst clusters by estimated savings](images/demo-diagnostics.svg)
+![Behavior Diagnostics: Diagnostic Signals + Top-N priority fixes summary above the aggregated Recommendations table + Offload Candidates section ranking parent-thread tool-burst clusters by estimated savings](https://raw.githubusercontent.com/frederick-douglas-pearce/agentfluent/main/images/demo-diagnostics.svg)
 
 **Suggested Subagents with copy-paste-ready YAML draft** — `agentfluent analyze --project <name> --verbose`
 
-![Suggested Subagents: medium-confidence cluster + YAML subagent definition ready to save as ~/.claude/agents/<name>.md](images/demo-subagents.svg)
+![Suggested Subagents: medium-confidence cluster + YAML subagent definition ready to save as ~/.claude/agents/<name>.md](https://raw.githubusercontent.com/frederick-douglas-pearce/agentfluent/main/images/demo-subagents.svg)
 
 **Comparison Workflow** — `agentfluent diff baseline.json current.json`
 
-![agentfluent diff output: New / Resolved / Persisting recommendation row classes with severity, count_delta, priority_score_delta, plus token / cost / cache deltas and per-agent invocation deltas](images/demo-diff.svg)
+![agentfluent diff output: New / Resolved / Persisting recommendation row classes with severity, count_delta, priority_score_delta, plus token / cost / cache deltas and per-agent invocation deltas](https://raw.githubusercontent.com/frederick-douglas-pearce/agentfluent/main/images/demo-diff.svg)
 
 **Config Assessment** — `agentfluent config-check`
 
-![Config Assessment: per-agent 0-100 scoring across description, tools, model, prompt dimensions with recommendations](images/demo-config-check.svg)
+![Config Assessment: per-agent 0-100 scoring across description, tools, model, prompt dimensions with recommendations](https://raw.githubusercontent.com/frederick-douglas-pearce/agentfluent/main/images/demo-config-check.svg)
 
 <sub>Screenshots are regenerated from real session data via <code>scripts/generate_readme_screenshots.py</code>.</sub>
 
