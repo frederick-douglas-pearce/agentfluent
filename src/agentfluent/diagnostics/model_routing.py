@@ -27,7 +27,7 @@ delegation-clustering thresholds and is extended by #111's needs.
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
+from collections import Counter, defaultdict
 from typing import TYPE_CHECKING, Literal
 
 from agentfluent.analytics.pricing import compute_cost, get_pricing
@@ -45,7 +45,9 @@ from agentfluent.diagnostics.models import DiagnosticSignal, SignalType
 
 if TYPE_CHECKING:
     from agentfluent.agents.models import AgentInvocation
+    from agentfluent.analytics.pipeline import SessionAnalysis
     from agentfluent.config.models import AgentConfig
+    from agentfluent.core.session import Usage
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +63,7 @@ __all__ = [
     "classify_model_tier",
     "estimate_model_savings",
     "extract_model_routing_signals",
+    "extract_sdk_main_session_signals",
 ]
 
 MismatchType = Literal["overspec", "underspec"]
@@ -84,22 +87,33 @@ def _resolve_current_model(
     group: list[AgentInvocation],
     config: AgentConfig | None,
 ) -> str | None:
-    """Pick the model for an agent_type using `config → trace → None`.
+    """Pick the model for an agent_type: `config → trace → resolved → None`.
 
     The explicit ``AgentConfig.model`` wins when set — it's the
     declaration the user would edit. Fallback to the first linked
     trace's ``model`` field (populated at parse time from the
     subagent's first assistant message), which covers the common case
     where subagents inherit the parent session's model without
-    declaring anything in frontmatter. Returns ``None`` when neither
-    source has a value; downstream skips those agents.
+    declaring anything in frontmatter. Final fallback is the parent
+    tool-result's ``resolved_model`` (#593) — the concrete model the
+    subagent resolved to, read without a cross-file join into the child
+    trace (#112 AC#4). This covers SDK subagents defined in code (no
+    ``.claude/agents/*.md`` config, and sometimes no linked trace).
+    Returns ``None`` when no source has a value; downstream skips those.
+
+    Any linked ``trace.model`` in the group beats ``resolved_model`` —
+    a single pass returns a trace model as soon as one is seen, and
+    otherwise falls back to the first ``resolved_model`` encountered.
     """
     if config and config.model:
         return config.model
+    resolved_fallback: str | None = None
     for inv in group:
         if inv.trace is not None and inv.trace.model:
             return inv.trace.model
-    return None
+        if resolved_fallback is None and inv.resolved_model:
+            resolved_fallback = inv.resolved_model
+    return resolved_fallback
 
 
 def aggregate_agent_stats(
@@ -198,6 +212,7 @@ def _build_mismatch_signal(
     mismatch_type: MismatchType,
     complexity: ComplexityTier,
     recommended_model: str,
+    routing_scope: str = "subagent",
 ) -> DiagnosticSignal:
     # Savings are only meaningful for overspec (cheap recommended model).
     # For underspec, Haiku → Sonnet costs MORE; `max(0.0, ...)` would
@@ -206,10 +221,18 @@ def _build_mismatch_signal(
         savings, current_cost = _compute_savings(stats, recommended_model)
     else:
         savings, current_cost = None, None
-    phrase = (
-        f"complexity '{complexity}' agent '{stats.agent_type}' runs on "
-        f"{stats.current_model} — consider {recommended_model}"
-    )
+    if routing_scope == "main_session":
+        # ``stats.agent_type`` already reads "SDK main [<model>]" — keep the
+        # phrase focused on the configured main-session model surface.
+        phrase = (
+            f"SDK main session (configured {stats.current_model}) runs "
+            f"'{complexity}'-complexity work — consider {recommended_model}"
+        )
+    else:
+        phrase = (
+            f"complexity '{complexity}' agent '{stats.agent_type}' runs on "
+            f"{stats.current_model} — consider {recommended_model}"
+        )
     message = (
         f"Overspec'd model: {phrase}." if mismatch_type == "overspec"
         else f"Underspec'd model: {phrase}."
@@ -228,13 +251,17 @@ def _build_mismatch_signal(
             "mean_tool_calls": stats.mean_tool_calls,
             "mean_tokens": stats.mean_tokens,
             "error_rate": stats.error_rate,
+            "routing_scope": routing_scope,
             SAVINGS_USD_KEY: savings,
             "current_cost_usd": current_cost,
         },
     )
 
 
-def _detect_mismatch(stats: AgentStats) -> DiagnosticSignal | None:
+def _detect_mismatch(
+    stats: AgentStats,
+    routing_scope: str = "subagent",
+) -> DiagnosticSignal | None:
     """Emit a MODEL_MISMATCH signal when declared tier is wrong for complexity.
 
     Overspec: simple task on moderate/complex model. Always flagged.
@@ -261,6 +288,7 @@ def _detect_mismatch(stats: AgentStats) -> DiagnosticSignal | None:
         if recommended is not None:
             return _build_mismatch_signal(
                 stats, "overspec", complexity, recommended_model=recommended,
+                routing_scope=routing_scope,
             )
     if (
         complexity == "complex"
@@ -271,6 +299,7 @@ def _detect_mismatch(stats: AgentStats) -> DiagnosticSignal | None:
         if recommended is not None:
             return _build_mismatch_signal(
                 stats, "underspec", complexity, recommended_model=recommended,
+                routing_scope=routing_scope,
             )
     return None
 
@@ -292,6 +321,120 @@ def extract_model_routing_signals(
     signals: list[DiagnosticSignal] = []
     for stats in stats_by_type.values():
         signal = _detect_mismatch(stats)
+        if signal is not None:
+            signals.append(signal)
+    return signals
+
+
+# ``<synthetic>`` is Claude Code's ghost-response model marker (zero-usage
+# filler with no API round-trip, #507). Excluded from main-session turns so
+# it never inflates the turn count or dilutes the per-turn token mean.
+_SYNTHETIC_MODEL = "<synthetic>"
+
+
+def _turn_work_tokens(usage: Usage) -> int:
+    """Per-turn "new work" tokens: ``input + cache_creation + output``.
+
+    All three are new processing this turn — uncached input, input written to
+    the cache for the first time (full-price, billed 1.25×), and generation.
+    ``cache_read_input_tokens`` is deliberately EXCLUDED: it is previously-
+    processed context re-fed from cache (billed 0.1×), not new work. That
+    exclusion is load-bearing for main sessions specifically — each turn
+    re-reads the entire accumulated context, so cache reads grow unboundedly
+    over a session and would trip the ``_COMPLEX_MIN_TOKENS`` threshold on
+    every turn, masking overspec. Cache *creation* has no such pathology
+    (mostly the turn-1 prompt write, then small deltas) and is genuine input
+    processing, so it counts.
+    """
+    return (
+        usage.input_tokens
+        + usage.cache_creation_input_tokens
+        + usage.output_tokens
+    )
+
+
+def _build_main_session_stats(session: SessionAnalysis) -> AgentStats | None:
+    """Synthesize an ``AgentStats`` for an SDK main session's own turns (#112).
+
+    The main session is not an ``AgentInvocation``; its "current model" is the
+    configured ``ClaudeAgentOptions.model`` surfaced on each main-thread
+    assistant message's ``message.model`` (findings §3). Metrics use a
+    **per-turn** unit, never whole-session sums: the complexity thresholds
+    (``_COMPLEX_MIN_TOKENS`` etc.) were tuned on per-invocation subagent
+    figures, so summing a whole session would push every main session to
+    ``complex`` and the primary overspec story would never fire (architect
+    review Q2/C3). ``invocation_count`` is the main session's model-turn count,
+    which the ≥3 gate in ``_detect_mismatch`` reads (architect Q5). Per-turn
+    tokens use ``_turn_work_tokens`` (see its note on the cache-read exclusion).
+    Returns ``None`` when the session has no non-synthetic assistant turn
+    carrying a model.
+    """
+    turns = [
+        m
+        for m in session.messages
+        if m.type == "assistant" and m.model and m.model != _SYNTHETIC_MODEL
+    ]
+    if not turns:
+        return None
+    # Configured main-session model. Real SDK main sessions are homogeneous
+    # (findings §3), so the mode is the configured ``ClaudeAgentOptions.model``;
+    # ``most_common`` is robust to a stray divergent line without asserting it.
+    current_model = Counter(m.model for m in turns if m.model).most_common(1)[0][0]
+
+    per_turn_tokens = [
+        _turn_work_tokens(m.usage) for m in turns if m.usage is not None
+    ]
+    per_turn_tool_calls = [len(m.tool_use_blocks) for m in turns]
+    total_tool_calls = sum(per_turn_tool_calls)
+    # Main-thread tool errors: ``is_error`` tool_result blocks over total tool
+    # calls. Best-effort — feeds only the underspec gate (overspec, the primary
+    # story, doesn't read error_rate).
+    error_count = sum(
+        1
+        for m in session.messages
+        for b in m.content_blocks
+        if b.type == "tool_result" and b.is_error
+    )
+    error_rate = error_count / total_tool_calls if total_tool_calls else 0.0
+
+    return AgentStats(
+        agent_type=f"SDK main [{current_model}]",
+        invocation_count=len(turns),
+        mean_tool_calls=(
+            sum(per_turn_tool_calls) / len(per_turn_tool_calls)
+            if per_turn_tool_calls
+            else 0.0
+        ),
+        mean_tokens=(
+            sum(per_turn_tokens) / len(per_turn_tokens) if per_turn_tokens else 0.0
+        ),
+        error_rate=error_rate,
+        has_write_tools=False,
+        current_model=current_model,
+    )
+
+
+def extract_sdk_main_session_signals(
+    sessions: list[SessionAnalysis],
+) -> list[DiagnosticSignal]:
+    """Emit MODEL_MISMATCH signals for Agent SDK **main** sessions (#112).
+
+    Gated to ``session_class == "sdk"`` — Claude Code interactive (``"cli"``)
+    and indeterminate (``"unknown"``) main sessions are skipped, honoring the
+    D013 boundary (AC#7): a human-driven main session is CodeFluent's scope,
+    not a configured agent. Each qualifying session contributes at most one
+    signal, scoped ``routing_scope="main_session"`` and keyed per configured
+    model (via ``agent_type="SDK main [<model>]"``) so the aggregator merges
+    same-model sessions but never blends distinct configured models (C2).
+    """
+    signals: list[DiagnosticSignal] = []
+    for session in sessions:
+        if session.session_class != "sdk":
+            continue
+        stats = _build_main_session_stats(session)
+        if stats is None:
+            continue
+        signal = _detect_mismatch(stats, routing_scope="main_session")
         if signal is not None:
             signals.append(signal)
     return signals

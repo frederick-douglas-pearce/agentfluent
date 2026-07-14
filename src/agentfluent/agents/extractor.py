@@ -44,6 +44,7 @@ def extract_agent_invocations(messages: list[SessionMessage]) -> list[AgentInvoc
             tool_uses_count = None
             duration_ms = None
             agent_id = None
+            resolved_model = None
             tool_stats = None
 
             if container is not None and container.metadata is not None:
@@ -51,6 +52,7 @@ def extract_agent_invocations(messages: list[SessionMessage]) -> list[AgentInvoc
                 tool_uses_count = container.metadata.tool_uses
                 duration_ms = container.metadata.duration_ms
                 agent_id = container.metadata.agent_id
+                resolved_model = container.metadata.resolved_model
                 tool_stats = container.metadata.tool_stats
 
             invocations.append(
@@ -63,6 +65,7 @@ def extract_agent_invocations(messages: list[SessionMessage]) -> list[AgentInvoc
                     tool_uses=tool_uses_count,
                     duration_ms=duration_ms,
                     agent_id=agent_id,
+                    resolved_model=resolved_model,
                     tool_stats=tool_stats,
                     output_text=output_text,
                 )

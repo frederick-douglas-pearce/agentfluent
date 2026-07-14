@@ -645,12 +645,23 @@ class ModelRoutingRule:
         complexity = str(detail.get("complexity_tier", "moderate"))
         invocation_count = detail.get("invocation_count", 0)
         savings = detail.get(SAVINGS_USD_KEY)
+        # Main-vs-subagent origin (#112). Copied onto the recommendation as
+        # the explicit discriminator JSON consumers read (AC#6); also selects
+        # the config surface named in the action.
+        routing_scope = str(detail.get("routing_scope", "subagent"))
+        is_main_session = routing_scope == "main_session"
 
         observation = signal.message
-        reason = (
-            f"Observed complexity tier is '{complexity}' but the agent is "
-            f"configured with {current_model}."
-        )
+        if is_main_session:
+            reason = (
+                f"Observed main-session complexity tier is '{complexity}' but "
+                f"the SDK main session runs on {current_model}."
+            )
+        else:
+            reason = (
+                f"Observed complexity tier is '{complexity}' but the agent is "
+                f"configured with {current_model}."
+            )
 
         if rec := _check_builtin(self, signal, reason):
             return rec
@@ -661,7 +672,14 @@ class ModelRoutingRule:
                 f"(estimated savings: ${savings:.2f} across "
                 f"{invocation_count} invocations)",
             )
-        if config:
+        if is_main_session:
+            # No ``.claude/agents/*.md`` for a main session — the surface is
+            # the SDK options object the developer sets in code.
+            action_parts.append(
+                "— set the `model` field in your `ClaudeAgentOptions`.",
+            )
+            action = " ".join(action_parts)
+        elif config:
             action_parts.append(f"— edit the `model:` field in {_relpath(config.file_path)}.")
             action = " ".join(action_parts)
         else:
@@ -678,6 +696,7 @@ class ModelRoutingRule:
             invocation_id=signal.invocation_id,
             config_file=str(config.file_path) if config else "",
             signal_types=[signal.signal_type],
+            routing_scope=routing_scope,
         )
 
 

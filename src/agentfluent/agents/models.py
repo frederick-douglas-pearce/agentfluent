@@ -67,6 +67,14 @@ class AgentInvocation(BaseModel):
     tool_uses: int | None = None
     duration_ms: int | None = None
     agent_id: str | None = None
+    resolved_model: str | None = None
+    """The concrete model this subagent resolved to, read from the parent
+    tool-result's ``toolUseResult.resolvedModel`` (#593). Lets model-routing
+    verify a subagent's model without a cross-file join into the child trace
+    (#112 AC#4) — it's the authoritative source when neither an
+    ``AgentConfig.model`` nor a linked ``trace.model`` is available (e.g. an
+    SDK subagent defined in code, not in ``.claude/agents/*.md``). ``None``
+    when the result carried no ``resolvedModel``."""
     tool_stats: dict[str, int] | None = None
     """Per-tool invocation counts from ``toolUseResult.toolStats`` (keyed
     by tool name). ``None`` when the result carried no ``toolStats``.

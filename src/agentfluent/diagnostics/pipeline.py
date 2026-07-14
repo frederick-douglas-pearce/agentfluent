@@ -54,6 +54,7 @@ from agentfluent.diagnostics.mcp_assessment import (
 from agentfluent.diagnostics.model_routing import (
     SAVINGS_USD_KEY,
     extract_model_routing_signals,
+    extract_sdk_main_session_signals,
 )
 from agentfluent.diagnostics.models import (
     TRACE_SIGNAL_TYPES,
@@ -258,6 +259,14 @@ def run_diagnostics(
     # Aggregate-level signals (model-routing) use the same config lookup
     # the correlator will read from; fold them in before correlation.
     signals.extend(extract_model_routing_signals(invocations, configs_by_name))
+
+    # SDK main-session model-routing (#112). Intrinsically per-session — it
+    # reads each session's ``session_class`` + main-thread ``message.model``,
+    # so it drives off the ``sessions`` param, not the flattened invocation
+    # stream (architect C1). The CLI now passes ``sessions`` unconditionally;
+    # skipped for programmatic callers that don't supply it.
+    if sessions is not None:
+        signals.extend(extract_sdk_main_session_signals(sessions))
 
     # Tool-orchestration-chain signals (Tier A, metadata-only) — same
     # aggregate-level phase as model-routing; uses only invocation

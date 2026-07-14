@@ -529,6 +529,7 @@ def _model_mismatch_signal(
     recommended_model: str = "claude-haiku-4-5",
     savings: float | None = 12.50,
     agent_type: str = "pm",
+    routing_scope: str = "subagent",
 ) -> DiagnosticSignal:
     return _signal(
         signal_type=SignalType.MODEL_MISMATCH,
@@ -543,6 +544,7 @@ def _model_mismatch_signal(
             "mean_tool_calls": 2.5,
             "mean_tokens": 500.0,
             "error_rate": 0.0,
+            "routing_scope": routing_scope,
             "estimated_savings_usd": savings,
             "current_cost_usd": 20.0 if savings is not None else None,
         },
@@ -559,6 +561,29 @@ class TestModelRoutingCorrelation:
         assert recs[0].target == "model"
         assert "12.50" in recs[0].action
         assert "pm.md" in recs[0].config_file
+
+    def test_subagent_scope_is_default_on_recommendation(self) -> None:
+        recs = correlate([_model_mismatch_signal()], {"pm": _config()})
+        assert recs[0].routing_scope == "subagent"
+
+    def test_main_session_scope_targets_claude_agent_options(self) -> None:
+        # #112: a main_session-scoped signal (no config) surfaces the
+        # discriminator on the rec and names the ClaudeAgentOptions surface,
+        # not a .claude/agents `model:` field.
+        signals = [
+            _model_mismatch_signal(
+                agent_type="SDK main [claude-sonnet-4-6]",
+                current_model="claude-sonnet-4-6",
+                routing_scope="main_session",
+            ),
+        ]
+        recs = correlate(signals, configs=None)
+        assert len(recs) == 1
+        assert recs[0].target == "model"
+        assert recs[0].routing_scope == "main_session"
+        assert "ClaudeAgentOptions" in recs[0].action
+        assert "main-session complexity" in recs[0].reason
+        assert recs[0].config_file == ""
 
     def test_overspec_without_pricing_omits_savings_phrase(self) -> None:
         signals = [_model_mismatch_signal(savings=None)]
