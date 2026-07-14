@@ -182,6 +182,15 @@ class DiagnosticRecommendation(BaseModel):
     use a different action template. Denormalized onto the model so
     JSON consumers don't need to re-derive via ``is_builtin_agent()``."""
 
+    routing_scope: str = "subagent"
+    """For ``target="model"`` recommendations, which model surface to
+    change: ``"subagent"`` (the default — a subagent's ``model:`` config)
+    or ``"main_session"`` (an Agent SDK main session's
+    ``ClaudeAgentOptions.model``, #112). This is the explicit main-vs-subagent
+    origin discriminator (#112 AC#6) that JSON consumers read instead of
+    parsing the prose action; it stays ``"subagent"`` for every non-model
+    recommendation."""
+
 
 class AggregatedRecommendation(BaseModel):
     """Aggregate of one or more ``DiagnosticRecommendation`` instances that

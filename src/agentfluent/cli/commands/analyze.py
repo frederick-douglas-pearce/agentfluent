@@ -549,7 +549,11 @@ def analyze(
             project_dir=project_disk_path,
             parent_messages=all_messages,
             session_count=result.session_count,
-            sessions=result.sessions if git else None,
+            # Passed unconditionally (#112): the SDK main-session model-routing
+            # path is per-session and needs every session's class + messages.
+            # The git-signals / Tier-3 blocks keep their own ``git_repo`` /
+            # ``github_repo`` gates, so this doesn't trigger them.
+            sessions=result.sessions,
             git_repo=project_disk_path if git else None,
             github_repo=github_repo,
             github_no_cache=github_no_cache,

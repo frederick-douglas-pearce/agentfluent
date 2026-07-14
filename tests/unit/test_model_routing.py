@@ -16,6 +16,7 @@ from agentfluent.diagnostics.delegation import (
 from agentfluent.diagnostics.model_routing import (
     AgentStats,
     _compute_savings,
+    _resolve_current_model,
     aggregate_agent_stats,
     classify_complexity,
     classify_model_tier,
@@ -34,6 +35,7 @@ def _inv(
     tool_uses: int | None = 3,
     output_text: str = "",
     trace: SubagentTrace | None = None,
+    resolved_model: str | None = None,
 ) -> AgentInvocation:
     return AgentInvocation(
         agent_type=agent_type,
@@ -44,6 +46,7 @@ def _inv(
         tool_uses=tool_uses,
         output_text=output_text,
         trace=trace,
+        resolved_model=resolved_model,
     )
 
 
@@ -188,6 +191,93 @@ class TestModelPrecedence:
             for _ in range(5)
         ]
         assert extract_model_routing_signals(invs, configs=None) == []
+
+
+class TestResolvedModelPrecedence:
+    """`resolved_model` fallback (#112 AC#4): `config → trace → resolved
+    → None`, verified without a cross-file join into the child trace.
+
+    The load-bearing case is the single-pass held-fallback in
+    ``_resolve_current_model``: any linked ``trace.model`` in the group
+    must beat any ``resolved_model``, EVEN when the trace lives on a
+    LATER invocation than an earlier ``resolved_model`` — the pass holds
+    the resolved value as a fallback and only returns it if no trace
+    surfaces.
+    """
+
+    def _trace_with_model(self, model: str) -> SubagentTrace:
+        return SubagentTrace(
+            agent_id="t", agent_type="unknown",
+            delegation_prompt="", model=model,
+        )
+
+    def test_resolved_model_used_when_no_config_no_trace(self) -> None:
+        # SDK subagent: no .claude/agents config, no linked trace — only
+        # the parent tool-result's resolved_model. It becomes current_model.
+        assert (
+            _resolve_current_model(
+                [_inv(agent_type="pm", resolved_model=MODEL_OPUS)],
+                config=None,
+            )
+            == MODEL_OPUS
+        )
+
+    def test_config_wins_over_resolved(self) -> None:
+        assert (
+            _resolve_current_model(
+                [_inv(agent_type="pm", resolved_model=MODEL_HAIKU)],
+                config=_config(model=MODEL_OPUS),
+            )
+            == MODEL_OPUS
+        )
+
+    def test_trace_wins_over_resolved_same_inv(self) -> None:
+        inv = _inv(
+            agent_type="pm",
+            trace=self._trace_with_model(MODEL_SONNET),
+            resolved_model=MODEL_HAIKU,
+        )
+        assert _resolve_current_model([inv], config=None) == MODEL_SONNET
+
+    def test_trace_on_later_inv_beats_resolved_on_earlier_inv(self) -> None:
+        # The dicey held-fallback case: inv[0] has ONLY resolved_model,
+        # inv[1] has a trace.model. The trace must win despite appearing
+        # after the resolved value in iteration order.
+        invs = [
+            _inv(agent_type="pm", resolved_model=MODEL_HAIKU),
+            _inv(agent_type="pm", trace=self._trace_with_model(MODEL_SONNET)),
+        ]
+        assert _resolve_current_model(invs, config=None) == MODEL_SONNET
+
+    def test_first_resolved_used_when_multiple_and_no_trace(self) -> None:
+        invs = [
+            _inv(agent_type="pm", resolved_model=MODEL_HAIKU),
+            _inv(agent_type="pm", resolved_model=MODEL_OPUS),
+        ]
+        assert _resolve_current_model(invs, config=None) == MODEL_HAIKU
+
+    def test_none_when_no_source(self) -> None:
+        assert (
+            _resolve_current_model([_inv(agent_type="pm")], config=None) is None
+        )
+
+    def test_resolved_model_drives_signal_end_to_end(self) -> None:
+        # No config, no trace — resolved_model=Opus on a simple task
+        # yields an overspec signal, proving resolved_model flows through
+        # aggregation → detection without a child-trace join.
+        invs = [
+            _inv(
+                agent_type="pm", resolved_model=MODEL_OPUS,
+                tool_uses=2, total_tokens=500,
+            )
+            for _ in range(5)
+        ]
+        signals = extract_model_routing_signals(invs, configs=None)
+        assert len(signals) == 1
+        assert signals[0].detail["current_model"] == MODEL_OPUS
+        assert signals[0].detail["mismatch_type"] == "overspec"
+        # Subagent origin is the default scope.
+        assert signals[0].detail["routing_scope"] == "subagent"
 
 
 class TestClassifyComplexity:

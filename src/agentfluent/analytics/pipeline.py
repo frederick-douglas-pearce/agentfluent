@@ -36,7 +36,11 @@ from agentfluent.analytics.tools import (
 from agentfluent.config.models import EnvironmentWarning
 from agentfluent.core.filtering import WindowMetadata
 from agentfluent.core.parser import parse_session
-from agentfluent.core.session import SessionMessage
+from agentfluent.core.session import (
+    SessionClass,
+    SessionMessage,
+    classify_session,
+)
 from agentfluent.diagnostics.mcp_assessment import (
     McpToolCall,
     extract_mcp_calls_from_messages,
@@ -57,6 +61,14 @@ class SessionAnalysis(BaseModel):
     token_metrics: TokenMetrics
     tool_metrics: ToolMetrics
     agent_metrics: AgentMetrics
+    session_class: SessionClass = "unknown"
+    """How this session was produced: ``"sdk"`` (Agent SDK), ``"cli"``
+    (Claude Code interactive), or ``"unknown"`` — from ``classify_session``
+    on the parsed messages (#591 primitive). Persisted here (per-session,
+    never at ``AnalysisResult`` level, since a run mixes co-located SDK and
+    CLI sessions) so downstream diagnostics gate on it without re-deriving:
+    #112's SDK main-session model-routing reads ``"sdk"``, and #592's
+    analyze SDK badge rides the same field."""
     invocations: list[AgentInvocation] = Field(default_factory=list)
     mcp_tool_calls: list[McpToolCall] = Field(default_factory=list)
     """Parent-session MCP tool calls (those made directly in the main
@@ -229,6 +241,7 @@ def analyze_session(
         token_metrics=token_metrics,
         tool_metrics=tool_metrics,
         agent_metrics=agent_metrics,
+        session_class=classify_session(messages),
         invocations=invocations,
         mcp_tool_calls=mcp_tool_calls,
         messages=messages,
