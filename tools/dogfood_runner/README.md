@@ -51,10 +51,14 @@ errored (alert the maintainer the tool is broken), `0` otherwise. A detected
 regression is a *successful* dogfood that found something — it is reported, not
 treated as a runner failure.
 
-The Haiku subagents synthesize the narrative only. Running a distinct parent /
-child model is deliberate: it emits the model-divergence and nested-trace bytes
-that the S5 trace linker (#595) and #112's model-routing signal consume, so the
-runner dogfoods the exact v0.11 surfaces.
+The Haiku subagents synthesize the narrative only. Delegating to a subagent for
+clean context and a narrower task scope is deliberate: it always emits the
+nested-trace bytes — and, on the days rotation puts a non-Haiku model on the
+parent, the parent≠child model-divergence bytes — that the S5 trace linker (#595)
+and #112's model-routing signal consume, so the runner dogfoods the exact v0.11
+surfaces. (A Haiku-parent day runs parent and subagent as separate instances of
+the same tier: still a real delegation trace, just no model divergence — itself a
+useful dogfood data point.)
 
 ## Main-model rotation (#636)
 
