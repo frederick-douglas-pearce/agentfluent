@@ -16,6 +16,7 @@ in ``agentfluent.core.paths``::
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -33,10 +34,18 @@ __all__ = [
     "latest_snapshot",
     "new_snapshot_path",
     "prune_snapshots",
+    "record_run",
+    "runs_manifest_path",
     "slug_dir",
 ]
 
 DOGFOOD_SUBDIR = "dogfood"
+
+# Append-only manifest mapping each synthesis run to the main-model variant it
+# used (#636 corpus-diversification discoverability). One JSON object per line at
+# the dogfood state root, a sibling of the per-slug snapshot dirs — same
+# out-of-tree, gitignored-by-location tree, never committed.
+RUNS_MANIFEST = "runs.jsonl"
 
 SNAPSHOT_PREFIX = "snapshot-"
 SNAPSHOT_SUFFIX = ".json"
@@ -55,6 +64,42 @@ _SAFE_SLUG_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 def dogfood_state_dir() -> Path:
     """Root of the dogfood snapshot tree (``<agentfluent-state>/dogfood``)."""
     return agentfluent_state_dir() / DOGFOOD_SUBDIR
+
+
+def runs_manifest_path(*, root: Path | None = None) -> Path:
+    """Path to the append-only run manifest (``<dogfood-state>/runs.jsonl``)."""
+    return (root or dogfood_state_dir()) / RUNS_MANIFEST
+
+
+def record_run(
+    *,
+    runstamp: str,
+    main_model: str,
+    subagent_model: str,
+    session_id: str,
+    session_jsonl: str,
+    root: Path | None = None,
+) -> Path:
+    """Append one run record (a single JSON line) to the run manifest.
+
+    Kept as pure filesystem I/O with NO ``claude_agent_sdk`` dependency so it stays
+    importable by the SDK-free gate layer (``cli_runner`` imports this module at
+    load). The caller (``runner``, already SDK-bound) resolves ``session_jsonl`` via
+    ``project_key_for_directory`` and passes it in. Records the *intended*
+    ``main_model`` — the map a #112 intended-vs-resolved cross-check needs.
+    """
+    path = runs_manifest_path(root=root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "runstamp": runstamp,
+        "main_model": main_model,
+        "subagent_model": subagent_model,
+        "session_id": session_id,
+        "session_jsonl": session_jsonl,
+    }
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record) + "\n")
+    return path
 
 
 def slug_dir(slug: str, *, root: Path | None = None) -> Path:

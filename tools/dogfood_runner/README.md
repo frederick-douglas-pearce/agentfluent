@@ -51,10 +51,35 @@ errored (alert the maintainer the tool is broken), `0` otherwise. A detected
 regression is a *successful* dogfood that found something — it is reported, not
 treated as a runner failure.
 
-The Haiku subagents synthesize the narrative only. Running parent-Opus /
-child-Haiku is deliberate: it emits the model-divergence and nested-trace bytes
-that the S5 trace linker (#595) and #112's model-routing signal consume, so the
-runner dogfoods the exact v0.11 surfaces.
+The Haiku subagents synthesize the narrative only. Delegating to a subagent for
+clean context and a narrower task scope is deliberate: it always emits the
+nested-trace bytes — and, on the days rotation puts a non-Haiku model on the
+parent, the parent≠child model-divergence bytes — that the S5 trace linker (#595)
+and #112's model-routing signal consume, so the runner dogfoods the exact v0.11
+surfaces. (A Haiku-parent day runs parent and subagent as separate instances of
+the same tier: still a real delegation trace, just no model divergence — itself a
+useful dogfood data point.)
+
+## Main-model rotation (#636)
+
+Every run otherwise sits at one point in the model dimension, so the corpus never
+tells us how the diagnostics behave across models. The **synthesis parent model
+rotates** across `MAIN_MODELS` (`claude-opus-4-8` → `claude-sonnet-4-6` →
+`claude-haiku-4-5`) by run **date** — `date.toordinal() % 3` — so consecutive
+daily cron runs cycle the tiers. The rotation is keyed off the date (not a
+persistent counter) so a session's main model is reproducible from its own
+timestamp (the map #112's intended-vs-resolved check wants) and a missed cron day
+can't corrupt a counter. The subagent stays Haiku (this is a main-model-only axis;
+structural diversity — turns, delegations — is #637).
+
+- Pin one tier for an ad-hoc run: `--main-model claude-sonnet-4-6` (or
+  `DOGFOOD_MAIN_MODEL` for the cron). Unset → rotation.
+- **Discoverability:** each synthesis run appends a line to a run manifest at
+  `$XDG_STATE_HOME/agentfluent/dogfood/runs.jsonl` —
+  `{runstamp, main_model, subagent_model, session_id, session_jsonl}` — mapping
+  each corpus session to the main-model variant it ran under. Same out-of-tree,
+  never-committed state tree as the snapshots. The write is **best-effort**: a
+  missing `session_id` or an I/O error is logged, never allowed to flip the gate.
 
 ## Running it
 
@@ -131,6 +156,12 @@ of S0.
 - **Zero slugs is surfaced, not red.** An empty corpus is legitimate, so it stays
   exit 0 — but the report prints a `WARNING` so a misconfigured corpus path under
   cron is visible in `cron.log` rather than passing as a clean run.
+- **Model rotation makes rotation-boundary `diff` findings expected.** The
+  synthesis runs with `cwd=REPO_DIR`, so its own sessions feed the agentfluent
+  slug's next window; when the parent model rotates day-over-day, that slug's cost
+  profile shifts and `diff` surfaces a benign "regression" at each boundary. This
+  is **not** red (exit 3 is a finding, excluded from `is_red`) — it's an expected
+  artifact of diversifying the corpus, not a tool malfunction.
 
 ## Layout
 

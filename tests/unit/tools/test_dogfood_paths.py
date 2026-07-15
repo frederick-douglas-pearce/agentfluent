@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -68,3 +69,58 @@ def test_prune_snapshots_never_wipes_below_one(tmp_path: Path) -> None:
     deleted = paths.prune_snapshots(slug, keep=0, root=tmp_path)
     assert deleted == []
     assert paths.latest_snapshot(slug, root=tmp_path) is not None
+
+
+def test_runs_manifest_path_at_state_root(tmp_path: Path) -> None:
+    assert paths.runs_manifest_path(root=tmp_path) == tmp_path / "runs.jsonl"
+
+
+def test_record_run_appends_one_json_line(tmp_path: Path) -> None:
+    path = paths.record_run(
+        runstamp="20260715T120000Z",
+        main_model="claude-opus-4-8",
+        subagent_model="claude-haiku-4-5",
+        session_id="sess-1",
+        session_jsonl="/corpus/sess-1.jsonl",
+        root=tmp_path,
+    )
+    assert path == tmp_path / "runs.jsonl"
+    record = json.loads(path.read_text().strip())
+    assert record == {
+        "runstamp": "20260715T120000Z",
+        "main_model": "claude-opus-4-8",
+        "subagent_model": "claude-haiku-4-5",
+        "session_id": "sess-1",
+        "session_jsonl": "/corpus/sess-1.jsonl",
+    }
+
+
+def test_record_run_appends_across_calls(tmp_path: Path) -> None:
+    for i, model in enumerate(("claude-opus-4-8", "claude-sonnet-4-6")):
+        paths.record_run(
+            runstamp=f"2026071{i}T120000Z",
+            main_model=model,
+            subagent_model="claude-haiku-4-5",
+            session_id=f"sess-{i}",
+            session_jsonl=f"/corpus/sess-{i}.jsonl",
+            root=tmp_path,
+        )
+    lines = (tmp_path / "runs.jsonl").read_text().splitlines()
+    assert len(lines) == 2
+    assert [json.loads(line)["main_model"] for line in lines] == [
+        "claude-opus-4-8",
+        "claude-sonnet-4-6",
+    ]
+
+
+def test_record_run_creates_state_root_if_absent(tmp_path: Path) -> None:
+    root = tmp_path / "nonexistent" / "dogfood"
+    paths.record_run(
+        runstamp="20260715T120000Z",
+        main_model="claude-haiku-4-5",
+        subagent_model="claude-haiku-4-5",
+        session_id="s",
+        session_jsonl="/c/s.jsonl",
+        root=root,
+    )
+    assert (root / "runs.jsonl").is_file()

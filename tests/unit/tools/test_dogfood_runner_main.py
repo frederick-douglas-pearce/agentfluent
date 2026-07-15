@@ -35,7 +35,7 @@ def test_main_exits_one_on_red_report(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_main_no_synthesis_never_imports_sdk(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(runner, "run_gate", lambda *a, **k: _healthy())
 
-    def _boom(_report: GateReport) -> str:
+    def _boom(_report: GateReport, _model: str) -> str:
         raise AssertionError("synthesize must not be called under --no-synthesis")
 
     monkeypatch.setattr(runner, "synthesize", _boom)
@@ -45,9 +45,12 @@ def test_main_no_synthesis_never_imports_sdk(monkeypatch: pytest.MonkeyPatch) ->
 def test_main_synthesis_failure_never_flips_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(runner, "run_gate", lambda *a, **k: _healthy())
 
-    async def _boom(_report: GateReport) -> str:
+    async def _boom(_report: GateReport, _model: str) -> tuple[str, str | None]:
         raise RuntimeError("SDK not installed / auth missing")
 
     monkeypatch.setattr(runner, "synthesize", _boom)
+    # A synthesis failure leaves session_id None; recording must also stay
+    # best-effort and never flip the gate.
+    monkeypatch.setattr(runner, "_record_run_best_effort", lambda *a, **k: None)
     # Synthesis blows up, but the gate was green → exit stays 0 (best-effort).
     assert runner.main([]) == 0

@@ -11,13 +11,16 @@ Two layers, deliberately separated (architect review, #590):
 1. **The gate** (:func:`tools.dogfood_runner.cli_runner.run_gate`) — deterministic,
    drives the real ``agentfluent`` CLI, owns pass/fail by reading exit codes. Runs
    with or without the ``research`` group; ``--no-synthesis`` stops here.
-2. **Narrative synthesis** — an Agent SDK ``query()`` (parent Opus) fans out one
-   Haiku subagent per slug to summarize that slug's snapshot, and the parent
-   stitches a report. Best-effort: a synthesis failure is logged but NEVER flips
-   the gate (the gate is about analysis correctness, not the narrative). The
-   parent-Opus / child-Haiku split is intentional — it emits the model-divergence
-   and nested-trace bytes that S5 (#595) and #112 will consume, so the runner
-   dogfoods the exact v0.11 surfaces.
+2. **Narrative synthesis** — an Agent SDK ``query()`` (a rotated parent model)
+   fans out one Haiku subagent per slug to summarize that slug's snapshot, and the
+   parent stitches a report. Best-effort: a synthesis failure is logged but NEVER
+   flips the gate (the gate is about analysis correctness, not the narrative). The
+   parent/child model split is intentional — it emits the model-divergence and
+   nested-trace bytes that S5 (#595) and #112 will consume, so the runner dogfoods
+   the exact v0.11 surfaces. The parent model **rotates** across
+   :data:`MAIN_MODELS` by run date (#636), diversifying the corpus's model
+   dimension; each run is recorded in the out-of-tree run manifest (``paths``) so
+   sessions are discoverable by their main-model variant.
 
 ``claude_agent_sdk`` is imported lazily inside :func:`synthesize` so this module
 imports (and the gate runs) without the ``research`` dependency-group installed.
@@ -29,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -41,6 +45,7 @@ from tools.dogfood_runner.cli_runner import (
     render_gate_report,
     run_gate,
 )
+from tools.dogfood_runner.paths import record_run
 
 # Repo root — the subagents run `uv run agentfluent report` here, so their cwd must
 # resolve the project venv. tools/dogfood_runner/runner.py → parents[2] is the root.
@@ -48,15 +53,45 @@ REPO_DIR = Path(__file__).resolve().parents[2]
 
 # Non-dated aliases on purpose: a dated model pin (e.g. ``claude-haiku-4-5-20251001``)
 # starts long-hanging then 529s once that snapshot is retired. Centralized here so
-# there is one place to bump. Current tiers: Opus 4.8 parent, Haiku 4.5 subagent.
-PARENT_MODEL = "claude-opus-4-8"
+# there is one place to bump.
+#
+# The parent (synthesis) model is ROTATED across these tiers to diversify the SDK
+# dogfood corpus's model dimension (#636) — every run otherwise sits at one point
+# in the model dimension, and opus is overkill for orchestration+summarization
+# (#635). The subagent stays Haiku (main-model-only per #636 scope). ``sonnet-4-6``
+# is the non-dated alias the rest of the repo already trusts (fixtures, builders,
+# the #519 matrix runner).
+MAIN_MODELS = ("claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5")
 SUBAGENT_MODEL = "claude-haiku-4-5"
 SYNTHESIS_MAX_TURNS = 20
+
+# Manual override for the rotated parent model (``--main-model`` or this env var,
+# for the cron). Unset → deterministic date-based rotation.
+DOGFOOD_MAIN_MODEL_ENV = "DOGFOOD_MAIN_MODEL"
 
 
 def _runstamp(now: datetime | None = None) -> str:
     """UTC stamp that sorts lexically by recency — drives ``latest_snapshot``."""
     return (now or datetime.now(UTC)).strftime("%Y%m%dT%H%M%SZ")
+
+
+def select_main_model(runstamp: str, override: str | None = None) -> str:
+    """Pick the synthesis parent model for this run.
+
+    An explicit ``override`` (``--main-model`` / ``DOGFOOD_MAIN_MODEL``) wins so a
+    manual run can pin one tier. Otherwise rotate deterministically across
+    :data:`MAIN_MODELS` by the run's calendar date (the ``YYYYMMDD`` prefix of the
+    runstamp): consecutive daily cron runs cycle opus → sonnet → haiku.
+
+    Keyed off the date rather than a persistent counter so the choice is
+    reproducible from a session's own timestamp (the map a #112 intended-vs-resolved
+    cross-check wants) and so a missed cron day cannot corrupt a round-robin counter
+    — at N=3 vs a 7-day week the skipped ordinals drift and even out.
+    """
+    if override:
+        return override
+    ordinal = datetime.strptime(runstamp[:8], "%Y%m%d").date().toordinal()
+    return MAIN_MODELS[ordinal % len(MAIN_MODELS)]
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -86,12 +121,22 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Run the deterministic gate only; skip the SDK narrative synthesis.",
     )
+    parser.add_argument(
+        "--main-model",
+        default=None,
+        help=(
+            "Pin the synthesis parent model (overrides the date-based rotation "
+            f"across {', '.join(MAIN_MODELS)}). Also settable via ${DOGFOOD_MAIN_MODEL_ENV}."
+        ),
+    )
     return parser.parse_args(argv)
 
 
-async def synthesize(report: GateReport) -> str:
-    """Fan out Haiku subagents (one per snapshot) under an Opus parent; return the
-    synthesized narrative. Lazy-imports the SDK so the gate never depends on it."""
+async def synthesize(report: GateReport, main_model: str) -> tuple[str, str | None]:
+    """Fan out Haiku subagents (one per snapshot) under a parent on ``main_model``;
+    return ``(narrative, session_id)``. The ``session_id`` (off the SDK result
+    stream) lets the caller record this run's corpus session against its main-model
+    variant (#636). Lazy-imports the SDK so the gate never depends on it."""
     from claude_agent_sdk import (  # noqa: PLC0415 — lazy by design (research group)
         AgentDefinition,
         ClaudeAgentOptions,
@@ -101,7 +146,7 @@ async def synthesize(report: GateReport) -> str:
 
     snapshots = [(r.slug, r.snapshot) for r in report.results if r.snapshot is not None]
     if not snapshots:
-        return "(no snapshots produced this run — nothing to synthesize)"
+        return "(no snapshots produced this run — nothing to synthesize)", None
 
     # The subagent renders the snapshot with `agentfluent report` (the tool's OWN
     # deterministic interpreter of the JSON schema) and condenses that Markdown — it
@@ -131,7 +176,7 @@ async def synthesize(report: GateReport) -> str:
         f"Snapshots:\n{manifest}"
     )
     options = ClaudeAgentOptions(
-        model=PARENT_MODEL,
+        model=main_model,
         # Bash so the subagents can run `agentfluent report`; Task/Agent to delegate.
         allowed_tools=["Read", "Bash", "Task", "Agent"],
         disallowed_tools=["WebFetch", "WebSearch"],
@@ -143,30 +188,78 @@ async def synthesize(report: GateReport) -> str:
         max_turns=SYNTHESIS_MAX_TURNS,
     )
     final = ""
+    session_id: str | None = None
     async for message in query(prompt=prompt, options=options):
         if isinstance(message, ResultMessage):
             final = message.result or final
-    return final or "(synthesis produced no result text)"
+            session_id = message.session_id or session_id
+    return final or "(synthesis produced no result text)", session_id
+
+
+def _resolve_session_jsonl(session_id: str) -> str:
+    """Absolute path of the corpus JSONL the SDK wrote for ``session_id``.
+
+    Mirrors ``research/agent-sdk-probe/agent.py``: the synthesis ``query()`` runs
+    with ``cwd=REPO_DIR``, so its session lands under the repo's project-slug.
+    ``project_key_for_directory`` is an SDK import, kept lazy here so the SDK-free
+    gate layer (``paths``/``cli_runner``) never transitively pulls it in.
+    """
+    from claude_agent_sdk import project_key_for_directory  # noqa: PLC0415 — lazy by design
+
+    slug = project_key_for_directory(str(REPO_DIR))
+    return str(Path.home() / ".claude" / "projects" / slug / f"{session_id}.jsonl")
+
+
+def _record_run_best_effort(runstamp: str, main_model: str, session_id: str | None) -> None:
+    """Append this run to the discoverability manifest — BEST-EFFORT.
+
+    A manifest write must never flip the exit code (the same rule as synthesis:
+    the deterministic gate owns pass/fail). A missing ``session_id`` or any I/O
+    error is logged and swallowed, not surfaced as a failure.
+    """
+    if session_id is None:
+        print(
+            "[warn] no session_id from synthesis — run not recorded in manifest",
+            file=sys.stderr,
+        )
+        return
+    try:
+        record_run(
+            runstamp=runstamp,
+            main_model=main_model,
+            subagent_model=SUBAGENT_MODEL,
+            session_id=session_id,
+            session_jsonl=_resolve_session_jsonl(session_id),
+        )
+    except Exception as exc:  # noqa: BLE001 — recording must never flip the gate
+        print(f"[warn] could not record run in manifest: {exc}", file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
+    runstamp = _runstamp()
     cli = CliRunner()
     report = run_gate(
         cli,
         window=args.window,
-        runstamp=_runstamp(),
+        runstamp=runstamp,
         retention=args.retention,
         fail_on=args.fail_on,
     )
     print(render_gate_report(report))
 
     if not args.no_synthesis:
+        main_model = select_main_model(
+            runstamp, args.main_model or os.environ.get(DOGFOOD_MAIN_MODEL_ENV)
+        )
+        session_id: str | None = None
         try:
-            narrative = asyncio.run(synthesize(report))
-            print("\n--- synthesis ---\n" + narrative)
+            narrative, session_id = asyncio.run(synthesize(report, main_model))
+            print(f"\n--- synthesis (main model: {main_model}) ---\n" + narrative)
         except Exception as exc:  # noqa: BLE001 — synthesis must never flip the gate
             print(f"\n[warn] narrative synthesis skipped: {exc}", file=sys.stderr)
+        # Record whether or not synthesis raised: a None session_id just no-ops.
+        _record_run_best_effort(runstamp, main_model, session_id)
 
     # Exit code reflects ANALYSIS health only. A regression is a successful dogfood
     # that found something (surfaced in the report), not a runner failure.
