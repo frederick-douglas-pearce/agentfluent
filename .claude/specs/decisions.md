@@ -1181,3 +1181,43 @@ F / retrospective umbrella), #559 (idea-3 + `.claude/` no-milestone convention),
 **Reference:** epic #611; gate #612 (split, validated-first); construction #613–#617; `prd-loop-plugin.md`; source `prd-loop-engineering.md` (§4.0, §4.4, §13), `.claude/skills/release-loop/SKILL.md`, `.claude/hooks/guard_append_only.py`; loop trail #500 / #517 / #559; CI drift-guard `tests/unit/test_loop_skill_drift.py`.
 
 ---
+
+## D052: Generalized continuous-eval ships as a thin Claude Code plugin over a CLI-owned `watch` loop (Shape A)
+
+**Date:** 2026-07-12
+**Context:** The maintainer dogfood-runner (#590, D050) is a live but private local-cron workflow. Generalizing it so external users can run continuous agent-quality evaluation on their own repos raised a shape question: does the periodic evaluation loop live in the `agentfluent` CLI (thin plugin on top), or does a fat Claude Code plugin own the whole thing including the Python install and scheduling? Filed as roadmap epic #622 with PRD `prd-continuous-eval.md`.
+**Decisions:**
+- **Shape A — the CLI owns the loop primitive; the plugin is thin glue.** The evaluation loop (schedule → analyze window → gate → synthesize → write) is a first-class `agentfluent` subcommand (working name `agentfluent watch`): pure Python, cross-platform, testable, local-first, no cloud. The Claude Code plugin ships only Claude-Code-native glue (start/configure command, synthesis prompt, config scaffold) and **detects — never installs — the CLI**, prompting the user if it is missing or too old.
+- **Shape B (fat plugin owning the pip/uv install + cron) is REJECTED.** Crossing the Claude-Code-artifact ↔ PyPI-package boundary on strangers' machines (no uv, wrong Python, no venv, PATH, Windows) is the single most fragile support surface and buys nothing the thin detect-and-prompt approach doesn't.
+- **The anti-false-green gate is a hard product requirement, not an implementation detail** (#624): `watch` must never emit "clean" without proving it had real signal AND the pipeline ran — else it emits an explicit "couldn't evaluate + why."
+**Rationale:** A CLI-owned loop keeps the engine local-first, cross-platform, and unit-testable, and confines the fragile install boundary to a documented prerequisite rather than plugin-owned automation. Sibling to D051/#611 (loop-plugin) — same "thin plugin over a real engine" shape, different engine — and composes with the #612 generic-engine seam. Roadmap item; not built now.
+**Reference:** epic #622; stories #623–#630; PRD `prd-continuous-eval.md`; source #590 / D050 (dogfood-runner); sibling #611 / D051 (loop-plugin), seam #612; governing D001 (Python-only), D024/D025 (`--since` window), D045 (pricing/cost estimation).
+
+---
+
+## D053: `watch` is a parallel Python primitive generalized from `dogfood_runner`, not a consumer of the #612 loop engine
+
+**Date:** 2026-07-12
+**Context:** Architect design review of the continuous-eval roadmap (epic #622, PRD `prd-continuous-eval.md` §13 Q1) resolved the highest-leverage open question: does `agentfluent watch` reuse the #612 generic loop engine, or run parallel to it? Recorded so S1 (#623) has a settled structure to build against, per the architect's blocking concern #1.
+**Decisions:**
+- **Parallel, not reuse.** The #612 `loop-engine.md` is a natural-language skill procedure interpreted by an LLM (supervised, human-gated, mutating); `watch` is deterministic, autonomous, read-only Python. They share only the per-project `*.config.md` convention — a *pattern*, not an engine. `watch` does NOT consume `loop-engine.md`.
+- **Generalize the existing `dogfood_runner`.** S1 promotes `tools/dogfood_runner/` (`cli_runner.py` + `run_gate()`) into `src/agentfluent/watch/` as the in-process Python loop primitive, rather than inventing a new one.
+- **In-process, not subprocess.** `watch` runs the analysis in-process. Consequence: it forfeits the subprocess `returncode` liveness proof the dogfood runner relies on, so R2 pipeline-liveness (#624) must instead come from a **structured per-phase execution-provenance record** — scoped in S1, landed in S2. This is the one genuine cross-module change (the diagnostics layer currently swallows several failures to empty).
+**Rationale:** The reusable asset is the deterministic runner + gate, not the LLM-interpreted dev-loop procedure; forcing `watch` through the #612 engine would misfit an autonomous read-only evaluator into a supervised mutating harness. Keeping the loops parallel-but-pattern-aligned preserves the sibling relationship (D051/D052) without a wrong engine cut. Roadmap item; not built now — decision recorded ahead of S1 so the structure is settled when picked up.
+**Reference:** architect review on #622 (comment 4950553514); PRD §13 Q1/Q3; stories #623 (S1, generalize + provenance scope), #624 (S2, pipeline-liveness); source #590 / D050 (`dogfood_runner`); D052 (Shape A), D051/#611/#612 (sibling loop-plugin + seam).
+
+---
+
+## D054: `#546` date-aware pricing reframed to substrate-plumbing-only after a plan-time falsifier fired; >200K-tier mis-pricing split to `#639`
+
+**Date:** 2026-07-15
+**Context:** `#546` (Story B of pricing epic `#535`) specified date-aware session pricing: a historical session should be priced at the rate in effect when it ran, verified (AC#5) by "pre-change date vs post-change date → different dollar amount" using a *genuine* genai-prices dated Anthropic constraint (the issue Notes explicitly forbid fabricating the retired opus $15/$75→$5/$25 drop). The release-loop discharged that falsifier at plan time (engine step 3) against `genai-prices==0.0.71`, before writing code.
+**Decisions:**
+- **The falsifier FIRED — no priced model carries a dated base-rate change.** For every model in `_KNOWN_MODELS`, the resolved base tuple `(input, output, cache_write_5m, cache_read)` is identical at every date (2024-06 → latest). genai-prices' only dated Anthropic constraints (`StartDateConstraint(start_date=2026-03-13)` on opus-4-6 / sonnet-4-6) move the **>200K context tier**, a dimension the adapter deliberately discards (`_genai_source._base_rate()` returns `TieredPrices.base`; `ModelPricing` has no tier slot). So AC#5 as written is **unsatisfiable with a genuine constraint**, and date-aware lookup is bit-identical to "latest" for every real session today.
+- **Reframe `#546` to substrate-plumbing-only (PM ruling Option (a); maintainer-approved).** Ship the timestamp threading (`get_pricing(model, timestamp=None)` → the `#545` `_resolve_rates` seam; `session_price_timestamp` → parent+subagent cost rows) plus a **forward-compat guard test** that asserts current per-model date-invariance and fails loudly if upstream ever ships a dated base-rate change. Value delivered now is a completed, tested seam + tripwire, **not** a user-visible behavior change. Rejected: (b) defer (leaves `#545`'s param dangling); (c) broaden to tier-aware (a distinct, larger story).
+- **AC#4 reframed to a `docs/COST_MODEL.md` note, dropping the "historical costs may change" CHANGELOG line** — that line is currently false (no restatement occurs), and CHANGELOG.md is release-please-managed; the release that trips the guard test carries that note instead, cross-referencing `#543`.
+- **The genuine present-day gap is tier-discarding, not date-awareness → split to `#639`.** Sessions exceeding the 200K context tier are mis-priced against the base tier *today* (real, user-visible cost error). Filed as a separate tier-aware-pricing story under `#535`; explicitly kept OUT of `#546`. Milestone (v0.11 vs v0.12) is a maintainer call.
+**Rationale:** A cheap corpus/catalog pass discharged before implementation caught a feature whose acceptance test could not be honestly satisfied — the "escalate rather than build" path — and converted the null result into a load-bearing asset (the forward-compat tripwire) rather than shipping an inert feature or fabricating evidence. The seam `#545` already built is completed rather than left half-wired. The investigation's real find (tier mis-pricing) is routed to its own story at the correct altitude.
+**Reference:** issue `#546` (reframed body + ACs), PR `#640`; spin-off `#639`; PM disposition ruling + human plan gate (release-loop ledger `.claude/loop/v0.11.0/`); source `#545`/D045 (genai-prices adapter seam), `#534` (1h cache overlay), `#543` (diff cross-version stamp); `docs/COST_MODEL.md`.
+
+---
