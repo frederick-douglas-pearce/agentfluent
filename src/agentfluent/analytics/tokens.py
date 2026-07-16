@@ -7,8 +7,10 @@ cost breakdown and parent-vs-subagent origin attribution.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import TYPE_CHECKING, Literal
 
 from agentfluent.analytics.pricing import SYNTHETIC_MODELS, compute_cost, get_pricing
@@ -16,6 +18,8 @@ from agentfluent.core.session import SessionMessage, Usage
 
 if TYPE_CHECKING:
     from agentfluent.traces.models import SubagentTrace
+
+logger = logging.getLogger(__name__)
 
 Origin = Literal["parent", "subagent"]
 
@@ -106,11 +110,20 @@ def _accumulate_usage(breakdown: ModelTokenBreakdown, usage: Usage) -> None:
     breakdown.cache_creation_1h_tokens += usage.cache_creation_1h_input_tokens
 
 
-def _populate_costs(by_model: dict[tuple[str, str], ModelTokenBreakdown]) -> float:
-    """Compute per-row costs in place, return the summed total."""
+def _populate_costs(
+    by_model: dict[tuple[str, str], ModelTokenBreakdown],
+    timestamp: datetime | None = None,
+) -> float:
+    """Compute per-row costs in place, return the summed total.
+
+    ``timestamp`` is the session's price date (first-message timestamp, #546); it is
+    forwarded to ``get_pricing`` so each row is priced at the rate in effect when the
+    session ran. ``None`` → latest rate (the fallback for a missing/malformed session
+    timestamp, and the default for callers that do not price by date).
+    """
     total = 0.0
     for breakdown in by_model.values():
-        pricing = get_pricing(breakdown.model)
+        pricing = get_pricing(breakdown.model, timestamp)
         if pricing:
             breakdown.cost = compute_cost(
                 pricing,
@@ -153,7 +166,28 @@ def _aggregate_totals(
     )
 
 
-def compute_token_metrics(messages: list[SessionMessage]) -> TokenMetrics:
+def session_price_timestamp(messages: list[SessionMessage]) -> datetime | None:
+    """Return the session's price date: the first message carrying a timestamp.
+
+    This is the single source of truth for pricing a session by the rate in effect
+    when it ran (#546, AC#2). Returns ``None`` when no message has a timestamp
+    (missing/malformed → latest-rate fallback, AC#3), which ``get_pricing`` treats as
+    "latest". The parser sets ``SessionMessage.timestamp`` to ``None`` for absent or
+    unparseable timestamps, so a malformed value never reaches pricing as a bad date.
+    """
+    price_date = next((m.timestamp for m in messages if m.timestamp is not None), None)
+    if price_date is None:
+        # AC3 (#546): no usable session timestamp (missing or parser-coerced malformed) ->
+        # cost falls back to the latest rate. Log at DEBUG so the fallback is observable.
+        logger.debug(
+            "Session has no usable message timestamp; pricing at the latest rate."
+        )
+    return price_date
+
+
+def compute_token_metrics(
+    messages: list[SessionMessage], *, timestamp: datetime | None = None
+) -> TokenMetrics:
     """Compute parent-session token usage totals and dollar costs.
 
     Processes only assistant messages that have usage data. Messages should
@@ -161,6 +195,11 @@ def compute_token_metrics(messages: list[SessionMessage]) -> TokenMetrics:
     contributions are not included here — call
     ``compute_subagent_token_metrics`` separately and merge into the
     parent ``TokenMetrics`` (see ``analytics.pipeline.analyze_session``).
+
+    ``timestamp`` (#546) is the session price date used for date-aware rate lookup;
+    ``None`` → latest rate. The pipeline derives it once via ``session_price_timestamp``
+    and passes the same value here and to ``compute_subagent_token_metrics`` so parent
+    and subagent rows price at one consistent session date.
 
     Returns:
         TokenMetrics with parent-only totals, per-model breakdown
@@ -188,7 +227,7 @@ def compute_token_metrics(messages: list[SessionMessage]) -> TokenMetrics:
 
         _accumulate_usage(breakdown, usage)
 
-    _populate_costs(by_model)
+    _populate_costs(by_model, timestamp)
     rows = list(by_model.values())
     (
         total_input, total_output, total_cache_creation, total_cache_read,
@@ -208,7 +247,7 @@ def compute_token_metrics(messages: list[SessionMessage]) -> TokenMetrics:
 
 
 def compute_subagent_token_metrics(
-    traces: list[SubagentTrace],
+    traces: list[SubagentTrace], *, timestamp: datetime | None = None
 ) -> list[ModelTokenBreakdown]:
     """Aggregate subagent-trace token usage into per-model breakdowns.
 
@@ -217,6 +256,9 @@ def compute_subagent_token_metrics(
     at zero by the parser (see traces/parser.py docstring). Skips
     traces with no model and traces whose usage is wholly zero (no
     assistant messages).
+
+    ``timestamp`` (#546) is the parent session's price date, applied to subagent rows
+    too so the whole session prices at one consistent date; ``None`` → latest rate.
 
     Returns one ``ModelTokenBreakdown`` per distinct subagent model,
     each carrying ``origin="subagent"``. Costs are populated. The
@@ -237,7 +279,7 @@ def compute_subagent_token_metrics(
             by_model[key] = breakdown
         _accumulate_usage(breakdown, usage)
 
-    _populate_costs(by_model)
+    _populate_costs(by_model, timestamp)
     return list(by_model.values())
 
 
