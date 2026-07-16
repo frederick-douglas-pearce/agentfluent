@@ -109,6 +109,39 @@ class TestAnalyzeSession:
         # Verify token metrics use deduplicated data
         assert result.token_metrics.api_call_count == 2
 
+    def test_session_first_timestamp_reaches_pricing(
+        self, write_jsonl: WriteJSONL, monkeypatch: Any,
+    ) -> None:
+        # #546 AC#2 end-to-end: analyze_session derives the first-message timestamp and
+        # threads it into the cost path. Spy on tokens.get_pricing and assert it receives
+        # the session's first-message datetime (not None / not today).
+        from datetime import UTC, datetime
+
+        from agentfluent.analytics import tokens
+
+        path = write_jsonl(
+            "session_dated.jsonl",
+            [
+                user_message("hi", timestamp="2026-04-21T10:00:00.000Z"),
+                assistant_message(
+                    [{"type": "text", "text": "hello"}],
+                    message_id="m1",
+                    usage={"input_tokens": 10, "output_tokens": 5},
+                    timestamp="2026-04-21T10:00:01.000Z",
+                ),
+            ],
+        )
+        seen: list[Any] = []
+        real = tokens.get_pricing
+
+        def _spy(model: str, timestamp: Any = None):  # type: ignore[no-untyped-def]
+            seen.append(timestamp)
+            return real(model, timestamp)
+
+        monkeypatch.setattr(tokens, "get_pricing", _spy)
+        analyze_session(path)
+        assert seen == [datetime(2026, 4, 21, 10, 0, 0, tzinfo=UTC)]
+
     def test_messages_field_in_memory_but_excluded_from_json(
         self, agent_session_path: Path,
     ) -> None:

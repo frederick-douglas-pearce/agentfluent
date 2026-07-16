@@ -1,6 +1,7 @@
 """Tests for token and cost analytics."""
 
 import logging
+from datetime import UTC, datetime
 
 import pytest
 
@@ -10,6 +11,7 @@ from agentfluent.analytics.tokens import (
     compute_subagent_token_metrics,
     compute_token_metrics,
     fold_subagent_metrics_in,
+    session_price_timestamp,
 )
 from agentfluent.core.session import ContentBlock, SessionMessage, Usage
 from agentfluent.traces.models import SubagentTrace
@@ -404,3 +406,101 @@ class TestFoldSubagentMetricsIn:
         result = fold_subagent_metrics_in(parent, subagent_rows)
         # Comprehensive = parent_cost + subagent_cost (both > 0).
         assert result.total_cost > parent.total_cost
+
+
+class TestSessionPriceTimestamp:
+    """#546: the session price date is the first message carrying a timestamp."""
+
+    def test_returns_first_timestamped_message(self) -> None:
+        early = datetime(2026, 1, 2, tzinfo=UTC)
+        later = datetime(2026, 3, 4, tzinfo=UTC)
+        messages = [
+            SessionMessage(type="user"),  # no timestamp — skipped
+            SessionMessage(type="user", timestamp=early),
+            SessionMessage(type="assistant", timestamp=later),
+        ]
+        assert session_price_timestamp(messages) == early
+
+    def test_none_when_no_message_has_timestamp(self) -> None:
+        # AC#3: missing timestamp → None → latest-rate fallback downstream.
+        assert session_price_timestamp([SessionMessage(type="user")]) is None
+        assert session_price_timestamp([]) is None
+
+    def test_missing_timestamp_logs_debug_fallback(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # AC#3: the missing/malformed-timestamp → latest fallback emits a DEBUG log.
+        with caplog.at_level(logging.DEBUG, logger="agentfluent.analytics.tokens"):
+            session_price_timestamp([SessionMessage(type="user")])
+        assert any(
+            "no usable message timestamp" in r.message and r.levelno == logging.DEBUG
+            for r in caplog.records
+        )
+
+    def test_present_timestamp_does_not_log_fallback(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.DEBUG, logger="agentfluent.analytics.tokens"):
+            session_price_timestamp([
+                SessionMessage(type="user", timestamp=datetime(2026, 1, 1, tzinfo=UTC)),
+            ])
+        assert not any("no usable message timestamp" in r.message for r in caplog.records)
+
+
+class TestCostTimestampThreading:
+    """#546 AC#2/#5(b): the session timestamp threads into the pricing lookup."""
+
+    def test_parent_metrics_forward_timestamp_to_pricing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from agentfluent.analytics import tokens
+
+        seen: list[datetime | None] = []
+        real = tokens.get_pricing
+
+        def _spy(model: str, timestamp: datetime | None = None):  # type: ignore[no-untyped-def]
+            seen.append(timestamp)
+            return real(model, timestamp)
+
+        monkeypatch.setattr(tokens, "get_pricing", _spy)
+        when = datetime(2026, 2, 1, tzinfo=UTC)
+        compute_token_metrics([_assistant(input_tokens=100, output_tokens=50)], timestamp=when)
+        assert seen == [when]
+
+    def test_subagent_metrics_forward_timestamp_to_pricing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from agentfluent.analytics import tokens
+
+        seen: list[datetime | None] = []
+        real = tokens.get_pricing
+
+        def _spy(model: str, timestamp: datetime | None = None):  # type: ignore[no-untyped-def]
+            seen.append(timestamp)
+            return real(model, timestamp)
+
+        monkeypatch.setattr(tokens, "get_pricing", _spy)
+        when = datetime(2026, 2, 1, tzinfo=UTC)
+        compute_subagent_token_metrics(
+            [_trace("claude-haiku-4-5-20251001", input_tokens=100, output_tokens=50)],
+            timestamp=when,
+        )
+        assert seen == [when]
+
+    def test_default_none_timestamp_prices_at_latest(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # No timestamp passed → get_pricing receives None (latest); never raises.
+        from agentfluent.analytics import tokens
+
+        seen: list[datetime | None] = []
+        real = tokens.get_pricing
+
+        def _spy(model: str, timestamp: datetime | None = None):  # type: ignore[no-untyped-def]
+            seen.append(timestamp)
+            return real(model, timestamp)
+
+        monkeypatch.setattr(tokens, "get_pricing", _spy)
+        metrics = compute_token_metrics([_assistant(input_tokens=100, output_tokens=50)])
+        assert seen == [None]
+        assert metrics.total_cost > 0  # still priced, at latest

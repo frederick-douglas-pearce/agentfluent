@@ -19,6 +19,7 @@ AgentFluent prices sessions on top of [pydantic/genai-prices](https://github.com
 | Data residency US (1.1×) | Low–Medium | Overlay | [pydantic/genai-prices#429](https://github.com/pydantic/genai-prices/issues/429) (filed) |
 | Web search ($10 / 1k) | Medium *if used* | Overlay (counts present in JSONL) | [pydantic/genai-prices#288](https://github.com/pydantic/genai-prices/pull/288) (PR in flight — retire overlay once merged + pin bumped) |
 | Code execution ($/hr) | Partial (duration not in single-session JSONL) | Document limitation; surface count | not modeled |
+| >200K context tier | Medium *if a session exceeds 200K context* | **Gap** — the adapter takes `TieredPrices.base` and discards `tiers`, so >200K-context sessions are priced at the base tier (tracked in #639) | modeled (`tiers`) |
 
 The rates, multipliers, and field mappings behind this table are in the canonical doc; this is only AgentFluent's coverage status against it. The **Upstream** column tracks getting each lever modeled in the shared dataset — as those land and we bump the pinned genai-prices slice, the matching local overlay can be retired.
 
@@ -29,6 +30,14 @@ The 1-hour cache-write overlay (#534) lands in **v0.10**. Before it, AgentFluent
 This matters for `agentfluent diff`: a baseline snapshot captured **before** v0.10 stores costs computed under the old all-5m rate. Diffing it against a snapshot taken **after** upgrading will show a positive cost delta on cache-heavy sessions that comes purely from the pricing fix, not from any change in agent behavior. To compare like-for-like, **re-capture your baseline after upgrading to v0.10** so both sides price 1h writes the same way. Token counts (which the diff also reports) are unaffected.
 
 A follow-up will stamp the pricing-model version into snapshots so the diff can flag a cross-version comparison automatically (tracked in #543).
+
+## Date-aware base rates (session priced at the rate in effect when it ran)
+
+From **v0.11**, AgentFluent resolves each session's base rate at the session's own date — the first-message timestamp is threaded through the cost path into genai-prices' dated `constraint`s (`get_pricing(model, timestamp=...)`, #546). The intent is that a historical session reports the cost it actually incurred, not today's rate.
+
+**This is presently date-invariant, by measurement.** As of the pinned `genai-prices` slice, **no model AgentFluent prices carries a dated _base-rate_ change** — the only dated Anthropic constraints move the >200K context tier (the gap above, #639), which the adapter discards, so the base `(input, output, cache_write_5m, cache_read)` rates are identical at every date. Analyzing an old session therefore yields the same dollar cost it would at "latest"; **no historical cost is restated today**, and no `agentfluent diff` cross-date delta arises from rate changes yet.
+
+The wiring is a forward-compat guarantee: the day Anthropic ships a genuine dated base-rate change and it lands in the pinned dataset, historical sessions auto-price correctly with no code change. A guard test (`tests/`) asserts the current date-invariance per model and **fails loudly** if that ever stops holding — that failure is the signal to write the user-facing "historical costs now differ" note here and to activate #543's cross-date-delta caveat for `diff`.
 
 ---
 

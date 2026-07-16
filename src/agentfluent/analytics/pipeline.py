@@ -27,6 +27,7 @@ from agentfluent.analytics.tokens import (
     compute_subagent_token_metrics,
     compute_token_metrics,
     fold_subagent_metrics_in,
+    session_price_timestamp,
 )
 from agentfluent.analytics.tools import (
     ConcentrationEntry,
@@ -214,7 +215,12 @@ def analyze_session(
     """
     messages = parse_session(path)
 
-    token_metrics = compute_token_metrics(messages)
+    # Price the session at the rate in effect when it ran (#546): derive the first-message
+    # timestamp once and apply it to both parent and subagent cost rows for one consistent
+    # session price date. None (no timestamped message) → latest rate.
+    price_date = session_price_timestamp(messages)
+
+    token_metrics = compute_token_metrics(messages, timestamp=price_date)
     tool_metrics = compute_tool_metrics(messages)
 
     invocations = extract_agent_invocations(messages)
@@ -227,7 +233,7 @@ def analyze_session(
     mcp_tool_calls = extract_mcp_calls_from_messages(messages)
 
     subagent_traces = [inv.trace for inv in invocations if inv.trace is not None]
-    subagent_rows = compute_subagent_token_metrics(subagent_traces)
+    subagent_rows = compute_subagent_token_metrics(subagent_traces, timestamp=price_date)
     token_metrics = fold_subagent_metrics_in(token_metrics, subagent_rows)
 
     agent_metrics = compute_agent_metrics(

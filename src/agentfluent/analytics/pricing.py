@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 
 from agentfluent.analytics._genai_source import _resolve_rates
 
@@ -116,20 +117,29 @@ MODEL_SONNET = "claude-sonnet-4-6"
 MODEL_OPUS = "claude-opus-4-7"
 
 
-def get_pricing(model: str) -> ModelPricing | None:
+def get_pricing(model: str, timestamp: datetime | None = None) -> ModelPricing | None:
     """Look up pricing for a model name.
 
     Resolves aliases first (short names, ``[1m]`` suffixes), then sources the rate
     upstream-first from genai-prices, falling back to the documented local residual.
     Returns None and logs at DEBUG level if the model is unknown. The caller is expected
     to skip synthetic sentinel values (see ``SYNTHETIC_MODELS``) before invoking this.
+
+    ``timestamp`` selects the base rate in effect on that date via genai-prices' dated
+    constraints (#546); ``None``/omitted → the latest rate, preserving every existing
+    caller. Note (#546 falsifier finding, genai-prices==0.0.71): no model in
+    ``_KNOWN_MODELS`` currently carries a dated *base-rate* change -- the only dated
+    Anthropic constraints move the >200K context tier, which the adapter discards (see
+    ``_genai_source._base_rate``) -- so a timestamp is presently date-invariant at base-rate
+    granularity. The parameter is wired so a future upstream dated base-rate change applies
+    automatically; the forward-compat guard test in ``tests`` is the tripwire.
     """
     canonical = _ALIASES.get(model, model)
     if canonical not in _KNOWN_MODELS:
         logger.debug("Unknown model '%s' -- no pricing available", model)
         return None
 
-    rates = _resolve_rates(canonical)
+    rates = _resolve_rates(canonical, timestamp)
     if rates is not None:
         # cache_creation_1h is derived (2x input) by ModelPricing.__post_init__ -- the 1h
         # overlay dimension (#534) is never collapsed onto the upstream 5m cache_write.

@@ -1,6 +1,7 @@
 """Tests for model pricing lookup."""
 
 import logging
+from datetime import UTC, datetime
 
 import pytest
 
@@ -346,3 +347,88 @@ class TestResidualFallback:
         # Known id, no upstream, no residual -> None (degrade gracefully, never crash).
         monkeypatch.setattr(pricing, "_resolve_rates", lambda ref, timestamp=None: None)
         assert pricing.get_pricing("claude-opus-4-8") is None
+
+
+class TestDateAwareLookup:
+    """#546 date-aware base-rate lookup: timestamp threads to the resolver; None → latest.
+
+    These test the *mechanism*, not a fabricated rate change (Fred's Notes forbid the
+    latter, and the falsifier confirmed no priced model carries a dated base-rate change).
+    """
+
+    def test_timestamp_none_omitted_is_latest(self) -> None:
+        # Omitting the timestamp and passing None both mean "latest" and must agree.
+        assert get_pricing("claude-opus-4-6") == get_pricing("claude-opus-4-6", None)
+
+    def test_timestamp_forwarded_to_resolver(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # AC#5(b): the caller-supplied timestamp actually reaches _resolve_rates.
+        from agentfluent.analytics import pricing
+
+        seen: dict[str, object] = {}
+
+        def _spy(ref: str, timestamp: datetime | None = None) -> None:
+            seen["ref"] = ref
+            seen["timestamp"] = timestamp
+            return None  # force residual/None path; we only care about the args
+
+        monkeypatch.setattr(pricing, "_resolve_rates", _spy)
+        when = datetime(2026, 2, 1, tzinfo=UTC)
+        pricing.get_pricing("claude-opus-4-6", when)
+        assert seen["ref"] == "claude-opus-4-6"
+        assert seen["timestamp"] is when
+
+    def test_timestamp_forwarded_through_alias(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # An alias resolves to canonical first, then the timestamp still threads through.
+        from agentfluent.analytics import pricing
+
+        seen: dict[str, object] = {}
+        monkeypatch.setattr(
+            pricing,
+            "_resolve_rates",
+            lambda ref, timestamp=None: seen.update(ref=ref, timestamp=timestamp),
+        )
+        when = datetime(2026, 5, 1, tzinfo=UTC)
+        pricing.get_pricing("opus", when)  # alias -> claude-opus-4-8
+        assert seen["ref"] == "claude-opus-4-8"
+        assert seen["timestamp"] is when
+
+    @pytest.mark.parametrize("model", ["claude-opus-4-6", "claude-sonnet-4-6"])
+    def test_either_side_of_genuine_constraint_resolves(self, model: str) -> None:
+        # AC#5(d): opus-4-6 / sonnet-4-6 carry a genuine StartDateConstraint(2026-03-13);
+        # dates on both sides must resolve without error (they price the same base today).
+        before = get_pricing(model, datetime(2026, 1, 1, tzinfo=UTC))
+        after = get_pricing(model, datetime(2026, 6, 1, tzinfo=UTC))
+        assert before is not None and after is not None
+
+
+class TestForwardCompatGuard:
+    """#546 tripwire: no priced model has a dated BASE-rate change today.
+
+    If genai-prices ever ships a dated Anthropic base-rate change for a model we price,
+    this fails loudly — the signal to write the user-facing 'historical costs now differ'
+    note (docs/COST_MODEL.md) and activate #543's cross-date-delta caveat for `diff`.
+    """
+
+    _EARLY = datetime(2024, 6, 1, tzinfo=UTC)
+
+    @pytest.mark.parametrize("model", list(_GOLDEN_RATES))
+    def test_base_rate_is_date_invariant(self, model: str) -> None:
+        early = get_pricing(model, self._EARLY)
+        latest = get_pricing(model, None)
+        assert early is not None and latest is not None
+        early_tuple = (
+            early.input, early.output, early.cache_creation_5m, early.cache_read
+        )
+        latest_tuple = (
+            latest.input, latest.output, latest.cache_creation_5m, latest.cache_read
+        )
+        assert early_tuple == latest_tuple, (
+            f"{model} base rate changed by date ({early_tuple} != {latest_tuple}). "
+            "genai-prices now carries a dated base-rate change for a priced model — "
+            "date-aware pricing (#546) is no longer inert. Write the historical-cost "
+            "restatement note in docs/COST_MODEL.md and activate #543's diff caveat."
+        )
