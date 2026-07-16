@@ -7,11 +7,39 @@ Base rates are sourced from genai-prices (upstream, D045) via the isolated
 ``_genai_source`` adapter; a small documented local residual (``_RESIDUAL``) supplies any
 model genai-prices does not cover. This module is the public pricing surface -- nothing
 outside ``_genai_source`` imports ``genai_prices`` directly.
+
+The base ⊕ overlay merge seam (#547)
+------------------------------------
+Final per-request cost is ``base (upstream) ⊕ overlay (local)``. genai-prices models only
+the *base* rate table; AgentFluent adds the levers it does not model (see
+``docs/COST_MODEL.md``) through this seam. The overlay levers fall into **three composition
+classes** that compose in one fixed, documented order::
+
+    final = ( (base ⊕ rate_overlays[A]) · tokens ) · Π(multipliers[B]) + Σ(surcharges[C])
+
+- **Class A -- rate-table transforms** (per model+date): modify the per-token rate table
+  *before* token×rate. Plug point: ``ModelPricing`` construction in ``get_pricing``. Members:
+  1-hour cache write (#534, landed -- ``ModelPricing.__post_init__`` derives it as 2× input);
+  fast-mode premium rates (#536, future -- also class A, replaces the rate table).
+- **Class B -- per-request multipliers** (per invocation): scale the dollar subtotal. Plug
+  point: ``compute_cost(..., request_multipliers=...)``. Members: batch 0.5× / priority (#537),
+  data residency US 1.1× (#538). They commute (multiplication).
+- **Class C -- additive surcharges** (per invocation): add fixed dollars *after* the
+  multipliers (a flat server-tool fee must not be discounted by a 0.5× batch multiplier). Plug
+  point: ``compute_cost(..., surcharge_usd=...)``. Members: server-tool / web-search $10/1k
+  (#539).
+
+"Is this lever upstream or overlay?" is therefore a one-line answer per lever, and retiring an
+overlay when genai-prices adds it upstream is a localized change (drop the class-A transform or
+the class-B/C argument at its single plug point). ``compute_cost``'s class-B/C parameters default
+to no-op (empty multiplier product = 1.0, zero surcharge), so the base-only path is bit-identical.
 """
 
 from __future__ import annotations
 
 import logging
+import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -39,6 +67,14 @@ class ModelPricing:
     ``cache_write_mtok`` — the 1h dimension is supplied by this overlay
     and has no upstream field; an adapter mapping must not collapse it
     back onto the 5m rate.
+
+    This rate table is the **class-A plug point** of the base ⊕ overlay
+    seam (see the module docstring): rate-table overlays (the 1h-cache
+    derivation below; fast-mode premium rates, #536) apply here, *before*
+    token×rate. Keep the 1h derivation in ``__post_init__`` — it is the
+    single-source-of-truth invariant that makes every ``ModelPricing``
+    valid regardless of construction path; do not relocate it to the
+    per-request stages (``compute_cost``), which are classes B and C.
     """
 
     input: float
@@ -165,26 +201,48 @@ def compute_cost(
     cache_creation_5m_tokens: int = 0,
     cache_read_input_tokens: int = 0,
     cache_creation_1h_tokens: int = 0,
+    request_multipliers: Sequence[float] = (),
+    surcharge_usd: float = 0.0,
 ) -> float:
-    """Compute dollar cost in USD from token counts and pricing rates.
+    """Compute final per-request dollar cost in USD (the base ⊕ overlay merge point, #547).
 
-    The cache-write total is split by TTL: ``cache_creation_5m_tokens`` is
-    billed at the 5-minute write rate, ``cache_creation_1h_tokens`` at the
-    1-hour rate (2x base). The parameter is named for the 5m bucket (not the
-    undifferentiated total) on purpose — passing ``Usage``'s authoritative
-    ``cache_creation_input_tokens`` here alongside a separate 1h count would
-    double-bill the 1h portion. Callers that only know the undifferentiated
-    total pass it here, which prices the whole sum at the 5m rate — the
-    documented fallback for sessions whose JSONL lacks the
-    ``usage.cache_creation`` TTL split (see #534).
+    This is the single merge point where the upstream **base** rate table (``pricing``,
+    already carrying any class-A rate-table overlay assembled in ``get_pricing``) combines
+    with the local **per-request overlay** levers to produce the final cost, in the fixed
+    documented order (see the module docstring)::
+
+        final = (Σ rate·token / 1e6) · Π(request_multipliers) + surcharge_usd
+                └─── base ⊕ class-A ───┘   └── class B ──┘       └─ class C ─┘
+
+    - ``request_multipliers`` (**class B**, per-request multipliers): scale the token-derived
+      dollar subtotal. Empty (the default) → an empty product of ``1.0`` → no scaling. Plug
+      point for batch 0.5× / priority (#537) and data residency US 1.1× (#538); they commute.
+    - ``surcharge_usd`` (**class C**, additive surcharge): fixed dollars added *after* the
+      multipliers, so a flat fee is never discounted by a batch multiplier. Default ``0.0`` →
+      no surcharge. Plug point for server-tool / web-search $10/1k (#539).
+
+    With both at their no-op defaults the overlay stages are exactly identity
+    (``subtotal · 1.0 + 0.0 == subtotal`` in IEEE-754), so every existing caller prices
+    bit-identically — this is a pure refactor of the prior flat rate×token sum.
+
+    The cache-write total is split by TTL: ``cache_creation_5m_tokens`` is billed at the
+    5-minute write rate, ``cache_creation_1h_tokens`` at the 1-hour rate (2x base, class A).
+    The parameter is named for the 5m bucket (not the undifferentiated total) on purpose —
+    passing ``Usage``'s authoritative ``cache_creation_input_tokens`` here alongside a
+    separate 1h count would double-bill the 1h portion. Callers that only know the
+    undifferentiated total pass it here, which prices the whole sum at the 5m rate — the
+    documented fallback for sessions whose JSONL lacks the ``usage.cache_creation`` TTL split
+    (see #534).
     """
-    return (
+    subtotal_usd = (
         input_tokens * pricing.input
         + output_tokens * pricing.output
         + cache_creation_5m_tokens * pricing.cache_creation_5m
         + cache_creation_1h_tokens * pricing.cache_creation_1h
         + cache_read_input_tokens * pricing.cache_read
     ) / 1_000_000
+    # class B (multipliers) then class C (surcharge), in the documented stacking order.
+    return subtotal_usd * math.prod(request_multipliers) + surcharge_usd
 
 
 def get_known_models() -> list[str]:

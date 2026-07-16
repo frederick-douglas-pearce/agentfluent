@@ -195,6 +195,122 @@ class TestComputeCost:
             assert pricing.cache_creation_1h == pricing.input * 2.0
 
 
+class TestOverlaySeam:
+    """#547: the base ⊕ overlay merge seam in ``compute_cost``.
+
+    Three composition classes stack in one documented order::
+
+        final = (Σ rate·token / 1e6) · Π(request_multipliers[B]) + surcharge_usd[C]
+
+    Class A (rate-level, e.g. the 1h cache write) is folded into ``ModelPricing`` upstream of
+    here. The AC's base-only / base+single-overlay / base+stacked-overlay cases are exercised
+    below; the stacked case combines the real shipped class-A lever (1h cache) with a
+    **test-injected** class-B multiplier and class-C surcharge — proving the seam composes ≥2
+    overlays across classes without pulling #536–539 (the future levers) into scope.
+    """
+
+    def _opus(self) -> ModelPricing:
+        pricing = get_pricing("claude-opus-4-6")
+        assert pricing is not None
+        return pricing
+
+    def test_base_only_no_overlays(self) -> None:
+        # Base-only: no class-A 1h tokens, no class-B multipliers, no class-C surcharge.
+        pricing = self._opus()
+        cost = compute_cost(pricing, input_tokens=1_000_000, output_tokens=1_000_000)
+        # 1M*5/1M + 1M*25/1M = 30.0
+        assert cost == 30.0
+
+    def test_base_plus_single_overlay_class_a_1h(self) -> None:
+        # Single overlay: the real, shipped class-A lever (1h cache = 2× input, #534).
+        pricing = self._opus()
+        cost = compute_cost(
+            pricing, input_tokens=1_000_000, output_tokens=0,
+            cache_creation_1h_tokens=1_000_000,
+        )
+        # (1M*5 + 1M*10)/1M = 15.0  (1h priced at 2× input, not the 5m rate)
+        assert cost == 15.0
+
+    def test_base_plus_stacked_overlay_a_b_c(self) -> None:
+        # Stacked across classes: real class-A 1h + injected class-B multiplier + class-C surcharge.
+        pricing = self._opus()
+        cost = compute_cost(
+            pricing, input_tokens=1_000_000, output_tokens=0,
+            cache_creation_1h_tokens=1_000_000,     # class A (real): subtotal -> 15.0
+            request_multipliers=(0.5,),             # class B: 15.0 * 0.5 = 7.5
+            surcharge_usd=2.0,                      # class C: 7.5 + 2.0 = 9.5
+        )
+        assert cost == pytest.approx(9.5)
+
+    def test_no_op_defaults_are_bit_identical(self) -> None:
+        # The seam's overlay stages default to exact identity: passing the no-op class-B/C
+        # values must equal omitting them, for every golden model.
+        for name in get_known_models():
+            pricing = get_pricing(name)
+            assert pricing is not None
+            omitted = compute_cost(
+                pricing, input_tokens=123_456, output_tokens=7_890,
+                cache_creation_5m_tokens=1_000, cache_read_input_tokens=42_000,
+                cache_creation_1h_tokens=5_000,
+            )
+            explicit_noop = compute_cost(
+                pricing, input_tokens=123_456, output_tokens=7_890,
+                cache_creation_5m_tokens=1_000, cache_read_input_tokens=42_000,
+                cache_creation_1h_tokens=5_000,
+                request_multipliers=(), surcharge_usd=0.0,
+            )
+            assert omitted == explicit_noop  # exact, not approx
+
+    def test_class_b_multipliers_commute(self) -> None:
+        # Per-request multipliers compose by multiplication → order-independent.
+        pricing = self._opus()
+        a = compute_cost(pricing, input_tokens=1_000_000, output_tokens=0,
+                         request_multipliers=(0.5, 1.1))
+        b = compute_cost(pricing, input_tokens=1_000_000, output_tokens=0,
+                         request_multipliers=(1.1, 0.5))
+        assert a == b
+
+    def test_empty_multiplier_product_is_one(self) -> None:
+        # An empty ``request_multipliers`` is an empty product (1.0), i.e. no scaling.
+        pricing = self._opus()
+        scaled = compute_cost(pricing, input_tokens=1_000_000, output_tokens=0,
+                              request_multipliers=())
+        unscaled = compute_cost(pricing, input_tokens=1_000_000, output_tokens=0)
+        assert scaled == unscaled == 5.0
+
+    def test_surcharge_added_after_multipliers_not_before(self) -> None:
+        # Load-bearing ordering: a flat class-C surcharge must NOT be discounted by a
+        # class-B multiplier. final = subtotal·Π(mult) + surcharge, never (subtotal+surcharge)·Π.
+        pricing = self._opus()
+        cost = compute_cost(
+            pricing, input_tokens=1_000_000, output_tokens=0,   # subtotal 5.0
+            request_multipliers=(0.5,), surcharge_usd=10.0,
+        )
+        assert cost == pytest.approx(5.0 * 0.5 + 10.0)          # 12.5, not (5.0+10.0)*0.5=7.5
+        assert cost != pytest.approx((5.0 + 10.0) * 0.5)
+
+    @pytest.mark.parametrize("model", get_known_models())
+    def test_default_path_matches_pre_seam_flat_sum(self, model: str) -> None:
+        # Bit-identity regression: the default (no-overlay) ``compute_cost`` equals the
+        # pre-#547 flat rate×token sum exactly — the seam is a pure refactor.
+        pricing = get_pricing(model)
+        assert pricing is not None
+        it, ot, c5, cr, c1 = 111_111, 22_222, 3_333, 44_444, 5_555
+        pre_seam = (
+            it * pricing.input
+            + ot * pricing.output
+            + c5 * pricing.cache_creation_5m
+            + c1 * pricing.cache_creation_1h
+            + cr * pricing.cache_read
+        ) / 1_000_000
+        got = compute_cost(
+            pricing, input_tokens=it, output_tokens=ot,
+            cache_creation_5m_tokens=c5, cache_read_input_tokens=cr,
+            cache_creation_1h_tokens=c1,
+        )
+        assert got == pre_seam  # exact
+
+
 class TestGetKnownModels:
     def test_returns_sorted_list(self) -> None:
         models = get_known_models()

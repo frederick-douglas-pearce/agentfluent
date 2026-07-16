@@ -9,19 +9,35 @@ This file keeps only what is **AgentFluent-specific**: how our pricing implement
 
 ## genai-prices coverage and local overlay
 
-AgentFluent prices sessions on top of [pydantic/genai-prices](https://github.com/pydantic/genai-prices) (MIT). For Anthropic it models only `input_mtok`, `output_mtok`, `cache_read_mtok`, a single `cache_write_mtok` (5m-equivalent), context-length `tiers`, and dated `constraint`s. The levers it does **not** model — which AgentFluent must supply via a local pricing overlay, and/or request upstream — are our coverage ledger:
+AgentFluent prices sessions on top of [pydantic/genai-prices](https://github.com/pydantic/genai-prices) (MIT). For Anthropic it models only `input_mtok`, `output_mtok`, `cache_read_mtok`, a single `cache_write_mtok` (5m-equivalent), context-length `tiers`, and dated `constraint`s. The levers it does **not** model — which AgentFluent must supply via a local pricing overlay, and/or request upstream — are our coverage ledger. Each lever plugs into the [base ⊕ overlay merge seam](#the-base--overlay-merge-seam-547) at one of three named plug points (its **Class** below):
 
-| Gap | Cost impact for users | Local status | Upstream (genai-prices) |
-|---|---|---|---|
-| 1-hour cache write (2×) | **High** (commonly the dominant TTL) | Overlay — landed (#534): parser splits `usage.cache_creation` into 5m/1h, priced separately | [pydantic/genai-prices#295](https://github.com/pydantic/genai-prices/issues/295) (shape proposed, PR offered) |
-| Fast mode premium rates | High *if used* | Overlay | [pydantic/genai-prices#429](https://github.com/pydantic/genai-prices/issues/429) (filed) |
-| Batch (0.5×) / Priority tier | Medium | Overlay | [pydantic/genai-prices#429](https://github.com/pydantic/genai-prices/issues/429) (filed) |
-| Data residency US (1.1×) | Low–Medium | Overlay | [pydantic/genai-prices#429](https://github.com/pydantic/genai-prices/issues/429) (filed) |
-| Web search ($10 / 1k) | Medium *if used* | Overlay (counts present in JSONL) | [pydantic/genai-prices#288](https://github.com/pydantic/genai-prices/pull/288) (PR in flight — retire overlay once merged + pin bumped) |
-| Code execution ($/hr) | Partial (duration not in single-session JSONL) | Document limitation; surface count | not modeled |
-| >200K context tier | Medium *if a session exceeds 200K context* | **Gap** — the adapter takes `TieredPrices.base` and discards `tiers`, so >200K-context sessions are priced at the base tier (tracked in #639) | modeled (`tiers`) |
+| Gap | Class | Seam plug point | Cost impact for users | Local status | Upstream (genai-prices) |
+|---|---|---|---|---|---|
+| 1-hour cache write (2×) | A (rate-level) | `ModelPricing.__post_init__` (derived 2× input) | **High** (commonly the dominant TTL) | Overlay — landed (#534): parser splits `usage.cache_creation` into 5m/1h, priced separately | [pydantic/genai-prices#295](https://github.com/pydantic/genai-prices/issues/295) (shape proposed, PR offered) |
+| Fast mode premium rates | A (rate-level) | `ModelPricing` rate table (#536) | High *if used* | Overlay — future (#536, blocked by #547) | [pydantic/genai-prices#429](https://github.com/pydantic/genai-prices/issues/429) (filed) |
+| Batch (0.5×) / Priority tier | B (multiplier) | `compute_cost(request_multipliers=…)` (#537) | Medium | Overlay — future (#537, blocked by #547) | [pydantic/genai-prices#429](https://github.com/pydantic/genai-prices/issues/429) (filed) |
+| Data residency US (1.1×) | B (multiplier) | `compute_cost(request_multipliers=…)` (#538) | Low–Medium | Overlay — future (#538, blocked by #547) | [pydantic/genai-prices#429](https://github.com/pydantic/genai-prices/issues/429) (filed) |
+| Web search ($10 / 1k) | C (surcharge) | `compute_cost(surcharge_usd=…)` (#539) | Medium *if used* | Overlay — future (#539, blocked by #547; counts present in JSONL) | [pydantic/genai-prices#288](https://github.com/pydantic/genai-prices/pull/288) (PR in flight — retire overlay once merged + pin bumped) |
+| Code execution ($/hr) | C (surcharge) | `compute_cost(surcharge_usd=…)` (future) | Partial (duration not in single-session JSONL) | Document limitation; surface count | not modeled |
+| >200K context tier | (base, not overlay) | upstream `tiers` — adapter discards them | Medium *if a session exceeds 200K context* | **Gap** — the adapter takes `TieredPrices.base` and discards `tiers`, so >200K-context sessions are priced at the base tier (tracked in #639) | modeled (`tiers`) |
 
-The rates, multipliers, and field mappings behind this table are in the canonical doc; this is only AgentFluent's coverage status against it. The **Upstream** column tracks getting each lever modeled in the shared dataset — as those land and we bump the pinned genai-prices slice, the matching local overlay can be retired.
+The rates, multipliers, and field mappings behind this table are in the canonical doc; this is only AgentFluent's coverage status against it. The **Upstream** column tracks getting each lever modeled in the shared dataset — as those land and we bump the pinned genai-prices slice, the matching local overlay can be retired at its single plug point (drop the class-A transform, or the class-B/C argument).
+
+### The base ⊕ overlay merge seam (#547)
+
+Every session's final per-request cost is `base (upstream) ⊕ overlay (local)`. genai-prices supplies only the **base** rate table (via the isolated `analytics/_genai_source.py` adapter — the only genai-prices contact point); the overlay levers above are the pieces it does not model. They are **not uniform** — they compose in three classes, in one fixed documented order:
+
+```
+final = ( (base ⊕ rate_overlays[A]) · tokens ) · Π(multipliers[B]) + Σ(surcharges[C])
+```
+
+| Class | What it does | Scope | Single plug point | Members |
+|---|---|---|---|---|
+| **A — rate-level** | transforms the per-token rate table *before* token×rate | per model + date | `ModelPricing` construction in `get_pricing` (e.g. `__post_init__` derives the 1h rate) | 1h cache write (#534, landed); fast mode (#536) |
+| **B — per-request multiplier** | scales the token-derived dollar subtotal (multipliers commute) | per invocation | `compute_cost(request_multipliers=…)` | batch/priority (#537); data residency (#538) |
+| **C — additive surcharge** | adds fixed dollars *after* the multipliers (a flat fee is never discounted by a batch 0.5×) | per invocation | `compute_cost(surcharge_usd=…)` | server-tool / web search (#539) |
+
+`compute_cost` is the merge point (`analytics/pricing.py`); its class-B/C parameters default to no-op (empty multiplier product = `1.0`, zero surcharge), so a base-only session prices bit-identically to the pre-seam flat sum. "Is this lever upstream or overlay?" is a one-line answer per lever (the **Class**/**Plug point** columns above), and retiring an overlay when genai-prices models it upstream is a localized change at that single plug point. The ordering is load-bearing: class C is added strictly after class B.
 
 ## Reading cost diffs across the v0.10 upgrade
 
