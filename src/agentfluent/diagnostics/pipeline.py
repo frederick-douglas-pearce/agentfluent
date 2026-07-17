@@ -261,7 +261,7 @@ def run_diagnostics(
     signals.extend(extract_model_routing_signals(invocations, configs_by_name))
 
     # SDK main-session model-routing (#112). Intrinsically per-session — it
-    # reads each session's ``session_class`` + main-thread ``message.model``,
+    # reads each session's ``session_kind`` + main-thread ``message.model``,
     # so it drives off the ``sessions`` param, not the flattened invocation
     # stream (architect C1). The CLI now passes ``sessions`` unconditionally;
     # skipped for programmatic callers that don't supply it.

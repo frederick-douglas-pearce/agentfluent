@@ -41,6 +41,7 @@ from agentfluent.core.session import (
     SessionClass,
     SessionMessage,
     classify_session,
+    select_entrypoint,
 )
 from agentfluent.diagnostics.mcp_assessment import (
     McpToolCall,
@@ -62,14 +63,35 @@ class SessionAnalysis(BaseModel):
     token_metrics: TokenMetrics
     tool_metrics: ToolMetrics
     agent_metrics: AgentMetrics
-    session_class: SessionClass = "unknown"
+    session_kind: SessionClass = "unknown"
     """How this session was produced: ``"sdk"`` (Agent SDK), ``"cli"``
     (Claude Code interactive), or ``"unknown"`` — from ``classify_session``
     on the parsed messages (#591 primitive). Persisted here (per-session,
     never at ``AnalysisResult`` level, since a run mixes co-located SDK and
     CLI sessions) so downstream diagnostics gate on it without re-deriving:
     #112's SDK main-session model-routing reads ``"sdk"``, and #592's
-    analyze SDK badge rides the same field."""
+    analyze SDK badge rides the same field.
+
+    **This name is public JSON API** — every non-``exclude`` field here is
+    serialized wholesale by ``analyze --format json`` (D055). Named to match
+    the ratified #592 AC / ``prd-v0.11.md`` §4."""
+
+    entrypoint: str | None = None
+    """The raw, verbatim runtime value this session's ``session_kind`` was
+    derived from — ``"sdk-py"``, ``"cli"``, a future ``"sdk-ts"``, or an
+    unrecognized value; ``None`` when no message carried one (#592 AC#2
+    publishes BOTH).
+
+    Stored, not computed: ``messages`` below is ``exclude=True``, so a
+    computed property would work in-process yet silently yield ``None`` on
+    every rehydrated envelope (``diff`` reads serialized JSON).
+
+    Not redundant with ``session_kind``. Both come from
+    ``select_entrypoint`` — same precedence, so they cannot contradict —
+    but an *unrecognized* runtime classifies as ``"unknown"`` while this
+    field still reports the value verbatim, turning entrypoint-vocabulary
+    drift (``prd-v0.11.md`` §9) into a self-describing report rather than a
+    dead end. Do not "simplify" it away."""
     invocations: list[AgentInvocation] = Field(default_factory=list)
     mcp_tool_calls: list[McpToolCall] = Field(default_factory=list)
     """Parent-session MCP tool calls (those made directly in the main
@@ -247,7 +269,8 @@ def analyze_session(
         token_metrics=token_metrics,
         tool_metrics=tool_metrics,
         agent_metrics=agent_metrics,
-        session_class=classify_session(messages),
+        session_kind=classify_session(messages),
+        entrypoint=select_entrypoint(messages),
         invocations=invocations,
         mcp_tool_calls=mcp_tool_calls,
         messages=messages,

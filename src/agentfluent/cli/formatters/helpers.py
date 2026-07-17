@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from agentfluent.config.models import Severity
+from agentfluent.core.session import SessionClass
 from agentfluent.diagnostics.models import Axis
 
 if TYPE_CHECKING:
@@ -30,6 +31,47 @@ GLOBAL_AGENT_LABEL = "(global)"
 """Display string for cross-cutting findings whose ``agent_type`` is
 ``None`` (e.g., MCP audit). JSON output keeps ``null``; tables substitute
 this label."""
+
+SESSION_KIND_LABELS: dict[SessionClass, str | None] = {
+    "sdk": "SDK",
+    "cli": "Claude Code",
+    "unknown": None,
+}
+"""The single display vocabulary for ``SessionAnalysis.session_kind`` (#592).
+
+One map because three surfaces render these kinds — the footer composition
+line, the ``--session`` badge, and the verbose per-session ``Kind`` column —
+and they must not drift apart.
+
+``unknown`` maps to ``None`` rather than a string so "there is no label"
+is a *type-level* fact every caller must handle: AC#3 forbids a misleading
+"Claude Code" claim for an unclassified session. Callers render the absence
+per surface (the badge omits itself; a table cell shows an em-dash)."""
+
+
+SESSION_KIND_UNCLASSIFIED = "unclassified"
+"""Bucket term for ``unknown`` sessions in the footer's *aggregate*
+composition line (#592).
+
+Distinct from :data:`SESSION_KIND_LABELS`, which maps ``unknown`` to ``None``:
+a per-session *badge* must make no claim, but an aggregate must still account
+for every session it counted. "unclassified" states the absence of a
+classification without asserting a runtime — so the counts sum to
+``session_count`` while honoring AC#3's ban on a misleading "Claude Code"
+claim."""
+
+SESSION_KIND_UNKNOWN_CELL = "—"
+"""Table-cell rendering for an ``unknown`` session kind (#592), matching the
+em-dash convention used elsewhere in the per-session tables."""
+
+
+def session_kind_label(kind: SessionClass) -> str | None:
+    """Display label for a session kind, or ``None`` when unlabelled (#592).
+
+    ``None`` means *make no claim* (the ``unknown`` class) — never
+    substitute a default; see :data:`SESSION_KIND_LABELS`.
+    """
+    return SESSION_KIND_LABELS.get(kind)
 
 CONFIDENCE_COLORS: dict[str, str] = {
     "high": "green",

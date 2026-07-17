@@ -419,7 +419,7 @@ def extract_sdk_main_session_signals(
 ) -> list[DiagnosticSignal]:
     """Emit MODEL_MISMATCH signals for Agent SDK **main** sessions (#112).
 
-    Gated to ``session_class == "sdk"`` — Claude Code interactive (``"cli"``)
+    Gated to ``session_kind == "sdk"`` — Claude Code interactive (``"cli"``)
     and indeterminate (``"unknown"``) main sessions are skipped, honoring the
     D013 boundary (AC#7): a human-driven main session is CodeFluent's scope,
     not a configured agent. Each qualifying session contributes at most one
@@ -429,7 +429,7 @@ def extract_sdk_main_session_signals(
     """
     signals: list[DiagnosticSignal] = []
     for session in sessions:
-        if session.session_class != "sdk":
+        if session.session_kind != "sdk":
             continue
         stats = _build_main_session_stats(session)
         if stats is None:
