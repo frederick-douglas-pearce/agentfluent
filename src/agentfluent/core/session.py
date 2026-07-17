@@ -263,6 +263,28 @@ def select_entrypoint(messages: list[SessionMessage]) -> str | None:
     return sorted(entrypoints)[0]
 
 
+def classify_entrypoint(entrypoint: str | None) -> SessionClass:
+    """Classify one raw ``entrypoint`` value (#592).
+
+    The mapping half of the classification, split from the selection half
+    (``select_entrypoint``) so a caller that already holds the raw value —
+    ``analyze_session`` populates both published fields — can classify it
+    without re-scanning the messages (and without re-emitting
+    ``select_entrypoint``'s mixed-session warning). ``classify_session``
+    composes the two for callers that hold only the messages.
+
+    See ``classify_session`` for what each class means and why an
+    unrecognized value fails safe to ``"unknown"``.
+    """
+    if entrypoint is None:
+        return "unknown"
+    if entrypoint.startswith("sdk"):
+        return "sdk"
+    if entrypoint == "cli":
+        return "cli"
+    return "unknown"
+
+
 def classify_session(messages: list[SessionMessage]) -> SessionClass:
     """Derive the session's runtime class from its messages' ``entrypoint``.
 
@@ -272,8 +294,9 @@ def classify_session(messages: list[SessionMessage]) -> SessionClass:
     (``entrypoint == "sdk-py"`` on 119/119 SDK corpus lines vs ``"cli"`` for
     Claude Code interactive).
 
-    A thin classification of ``select_entrypoint`` (#592) -- that function
-    owns the precedence; this one only maps the chosen raw value to a class:
+    Exactly ``classify_entrypoint(select_entrypoint(messages))`` (#592):
+    ``select_entrypoint`` owns the precedence, ``classify_entrypoint`` owns
+    the mapping. The classes:
 
     - ``None`` (no entrypoint present) -> ``"unknown"`` (pre-pin format or
       drift; no exception).
@@ -295,14 +318,7 @@ def classify_session(messages: list[SessionMessage]) -> SessionClass:
     CLI ``2.1.185`` (captured 2026-06-22); Claude Code may evolve the
     ``entrypoint`` vocabulary, so re-verify on upgrade.
     """
-    entrypoint = select_entrypoint(messages)
-    if entrypoint is None:
-        return "unknown"
-    if entrypoint.startswith("sdk"):
-        return "sdk"
-    if entrypoint == "cli":
-        return "cli"
-    return "unknown"
+    return classify_entrypoint(select_entrypoint(messages))
 
 
 def index_tool_results_by_id(

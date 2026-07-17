@@ -40,7 +40,7 @@ from agentfluent.core.parser import parse_session
 from agentfluent.core.session import (
     SessionClass,
     SessionMessage,
-    classify_session,
+    classify_entrypoint,
     select_entrypoint,
 )
 from agentfluent.diagnostics.mcp_assessment import (
@@ -264,13 +264,17 @@ def analyze_session(
         session_total_cost=token_metrics.total_cost,
     )
 
+    # Selected once, then classified: both published fields (#592) come from
+    # this single raw value, so they cannot disagree.
+    entrypoint = select_entrypoint(messages)
+
     return SessionAnalysis(
         session_path=path,
         token_metrics=token_metrics,
         tool_metrics=tool_metrics,
         agent_metrics=agent_metrics,
-        session_kind=classify_session(messages),
-        entrypoint=select_entrypoint(messages),
+        session_kind=classify_entrypoint(entrypoint),
+        entrypoint=entrypoint,
         invocations=invocations,
         mcp_tool_calls=mcp_tool_calls,
         messages=messages,

@@ -9,11 +9,11 @@ from rich.console import Console
 from rich.markup import escape
 
 from agentfluent.config.models import Severity
-from agentfluent.core.session import SessionClass
 from agentfluent.diagnostics.models import Axis
 
 if TYPE_CHECKING:
     from agentfluent.config.models import ConfigScore, EnvironmentWarning
+    from agentfluent.core.session import SessionClass
 
 SEVERITY_COLORS: dict[Severity, str] = {
     Severity.CRITICAL: "red",

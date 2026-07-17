@@ -14,9 +14,11 @@ from pathlib import Path
 
 import pytest
 
+from agentfluent.analytics.pipeline import analyze_session
 from agentfluent.core.parser import parse_session
 from agentfluent.core.session import (
     SessionMessage,
+    classify_entrypoint,
     classify_session,
     select_entrypoint,
 )
@@ -170,3 +172,47 @@ class TestFieldsCannotContradict:
             assert kind == "cli"
         else:
             assert kind == "unknown"
+
+
+class TestClassifyEntrypoint:
+    """#592: the mapping half, split so callers holding the raw value can
+    classify without re-scanning messages (and without re-warning)."""
+
+    def test_maps_each_class(self) -> None:
+        assert classify_entrypoint("sdk-py") == "sdk"
+        assert classify_entrypoint("sdk-ts") == "sdk"
+        assert classify_entrypoint("cli") == "cli"
+        assert classify_entrypoint("emacs-shell") == "unknown"
+        assert classify_entrypoint(None) == "unknown"
+
+    def test_classify_session_is_exactly_the_composition(self) -> None:
+        for eps in [("sdk-py",), ("cli",), ("emacs-shell",), (None,), ("cli", "sdk-py")]:
+            msgs = _msgs(*eps)
+            assert classify_session(msgs) == classify_entrypoint(select_entrypoint(msgs))
+
+    def test_analyze_session_selects_once_per_session(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Regression: the anomaly was logged (and messages scanned) twice.
+
+        ``analyze_session`` used to call BOTH ``classify_session(messages)``
+        and ``select_entrypoint(messages)`` to populate the two fields --
+        and ``classify_session`` selects internally, so every session paid
+        two full scans and a mixed one warned twice. It now selects once and
+        classifies that value.
+        """
+        session = tmp_path / "mixed.jsonl"
+        session.write_text(
+            '{"type":"user","entrypoint":"cli","message":{"role":"user",'
+            '"content":"hi"},"timestamp":"2026-07-17T00:00:00.000Z"}\n'
+            '{"type":"user","entrypoint":"sdk-py","message":{"role":"user",'
+            '"content":"yo"},"timestamp":"2026-07-17T00:00:01.000Z"}\n'
+        )
+
+        with caplog.at_level("WARNING"):
+            analysis = analyze_session(session)
+
+        assert caplog.text.count("mixes multiple entrypoint values") == 1
+        # ...and the two fields still agree, from the single selection.
+        assert analysis.entrypoint == "sdk-py"
+        assert analysis.session_kind == "sdk"
