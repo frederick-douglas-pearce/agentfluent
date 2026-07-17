@@ -7,10 +7,13 @@ formats into a consistent structure.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
+
+logger = logging.getLogger(__name__)
 
 
 class Usage(BaseModel):
@@ -215,6 +218,73 @@ SessionClass = Literal["sdk", "cli", "unknown"]
 interactive (``cli``), or indeterminate (``unknown``)."""
 
 
+def select_entrypoint(messages: list[SessionMessage]) -> str | None:
+    """Pick the one raw ``entrypoint`` that represents this session (#592).
+
+    Returns the verbatim runtime value (``"sdk-py"``, ``"cli"``, a future
+    ``"sdk-ts"``, or an unrecognized one), or ``None`` when no message
+    carries an entrypoint.
+
+    This is the single precedence rule behind BOTH published fields:
+    ``classify_session`` is a thin function over this selection, so
+    ``SessionAnalysis.session_kind`` and ``SessionAnalysis.entrypoint`` are
+    derived from the same value **by construction** and cannot contradict
+    each other (a ``session_kind: "sdk"`` beside an ``entrypoint: "cli"``
+    is unrepresentable). Keep them coupled if this is ever refactored.
+
+    Over the set of non-``None`` entrypoints seen across ``messages``:
+
+    - any ``startswith("sdk")`` wins (lowest sorted, for determinism).
+    - else exact ``"cli"``.
+    - else the lexicographically-first remaining value -- preserved rather
+      than dropped, so an unrecognized runtime is reported verbatim instead
+      of vanishing (see ``classify_session`` on why that pairing matters).
+    - else ``None``.
+
+    Real single-file sessions are homogeneous (findings 119/119; 295/295
+    files in the 2026-07 corpus pass were single-valued), so the precedence
+    only decides a theoretical mixed session -- which is logged as an
+    anomaly rather than surfaced on the model.
+    """
+    entrypoints = {m.entrypoint for m in messages if m.entrypoint}
+    if not entrypoints:
+        return None
+    if len(entrypoints) > 1:
+        logger.warning(
+            "Session mixes multiple entrypoint values (%s); "
+            "classifying by precedence (sdk > cli > other).",
+            ", ".join(sorted(entrypoints)),
+        )
+    sdk = sorted(e for e in entrypoints if e.startswith("sdk"))
+    if sdk:
+        return sdk[0]
+    if "cli" in entrypoints:
+        return "cli"
+    return sorted(entrypoints)[0]
+
+
+def classify_entrypoint(entrypoint: str | None) -> SessionClass:
+    """Classify one raw ``entrypoint`` value (#592).
+
+    The mapping half of the classification, split from the selection half
+    (``select_entrypoint``) so a caller that already holds the raw value —
+    ``analyze_session`` populates both published fields — can classify it
+    without re-scanning the messages (and without re-emitting
+    ``select_entrypoint``'s mixed-session warning). ``classify_session``
+    composes the two for callers that hold only the messages.
+
+    See ``classify_session`` for what each class means and why an
+    unrecognized value fails safe to ``"unknown"``.
+    """
+    if entrypoint is None:
+        return "unknown"
+    if entrypoint.startswith("sdk"):
+        return "sdk"
+    if entrypoint == "cli":
+        return "cli"
+    return "unknown"
+
+
 def classify_session(messages: list[SessionMessage]) -> SessionClass:
     """Derive the session's runtime class from its messages' ``entrypoint``.
 
@@ -224,33 +294,31 @@ def classify_session(messages: list[SessionMessage]) -> SessionClass:
     (``entrypoint == "sdk-py"`` on 119/119 SDK corpus lines vs ``"cli"`` for
     Claude Code interactive).
 
-    Over the set of non-``None`` entrypoints seen across ``messages``:
+    Exactly ``classify_entrypoint(select_entrypoint(messages))`` (#592):
+    ``select_entrypoint`` owns the precedence, ``classify_entrypoint`` owns
+    the mapping. The classes:
 
-    - none present -> ``"unknown"`` (pre-pin format or drift; no exception).
-    - any ``startswith("sdk")`` -> ``"sdk"``. The prefix match is deliberate:
+    - ``None`` (no entrypoint present) -> ``"unknown"`` (pre-pin format or
+      drift; no exception).
+    - ``startswith("sdk")`` -> ``"sdk"``. The prefix match is deliberate:
       a future ``"sdk-ts"`` classifies as SDK with no TypeScript-specific
       probe (forward-compat).
-    - any exact ``"cli"`` -> ``"cli"``. Exact (not a prefix) so an
-      unrecognized value fails safe to ``"unknown"`` rather than being
-      mislabelled Claude Code.
+    - exact ``"cli"`` -> ``"cli"``. Exact (not a prefix) so an unrecognized
+      value fails safe to ``"unknown"`` rather than being mislabelled
+      Claude Code.
     - otherwise -> ``"unknown"``.
 
-    Real single-file sessions are homogeneous (findings 119/119), so the
-    sdk-before-cli precedence only matters for a theoretical mixed session;
-    it resolves that case deterministically toward ``sdk``.
+    Note that an *unrecognized* entrypoint yields ``"unknown"`` while
+    ``select_entrypoint`` still reports the raw value: the pair turns a
+    runtime-vocabulary drift into a self-describing report ("unknown, and
+    here is the value we did not recognize") rather than a dead end. That
+    is why both are published -- neither is redundant.
 
     Discriminator values confirmed against ``claude-agent-sdk==0.2.106`` /
     CLI ``2.1.185`` (captured 2026-06-22); Claude Code may evolve the
     ``entrypoint`` vocabulary, so re-verify on upgrade.
     """
-    entrypoints = {m.entrypoint for m in messages if m.entrypoint}
-    if not entrypoints:
-        return "unknown"
-    if any(e.startswith("sdk") for e in entrypoints):
-        return "sdk"
-    if "cli" in entrypoints:
-        return "cli"
-    return "unknown"
+    return classify_entrypoint(select_entrypoint(messages))
 
 
 def index_tool_results_by_id(

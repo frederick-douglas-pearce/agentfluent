@@ -1,7 +1,7 @@
 """Tests for SDK main-session model-routing diagnostics (#112).
 
 Covers ``extract_sdk_main_session_signals`` / ``_build_main_session_stats``:
-detection gated to ``session_class == "sdk"`` (AC#1/#7), complexity applied
+detection gated to ``session_kind == "sdk"`` (AC#1/#7), complexity applied
 to the main session's own per-turn stats (AC#2), overspec/underspec emission
 with a ``routing_scope="main_session"`` discriminator (AC#3/#6), the per-turn
 token formula (input + cache_creation + output, excluding cache_read), and the
@@ -69,14 +69,14 @@ def _tool_result(is_error: bool) -> SessionMessage:
 
 def _session(
     messages: list[SessionMessage],
-    session_class: SessionClass = "sdk",
+    session_kind: SessionClass = "sdk",
 ) -> SessionAnalysis:
     return SessionAnalysis(
         session_path=Path("main.jsonl"),
         token_metrics=TokenMetrics(),
         tool_metrics=ToolMetrics(),
         agent_metrics=AgentMetrics(),
-        session_class=session_class,
+        session_kind=session_kind,
         messages=messages,
     )
 
@@ -168,7 +168,7 @@ class TestExtractSdkMainSessionSignals:
                 _assistant_turn(MODEL_SONNET, input_tokens=20, output_tokens=30)
                 for _ in range(4)
             ],
-            session_class="cli",
+            session_kind="cli",
         )
         assert extract_sdk_main_session_signals([cli]) == []
 
@@ -178,7 +178,7 @@ class TestExtractSdkMainSessionSignals:
                 _assistant_turn(MODEL_SONNET, input_tokens=20, output_tokens=30)
                 for _ in range(4)
             ],
-            session_class="unknown",
+            session_kind="unknown",
         )
         assert extract_sdk_main_session_signals([unknown]) == []
 
@@ -210,9 +210,9 @@ class TestExtractSdkMainSessionSignals:
         assert len(signals) == 2
         assert {s.agent_type for s in signals} == {f"SDK main [{MODEL_SONNET}]"}
 
-    def test_fixture_wires_session_class_and_gates_short_session(self) -> None:
+    def test_fixture_wires_session_kind_and_gates_short_session(self) -> None:
         # End-to-end on the purpose-built fixture: analyze_session populates
-        # session_class="sdk", and the sonnet main classifies 'simple'
+        # session_kind="sdk", and the sonnet main classifies 'simple'
         # (moderate tier) — but the fixture has only 2 turns, so the ≥3 gate
         # suppresses the signal (documents the fail-safe on the real file).
         from agentfluent.analytics.pipeline import analyze_session
@@ -226,7 +226,7 @@ class TestExtractSdkMainSessionSignals:
             / "fixtures" / "sdk_session" / "sdk-main-1.jsonl"
         )
         sa = analyze_session(fixture)
-        assert sa.session_class == "sdk"
+        assert sa.session_kind == "sdk"
         stats = _build_main_session_stats(sa)
         assert stats is not None
         assert stats.current_model == MODEL_SONNET

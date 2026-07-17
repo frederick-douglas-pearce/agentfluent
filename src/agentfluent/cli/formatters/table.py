@@ -8,6 +8,7 @@ to a Rich Console; I/O stays in the command callbacks.
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import TYPE_CHECKING
 
 from rich.console import Console
@@ -17,6 +18,8 @@ from rich.table import Table
 from agentfluent.cli.formatters.helpers import (
     CONFIDENCE_COLORS,
     GLOBAL_AGENT_LABEL,
+    SESSION_KIND_UNCLASSIFIED,
+    SESSION_KIND_UNKNOWN_CELL,
     SEVERITY_COLORS,
     average_score,
     axis_label,
@@ -27,6 +30,7 @@ from agentfluent.cli.formatters.helpers import (
     format_tokens,
     render_environment_warnings,
     score_color,
+    session_kind_label,
     severity_cell,
     truncate,
 )
@@ -52,6 +56,7 @@ if TYPE_CHECKING:
     from agentfluent.analytics.pipeline import AnalysisResult
     from agentfluent.config.models import ConfigScore
     from agentfluent.core.discovery import ProjectInfo, SessionInfo
+    from agentfluent.core.session import SessionClass
     from agentfluent.diagnostics.models import DiagnosticSignal, DiagnosticsResult
 
 
@@ -277,6 +282,7 @@ def format_analysis_table(
     if verbose and len(result.sessions) > 1:
         session_table = Table(title="Per-Session Breakdown", show_header=True)
         session_table.add_column("Session", style="cyan")
+        session_table.add_column("Kind")
         session_table.add_column("Tokens", justify="right")
         session_table.add_column("Cost (API rate)", justify="right")
         session_table.add_column("Turns", justify="right")
@@ -285,6 +291,7 @@ def format_analysis_table(
         for s in result.sessions:
             session_table.add_row(
                 s.session_path.name,
+                session_kind_label(s.session_kind) or SESSION_KIND_UNKNOWN_CELL,
                 format_tokens(s.token_metrics.total_tokens),
                 format_cost(s.token_metrics.total_cost),
                 str(s.model_turns),
@@ -367,9 +374,63 @@ def format_analysis_table(
             )
 
     if result.scope_session is not None:
-        console.print(f"\n[bold]Session:[/bold] {result.scope_session}")
+        badge = _scope_session_badge(result)
+        console.print(f"\n[bold]Session:[/bold] {result.scope_session}{badge}")
     else:
-        console.print(f"\n[bold]Sessions analyzed:[/bold] {result.session_count}")
+        composition = _session_kind_composition(result)
+        console.print(
+            f"\n[bold]Sessions analyzed:[/bold] {result.session_count}{composition}"
+        )
+
+
+def _session_kind_composition(result: AnalysisResult) -> str:
+    """Render the SDK-vs-Claude-Code composition of the analyzed sessions (#592).
+
+    Returns e.g. ``" (8 Claude Code, 4 SDK)"`` — a parenthetical suffix for
+    the always-printed footer, which is the only default (non-verbose)
+    per-session surface and therefore what satisfies AC#1 on a project-scoped
+    run. Empty string when no sessions were analyzed.
+
+    Every kind is counted **directly** from ``result.sessions``; a bucket is
+    never derived by subtraction, which would silently fold ``unknown``
+    sessions into the "Claude Code" count — precisely the misleading claim
+    AC#3 forbids. The counts therefore always sum to ``session_count``.
+
+    Zero-count kinds are omitted (an absent kind cannot mislead); the order is
+    fixed rather than count-ranked so the line is stable across runs. Computed
+    here at render time on purpose: the class is per-session by design (a run
+    mixes co-located SDK and CLI sessions), so no aggregate is stored on
+    ``AnalysisResult``.
+    """
+    counts = Counter(s.session_kind for s in result.sessions)
+    buckets: tuple[tuple[SessionClass, str | None], ...] = (
+        ("cli", session_kind_label("cli")),
+        ("sdk", session_kind_label("sdk")),
+        ("unknown", SESSION_KIND_UNCLASSIFIED),
+    )
+    parts = [
+        f"{counts[kind]} {label}" for kind, label in buckets if counts[kind] and label
+    ]
+    return f" ({', '.join(parts)})" if parts else ""
+
+
+def _scope_session_badge(result: AnalysisResult) -> str:
+    """Render the runtime badge for a single ``--session``-scoped run (#592).
+
+    Returns e.g. ``" [SDK]"``, or ``""`` when the session is ``unknown`` —
+    AC#3's neutral state is rendered by making **no claim at all**, not by
+    printing a placeholder.
+
+    Deliberately asymmetric with :func:`_session_kind_composition`, which
+    *counts* unknown sessions: an aggregate's job is to account for every
+    session, whereas a badge's job is to assert a runtime — and on an
+    unclassified session the honest assertion is none. This is intentional;
+    please don't "fix" it into symmetry.
+    """
+    if len(result.sessions) != 1:
+        return ""
+    label = session_kind_label(result.sessions[0].session_kind)
+    return f" [{label}]" if label else ""
 
 
 def _verbose_signal_message(sig: DiagnosticSignal) -> str:
