@@ -46,6 +46,14 @@ sdk-main-1/subagents/
   bytes here as a forward test-bed for the downstream #112 work.
 - **`toolUseResult.status == "completed"`** — the observed value; the `CLAUDE.md`
   JSONL example's `"success"` is a doc-example nit, not the emitted value.
+- **`totalTokens` semantics (D056, #595):** the child trace is **multi-turn**, with
+  per-turn `usage` mirroring the live capture, so the level-1 rollup channel locks
+  the ratified property: `totalTokens` (`3925`) is the child's **final turn**
+  (`3555, 3653, 3925`), *not* the sum over its turns (`11133`). A single-turn trace
+  cannot distinguish the two, which is why the turns are not collapsed. The trace
+  also now performs the `Read` + `Bash` calls the rollup already advertised
+  (`totalToolUseCount: 2`, `toolStats {Read: 1, Bash: 1}`) — previously the rollup
+  claimed two tool uses the bytes did not contain.
 - **4-way linkage:** the main `tool_use.id` (`toolu_main_to_child`) ==
   `tool_result.tool_use_id` == the sidecar's `toolUseId` == `toolUseResult.agentId`
   (`child0000001`) == the `agent-child0000001.jsonl` filename == the child trace's

@@ -109,7 +109,12 @@ class TestModelDivergence:
             for obj in _raw(_CHILD_JSONL)
             if obj.get("type") == "assistant"
         ]
-        assert child_models == [_CHILD_MODEL]
+        # Every turn ran the resolved model. Asserted per-element rather than
+        # against a fixed-length list: the child trace became multi-turn when
+        # #595 brought its per-turn usage in line with the live capture, and
+        # this test's subject is the MODEL, not the turn count.
+        assert child_models, "child trace must have assistant turns"
+        assert all(m == _CHILD_MODEL for m in child_models)
 
 
 class TestResolvedModelField:

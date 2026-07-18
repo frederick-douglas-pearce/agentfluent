@@ -33,6 +33,17 @@ dir. There are **no** nested `subagents/<id>/subagents/` directories.
 - **Rollup metadata is top-level only**: the main session's `tool_result` for the
   worker carries a full `toolUseResult` rollup; the worker's `tool_result` for the
   leaf (depth 2) carries **none** — only an inline `subagent_tokens:` text trailer.
+- **`totalTokens` semantics (D056, #595)**: the per-turn `usage` values mirror the
+  live capture this fixture anonymizes, so both ratified facts hold *on the bytes*:
+  - **exclusive of children** — the worker's rollup (`5495`) does not contain the
+    leaf's `3925`;
+  - **not cumulative spend** — `5495` is the worker's **final turn**
+    (`4558, 4719, 5495`), while its turns *sum* to `14772`. Same for the leaf:
+    final `3925`, sum `7480`.
+
+  Do not "tidy" these into round numbers: the inequality is the property under
+  test (`tests/unit/test_totaltokens_semantics.py`), and `cache_read` recurring
+  across turns is why the sum overstates.
 
 The worker also does its own `Read` before delegating (a realistic acts-and-
 delegates middle agent), so the depth-2 "no rollup" property is not an artifact
