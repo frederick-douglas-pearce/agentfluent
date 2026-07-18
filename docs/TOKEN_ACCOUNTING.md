@@ -482,9 +482,18 @@ way.
 
 | project | §1 rollup defect | §3 dedup defect | §4 orphan defect |
 | --- | --- | --- | --- |
-| **AgentFluent** | **Affected** ([#646][i646], sites below) | clean — dedups in `core/parser.py` | **Affected** — 30.7% |
-| **CodeFluent** | **Not affected** — never reads the rollup | clean — dedups by `message.id` | **Affected** — 30.2% |
-| **claude-code-sessions** | **Documents the inverse error** | not addressed in docs | asymmetry documented correctly |
+| **AgentFluent** | **Affected** — [#646][i646] | clean (`core/parser.py`); locked by [#649][i649] | **Affected** — 30.7%, [#648][i648] |
+| **CodeFluent** | **Not affected** — never reads the rollup | clean — dedups by `message.id` | **Affected** — 30.2%, [codefluent#334][cf334] |
+| **claude-code-sessions** | **Documents the inverse error** — [#144][ccs144] | gap — [#144][ccs144] | asymmetry documented correctly |
+
+Published posts in claude-code-sessions need errata rather than silent edits:
+[claude-code-sessions#145][ccs145].
+
+[i648]: https://github.com/frederick-douglas-pearce/agentfluent/issues/648
+[i649]: https://github.com/frederick-douglas-pearce/agentfluent/issues/649
+[cf334]: https://github.com/frederick-douglas-pearce/codefluent/issues/334
+[ccs144]: https://github.com/frederick-douglas-pearce/claude-code-sessions/issues/144
+[ccs145]: https://github.com/frederick-douglas-pearce/claude-code-sessions/issues/145
 
 ### AgentFluent — affected sites
 
