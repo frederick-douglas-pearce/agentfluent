@@ -262,6 +262,27 @@ Either way the tokens are invisible. In AgentFluent this also means they are
 missing from `token_metrics` — the session's **total cost is understated too**,
 not just per-agent attribution.
 
+**Cause (2) dominates.** Claude Code retains transcripts for
+[`cleanupPeriodDays`, default 30 days][sessions]. Testing orphan traces by file
+age:
+
+| | count | median age | p90 | >30 days old |
+| --- | ---: | ---: | ---: | ---: |
+| linked traces | 836 | 48d | 79d | 71% |
+| **orphan traces** | 214 | **138d** | 169d | **97%** |
+
+Orphans are strictly older, and 97% predate the retention window. Depth-≥2
+nesting has no relationship to age, so it cannot explain this distribution — the
+cohort is dominated by **parent sessions deleted by retention while the sibling
+`<session-id>/subagents/` directory survived**. CodeFluent's independent audit
+agrees: **0 of 61** orphan dirs had a parent anywhere in the corpus.
+
+Consequence for anyone fixing this: a multi-level linker recovers only a small
+minority. A deleted parent is **genuinely unattributable**, so the primary
+deliverable is *coverage disclosure*, not correction. (The residual 3% newer than
+30 days may be the true depth-≥2 cohort; decompose structurally rather than by
+age before sizing the fix.)
+
 **Anthropic documents this failure mode for the SDK.** From the Agent SDK
 cost-tracking guide, on subagents:
 
@@ -301,15 +322,38 @@ Key quotes:
 > multiple `query()` calls... accumulate the totals yourself."
 > — [SDK cost tracking][sdkcost]
 
-**Anthropic explicitly discourages parsing these files:**
+**Anthropic discourages parsing these files — on stability grounds only:**
 
 > "The entry format is internal to Claude Code and changes between versions, so
-> scripts that parse these files directly can break on any release."
+> scripts that parse these files directly can break on any release. To build on
+> session data, use `/export` or the script interfaces instead."
 > — [Manage sessions][sessions]
 
-That is the correct posture for any project in this space to adopt publicly: the
-§1 invariant is an *empirical* property of one captured format version, not a
-contract. Assert it in tests so a format change fails loudly.
+Read this precisely, because it is easy to over-read. The **only** rationale
+offered is format instability. There is no support-policy, privacy, or
+data-quality argument, and — importantly — **no steer toward a billing API as the
+authoritative source**. The caveat sits in a session-management page next to
+storage paths and retention settings; cost and billing are never mentioned. It
+applies to *all* direct parsing, not to token accounting specifically.
+
+**None of the recommended alternatives cover retrospective analysis:**
+
+| interface | limitation |
+| --- | --- |
+| `/export` | explicitly "a rendered transcript for a **person to read**" — not structured |
+| `claude -p --output-format json` | captures usage and cost, but only for runs **you initiate going forward** |
+| hooks / statusline `transcript_path` | hands you the **path to the JSONL** — routes back to parsing it, with no schema |
+| Agent SDK | only for sessions your app runs |
+
+For analyzing sessions a developer already ran interactively, there is no
+supported alternative. So the honest posture is not "this is discouraged" but
+"this is the only available route, over a format carrying no stability
+contract" — which is exactly why the §1 invariant should be **asserted in tests**
+rather than assumed. It is an empirical property of one captured format version.
+
+(`claude -p --output-format json` *does* expose usage and cost for headless/SDK
+runs. That is a genuinely supported surface for the Agent SDK audience and worth
+considering as an independent cross-check.)
 
 **Authoritative validation is available.** The [Usage & Cost Admin API][admin]
 (`/v1/organizations/cost_report`, `/v1/organizations/usage_report/messages`)
