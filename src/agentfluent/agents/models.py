@@ -64,6 +64,27 @@ class AgentInvocation(BaseModel):
 
     # From tool_result metadata (may be None if no metadata or agent was interrupted)
     total_tokens: int | None = None
+    """Raw ``toolUseResult.totalTokens`` for this invocation. **Two facts a
+    consumer must know before aggregating (#595, D056):**
+
+    1. **It excludes child agents.** A delegating agent's ``totalTokens`` does
+       not contain the tokens of agents it spawned, so summing an invocation
+       alongside its descendants does not double-count.
+    2. **It is not cumulative spend.** It equals the agent's *final assistant
+       turn* usage (``input + output + cache_creation + cache_read``), not the
+       sum over its turns. Measured across 683 rollups: 575 (84%) match the
+       final turn exactly, **0 match the sum of turns**, and the remainder sit
+       within ~1-3% of the final turn while running 10-40x below the sum.
+       It is a *final-turn context-size proxy* -- neither tokens billed nor
+       tokens processed -- because every turn re-reports the whole context it
+       was given, so summing turns counts the same prefix repeatedly.
+
+    Fact 2 means summing this field across invocations does not yield token
+    spend, which is a pre-existing defect in several aggregates rather than
+    anything #595 introduced; see D056 and the issue it points to. The name is
+    retained under D029 (it has shipped) -- prefer a subagent trace's per-turn
+    ``usage`` when you need actual spend."""
+
     tool_uses: int | None = None
     duration_ms: int | None = None
     agent_id: str | None = None
