@@ -99,21 +99,56 @@ class TestDegradation:
         (tmp_path / "agent-binary.meta.json").write_bytes(b"\xff\xfe\x00garbage")
         assert read_subagent_sidecar(trace) is None
 
+    def test_deeply_nested_json_returns_none(self, tmp_path: Path) -> None:
+        """Regression: ``json.loads`` raises ``RecursionError`` (a
+        ``RuntimeError``, so it matched no typed except clause)."""
+        trace = tmp_path / "agent-deep.jsonl"
+        trace.write_text("{}\n")
+        (tmp_path / "agent-deep.meta.json").write_text("[" * 60000 + "]" * 60000)
+        assert read_subagent_sidecar(trace) is None
+
     @pytest.mark.parametrize(
         "obj",
         [
-            {"description": "d", "toolUseId": "t"},  # no agentType
             {"agentType": "a", "description": "d"},  # no toolUseId
+            {"agentType": "a"},
             {},
         ],
     )
-    def test_missing_required_keys_returns_none(
+    def test_missing_tool_use_id_returns_none(
         self, tmp_path: Path, obj: dict[str, str]
     ) -> None:
+        """``tool_use_id`` is the one genuinely required field."""
         trace = tmp_path / "agent-partial.jsonl"
         trace.write_text("{}\n")
         (tmp_path / "agent-partial.meta.json").write_text(json.dumps(obj))
         assert read_subagent_sidecar(trace) is None
+
+
+class TestDescriptiveFieldsNeverCostTheEdge:
+    """A cosmetic field's shape must not discard a real parent edge."""
+
+    @pytest.mark.parametrize(
+        "obj",
+        [
+            {"toolUseId": "toolu_KEEP"},  # both descriptive fields absent
+            {"toolUseId": "toolu_KEEP", "description": None},
+            {"toolUseId": "toolu_KEEP", "agentType": None},
+            {"toolUseId": "toolu_KEEP", "agentType": None, "description": None},
+            {"toolUseId": "toolu_KEEP", "description": "d"},  # no agentType
+        ],
+    )
+    def test_edge_survives_missing_or_null_descriptive_fields(
+        self, tmp_path: Path, obj: dict[str, str | None]
+    ) -> None:
+        trace = tmp_path / "agent-edge.jsonl"
+        trace.write_text("{}\n")
+        (tmp_path / "agent-edge.meta.json").write_text(json.dumps(obj))
+        meta = read_subagent_sidecar(trace)
+        assert meta is not None, "a cosmetic field must not cost the edge"
+        assert meta.tool_use_id == "toolu_KEEP"
+        assert isinstance(meta.agent_type, str)
+        assert isinstance(meta.description, str)
 
     def test_description_defaults_when_absent(self, tmp_path: Path) -> None:
         trace = tmp_path / "agent-nodesc.jsonl"

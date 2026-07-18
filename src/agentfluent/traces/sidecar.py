@@ -34,7 +34,7 @@ import json
 import logging
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -50,18 +50,32 @@ class SubagentSidecar(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
-    agent_type: str = Field(alias="agentType")
+    tool_use_id: str = Field(alias="toolUseId")
+    """The ``Agent`` ``tool_use`` block id that spawned this agent -- the edge
+    label joining this trace to its invoking call. See the module docstring on
+    why this is load-bearing at depth >= 2.
+
+    **The only required field.** It is the one this module exists to recover,
+    so the two descriptive fields below tolerate absence or a null rather than
+    taking a real parent edge down with them."""
+
+    agent_type: str = Field("", alias="agentType")
     """Agent type as recorded by the runtime. Parent-authoritative: unlike a
     trace's own ``agent_type`` (which the parser defaults to ``unknown``),
-    this is what the spawning side named."""
+    this is what the spawning side named. Empty when absent or malformed --
+    callers should fall back to the trace's own value."""
 
     description: str = ""
     """Short human-readable task description supplied at delegation time."""
 
-    tool_use_id: str = Field(alias="toolUseId")
-    """The ``Agent`` ``tool_use`` block id that spawned this agent -- the edge
-    label joining this trace to its invoking call. See the module docstring on
-    why this is load-bearing at depth >= 2."""
+    @field_validator("agent_type", "description", mode="before")
+    @classmethod
+    def _null_becomes_empty(cls, value: object) -> object:
+        """Coerce a null descriptive field to ``""`` instead of failing.
+
+        A cosmetic field's shape must not cost us the ``tool_use_id`` edge.
+        """
+        return "" if value is None else value
 
 
 def sidecar_path_for(trace_path: Path) -> Path:
@@ -88,9 +102,15 @@ def read_subagent_sidecar(trace_path: Path) -> SubagentSidecar | None:
     except FileNotFoundError:
         logger.debug("No subagent sidecar for trace: %s", trace_path)
         return None
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        # UnicodeDecodeError subclasses ValueError, NOT OSError, so a non-UTF-8
-        # sidecar would otherwise escape and break this function's totality.
+    except Exception as exc:
+        # Deliberately broad. Totality is this function's contract, and
+        # enumerating exception types has already failed twice here:
+        # UnicodeDecodeError subclasses ValueError (not OSError), and
+        # RecursionError -- raised by json.loads on deeply nested input --
+        # subclasses RuntimeError, so neither matched a typed tuple. The
+        # operation is bounded (read one small file, parse it) and every
+        # failure has the same handling, so bound the operation, not the
+        # type list.
         logger.debug("Unreadable subagent sidecar %s: %s", path, exc)
         return None
 

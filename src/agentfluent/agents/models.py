@@ -75,8 +75,9 @@ class AgentInvocation(BaseModel):
        sum over its turns. Measured across 683 rollups: 575 (84%) match the
        final turn exactly, **0 match the sum of turns**, and the remainder sit
        within ~1-3% of the final turn while running 10-40x below the sum.
-       Because ``cache_read`` is re-counted every turn, this is a *final-turn
-       context-size proxy* -- neither tokens billed nor tokens processed.
+       It is a *final-turn context-size proxy* -- neither tokens billed nor
+       tokens processed -- because every turn re-reports the whole context it
+       was given, so summing turns counts the same prefix repeatedly.
 
     Fact 2 means summing this field across invocations does not yield token
     spend, which is a pre-existing defect in several aggregates rather than
