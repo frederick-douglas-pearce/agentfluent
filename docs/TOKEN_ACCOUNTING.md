@@ -271,17 +271,40 @@ age:
 | linked traces | 836 | 48d | 79d | 71% |
 | **orphan traces** | 214 | **138d** | 169d | **97%** |
 
-Orphans are strictly older, and 97% predate the retention window. Depth-≥2
-nesting has no relationship to age, so it cannot explain this distribution — the
-cohort is dominated by **parent sessions deleted by retention while the sibling
-`<session-id>/subagents/` directory survived**. CodeFluent's independent audit
-agrees: **0 of 61** orphan dirs had a parent anywhere in the corpus.
+Orphans are strictly older. Depth-≥2 nesting has no relationship to age, so it
+cannot explain this distribution. CodeFluent's independent audit agrees: **0 of
+61** orphan dirs had a parent anywhere in the corpus.
+
+**The mechanism is a cleanup asymmetry.** Comparing what survives:
+
+| | oldest surviving |
+| --- | ---: |
+| parent `<session-id>.jsonl` | **83d** |
+| `<session-id>/subagents/` dirs | **188d** |
+
+Newest orphan dir 129d vs oldest dir with a live parent 83d — **non-overlapping**,
+a 46-day gap. That is a deletion event, not attrition. Moved/renamed projects are
+ruled out: 3 of the 4 affected project dirs also contain sessions with live
+parents. **54.3 MB stranded across 61 directories.**
+
+So retention removed the parent transcripts but **did not remove the sibling
+`<session-id>/subagents/` directories**, which outlive their parents by ~100 days
+here. Traces persist; the session they belong to does not.
+
+Two caveats, since this shapes the fix:
+
+- **Growth depends on the install's retention setting.** On the corpus measured
+  here `cleanupPeriodDays` is 3650, so nothing has been deleted in ~83 days and
+  the 30.7% is a **frozen historical residue**. On a default-configured install
+  (30 days) the loss is **ongoing and would be larger**.
+- **The asymmetry is confirmed historical, not tested on current versions** — no
+  deletion has occurred recently enough to observe directly.
 
 Consequence for anyone fixing this: a multi-level linker recovers only a small
 minority. A deleted parent is **genuinely unattributable**, so the primary
-deliverable is *coverage disclosure*, not correction. (The residual 3% newer than
-30 days may be the true depth-≥2 cohort; decompose structurally rather than by
-age before sizing the fix.)
+deliverable is *coverage disclosure*, not correction. Decompose structurally
+rather than by age before sizing the fix, and record whether the install had
+active retention.
 
 **Anthropic documents this failure mode for the SDK.** From the Agent SDK
 cost-tracking guide, on subagents:
