@@ -55,6 +55,20 @@ From **v0.11**, AgentFluent resolves each session's base rate at the session's o
 
 The wiring is a forward-compat guarantee: the day Anthropic ships a genuine dated base-rate change and it lands in the pinned dataset, historical sessions auto-price correctly with no code change. A guard test (`tests/`) asserts the current date-invariance per model and **fails loudly** if that ever stops holding — that failure is the signal to write the user-facing "historical costs now differ" note here and to activate #543's cross-date-delta caveat for `diff`.
 
+## Rates, not quantities: the boundary of v0.11's cost work (D056)
+
+v0.11 rebuilds the **rate** half of cost — the price per token: the genai-prices base ⊕ overlay seam (#547) and date-aware base-rate lookup (#546) above. It does **not** correct the **quantity** half, and the two must not be conflated.
+
+Cost is `rate × quantity`. The rate side is now sourced from a maintained dataset; the quantity side — *how many tokens each agent actually burned* — has a known defect that v0.11 deliberately does not fix. `toolUseResult.totalTokens` is **not** cumulative token spend: it equals the agent's **final assistant turn** (`input + output + cache_creation + cache_read`), a context-size proxy that re-counts the cached prefix each turn. Settling that semantics is exactly what shipped in v0.11 (#595 PR A, **D056**); the correction that consumes it does not.
+
+Concretely, for the current release:
+
+- **Session-level `total_cost` and `total_tokens` are sound** for the tokens the pipeline actually sums (per-turn `usage`), now priced at corrected rates.
+- **Per-agent token attribution and per-agent cost are not** claimed accurate. The aggregates that multiply a `totalTokens`-derived quantity by a rate (per-agent-type spend, `agent_token_percentage`) sum a final-turn proxy, not spend — they **understate** true per-agent burn, silently. See [`TOKEN_ACCOUNTING.md`](TOKEN_ACCOUNTING.md) for the field-by-field semantics.
+- **Nested spend can be dropped entirely.** Orphan and depth-≥2 subagent traces that don't link to a discovered invocation are not folded into any aggregate (#648).
+
+Both quantity corrections — per-agent attribution (#646) and orphan/depth-≥2 trace coverage (#648), enabled by the multi-level trace linker (#595 PR B) — are scoped to **v0.12**. Until they land, read a per-agent cost figure as a lower bound, not a settled number.
+
 ---
 
 _Catalog relocation: the full lever catalog originally drafted here (#535) now lives in claude-code-sessions `reference/cost-model.md`. The 1-hour cache-write overlay is tracked in #534._
