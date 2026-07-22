@@ -492,7 +492,7 @@ Five GitHub Actions workflows run automatically:
 
 ## Roadmap
 
-Current release: **v0.10.0 — "Close the Hook Gap."** Next: **v0.11** — SDK-native session ingestion, per-turn diagnostic ratios, and trace-level precision for the Advanced Tool Use signals. See the roadmap link below for the per-release theme, headline features, and design context.
+Current release: **v0.11.0 — "Recognize the SDK Session."** Next: **v0.12** — cost-accounting *quantity* correctness (per-agent token attribution and orphan / depth-≥2 trace coverage) and continued Claude cost-lever coverage. See the roadmap link below for the per-release theme, headline features, and design context.
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full version history (release themes, headline features, design context per release) and [`CHANGELOG.md`](CHANGELOG.md) for the commit-level log. Browse [open issues](https://github.com/frederick-douglas-pearce/agentfluent/issues) for the full backlog.
 

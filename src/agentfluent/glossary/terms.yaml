@@ -1039,6 +1039,39 @@
     costs *more*); the recommendation is purely about output quality.
   related: [overspec, complexity_tier, model_mismatch]
 
+- name: resolved_model
+  category: model_routing
+  short: |
+    The concrete model Claude Code actually resolved and ran for an
+    invocation, surfaced from `toolUseResult.resolvedModel`.
+  long: |
+    Added in v0.11 (#593). Read from the `resolvedModel` field on a tool
+    result's `toolUseResult` metadata, it records the model the runtime
+    *actually* ran -- as opposed to a model named in an agent's frontmatter,
+    which may be absent, stale, or an alias. Model-routing diagnostics prefer
+    a linked subagent `trace.model` when one exists and fall back to
+    `resolved_model` otherwise, so a `model_mismatch` can still be computed
+    when the agent definition names no model. `null` when the session
+    predates the field or the runtime did not record it.
+  related: [routing_scope, model_mismatch, complexity_tier]
+
+- name: routing_scope
+  category: model_routing
+  short: |
+    Whether a model-routing finding applies to an SDK main session
+    (`"main_session"`) or to a subagent invocation (`"subagent"`).
+  long: |
+    Added in v0.11 (#112). Model-routing diagnostics run on an Agent SDK
+    *main* session are scoped `"main_session"`; findings on delegated agents
+    carry the default `"subagent"`. The distinction is load-bearing under
+    D013: AgentFluent owns SDK main sessions and may recommend a model for
+    them, but must **not** flag a Claude Code *interactive* main session the
+    same way -- the [`session_kind`](#session_kind) classification gates which
+    mains are in scope. Surfaced on the diagnostic detail and consumed by the
+    correlator so a main-session recommendation reads distinctly from a
+    subagent one.
+  related: [resolved_model, session_kind, model_mismatch]
+
 # =============================================================================
 # Built-in agent types
 # =============================================================================
@@ -1530,6 +1563,42 @@
     Agent Invocations
       pm   ...   470.0s (2918.0s wall)†   <- active 470s/call, wall 2918s/call
   related: [model_turns, duration_outlier]
+
+- name: session_kind
+  category: session_metric
+  short: |
+    Whether a session was produced by an Agent SDK run, Claude Code
+    interactive use, or is indeterminate -- `"sdk" | "cli" | "unknown"`.
+  long: |
+    Added in v0.11 (#591/#592) as an additive schema-v2 field -- no envelope
+    version bump. Derived from the session's [`entrypoint`](#entrypoint):
+    `sdk-py` -> `"sdk"`, `cli` -> `"cli"`, anything else -> `"unknown"`. It is
+    **per-session, never aggregated at the top level** -- one project
+    directory routinely co-locates SDK and Claude Code sessions, which is
+    exactly the ambiguity this field resolves. `analyze` surfaces it three
+    ways: a composition line in the footer
+    (`Sessions analyzed: 118 (102 Claude Code, 16 SDK)`), an `[SDK]` badge
+    when `--session` scopes the run, and a `Kind` column in the `--verbose`
+    per-session breakdown; JSON carries it on each entry in `data.sessions`.
+    `agentfluent diff` does not consume it, so baselines from either side of
+    v0.11 compare unchanged.
+  example: "Sessions analyzed: 118 (102 Claude Code, 16 SDK)"
+  related: [entrypoint, api_call_count]
+
+- name: entrypoint
+  category: session_metric
+  short: |
+    The raw runtime value a session's `session_kind` is derived from
+    (`"sdk-py"`, `"cli"`, or a future/unrecognized value); `string | null`.
+  long: |
+    Added in v0.11 (#591). Published *alongside* the derived
+    [`session_kind`](#session_kind) because the two answer different
+    questions: an unrecognized runtime classifies as `"unknown"` while
+    `entrypoint` still reports it **verbatim**, so a future Claude Code
+    vocabulary change surfaces as a readable value rather than an unexplained
+    `unknown`. `null` when the source session recorded no entrypoint.
+    Per-session, never aggregated.
+  related: [session_kind]
 
 # =============================================================================
 # Comparison row status (agentfluent diff)
