@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.11.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.10.0...v0.11.0) (2026-07-22)
+
+
+### Features
+
+* **analyze:** show an SDK-vs-Claude-Code indicator (CLI badge + JSON) ([#592](https://github.com/frederick-douglas-pearce/agentfluent/issues/592)) ([#644](https://github.com/frederick-douglas-pearce/agentfluent/issues/644)) ([7575bac](https://github.com/frederick-douglas-pearce/agentfluent/commit/7575bac5263aebfa69771d78557fe3cb093960be))
+* **core:** surface entrypoint + classify sdk/cli/unknown sessions ([#591](https://github.com/frederick-douglas-pearce/agentfluent/issues/591)) ([#608](https://github.com/frederick-douglas-pearce/agentfluent/issues/608)) ([a3d6c6b](https://github.com/frederick-douglas-pearce/agentfluent/commit/a3d6c6b23f36780822fa7e98c0462bc3628fc945))
+* **core:** surface resolvedModel on ToolResultMetadata ([#593](https://github.com/frederick-douglas-pearce/agentfluent/issues/593)) ([#609](https://github.com/frederick-douglas-pearce/agentfluent/issues/609)) ([921d374](https://github.com/frederick-douglas-pearce/agentfluent/commit/921d3747e5ba6889a31e3acf2a3afaef6d0af8f0))
+* **diagnostics:** model-routing diagnostics for SDK main sessions ([#112](https://github.com/frederick-douglas-pearce/agentfluent/issues/112)) ([#634](https://github.com/frederick-douglas-pearce/agentfluent/issues/634)) ([f022f98](https://github.com/frederick-douglas-pearce/agentfluent/commit/f022f98a21455fa186b31aef7d996a7fea7c7e90))
+* **pricing:** add genai-prices dependency + adapter, replace hand-maintained _PRICING ([#619](https://github.com/frederick-douglas-pearce/agentfluent/issues/619)) ([a7f2d9f](https://github.com/frederick-douglas-pearce/agentfluent/commit/a7f2d9f868cc9664bd77455e8836c6242cd598a0)), closes [#545](https://github.com/frederick-douglas-pearce/agentfluent/issues/545)
+* **pricing:** date-aware base-rate lookup via session timestamp ([#546](https://github.com/frederick-douglas-pearce/agentfluent/issues/546)) ([#640](https://github.com/frederick-douglas-pearce/agentfluent/issues/640)) ([c9d4421](https://github.com/frederick-douglas-pearce/agentfluent/commit/c9d442194058de40279ebb4b554e86f397ddef0a))
+* **traces:** settle totalTokens semantics + add sidecar reader ([#595](https://github.com/frederick-douglas-pearce/agentfluent/issues/595)) ([#645](https://github.com/frederick-douglas-pearce/agentfluent/issues/645)) ([0ab9759](https://github.com/frederick-douglas-pearce/agentfluent/commit/0ab97595f4ca153f3e6a2a66bed1bea7e378d0cb))
+
+
+### Bug Fixes
+
+* anchor is_error synthesis to a leading error signature on file-reading tools ([#580](https://github.com/frederick-douglas-pearce/agentfluent/issues/580)) ([#602](https://github.com/frederick-douglas-pearce/agentfluent/issues/602)) ([b6e5fe9](https://github.com/frederick-douglas-pearce/agentfluent/commit/b6e5fe9b34d0a13071d3d63552429277aacdc99e))
+* **diagnostics:** gate RETRY_LOOP on leading is_error to exclude paging ([#581](https://github.com/frederick-douglas-pearce/agentfluent/issues/581)) ([#631](https://github.com/frederick-douglas-pearce/agentfluent/issues/631)) ([576fa8b](https://github.com/frederick-douglas-pearce/agentfluent/commit/576fa8be716d502a5dd32c13e3798e7073324245))
+* use absolute raw URLs for README screenshots so they render on PyPI ([#632](https://github.com/frederick-douglas-pearce/agentfluent/issues/632)) ([c41cc77](https://github.com/frederick-douglas-pearce/agentfluent/commit/c41cc77c31405a6aa226e39a12dbae573a39075e)), closes [#607](https://github.com/frederick-douglas-pearce/agentfluent/issues/607)
+
 ## [0.10.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.9.0...v0.10.0) (2026-07-03) — "Close the Hook Gap"
 
 The release theme reaches a config surface the recommendation engine was previously blind to: **hooks**. AgentFluent's premise is that the config *is* the agent — prompt, tools, model, MCP servers, and hooks — but until now the diagnostics could see and prescribe every surface on that list except the last. v0.10 closes that blind spot. A new `hook_inspector` reads each agent definition's `PostToolUse` hooks and reports whether they surface a given field (`HookFieldCoverage`, #424); when a duration outlier fires on an agent with **no `duration_ms` timing hook**, `DurationOutlierRule` now recommends adding one through the new **`target=hooks`** recommendation surface (#425), wired into the diagnostics pipeline by #426 (epic #423). This is the *first* recommendation into the hooks surface — foundational and extensible (the inspector generalizes to other fields via `KNOWN_HOOK_FIELDS`), not exhaustive hook analysis; project-level `.claude/settings.json` hooks are not yet inspected. The same through-line — recommendations that name a concrete fix — sharpens model routing: model-mismatch and duration recommendations now name a **specific** one-tier-down model (e.g. `claude-haiku-4-5`) instead of a vague "use a faster model" (#560/#170).
