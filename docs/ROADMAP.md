@@ -158,6 +158,7 @@ The strategic center of v0.11 is turning v0.10's *first contact* with Agent SDK 
 
 **Future:**
 - Hosted documentation site ([#97](https://github.com/frederick-douglas-pearce/agentfluent/issues/97)).
+- Tier 3 stretch signals — at least one additional GitHub-derived signal beyond `CI_FAILURE_FIRST_PUSH` and `PR_REVIEW_COMMENT_DENSITY`, building on the #399 infrastructure ([`prd-tier3-github-enrichment.md`](../.claude/specs/prd-tier3-github-enrichment.md) §4).
 - Hook coverage in the `config-check` scoring rubric — the 4-dimension rubric (description/tools/model/prompt) does not yet score hooks; distinct from the v0.10 diagnostics-correlator hook surface (which recommends a timing hook when a duration outlier fires).
 - Webapp dashboard for trend visualization.
 - Closed-loop self-improvement — use AgentFluent's diagnostic output as a feedback signal the agent itself consumes to propose config edits against its own past sessions.
