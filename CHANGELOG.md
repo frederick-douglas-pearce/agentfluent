@@ -6,6 +6,10 @@ AgentFluent's stated primary audience is the Agent SDK developer, yet for ten re
 
 Beneath the headline, v0.11 rebuilds the **rate** half of the cost foundation on `genai-prices` (#545) with date-aware base rates so historical sessions price at their era's rates (#546) and a formalized base⊕overlay seam (#547). It corrects the price-per-token half and only that half: `totalTokens` remains a final-turn context-size proxy, so per-agent token attribution and spend accuracy are a separate correction deferred to v0.12 (D056).
 
+**No breaking changes.** The additions are additive: `session_kind`/`entrypoint` join each `data.sessions` entry at JSON schema v2 with no envelope version bump, and `agentfluent diff` consumes neither, so baselines from either side of v0.11 compare unchanged. The retry-signal recalibration (#580/#581) narrows which `PARAMETER_RETRY`/`RETRY_LOOP` findings fire — fewer false positives on paging — an intended diagnostics improvement, not a contract change. The pricing rebuild is **rate-neutral**: `genai-prices` returns base rates identical to the retired hand-maintained table for every model AgentFluent prices, and date-aware lookup is currently date-invariant (`COST_MODEL.md`), so no reported cost is restated.
+
+See the README v0.11 roadmap entry and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full design context; epics [#589](https://github.com/frederick-douglas-pearce/agentfluent/issues/589) (Agent SDK ingestion), [#535](https://github.com/frederick-douglas-pearce/agentfluent/issues/535) (cost-lever coverage). Decisions D047–D057 in [`.claude/specs/decisions.md`](.claude/specs/decisions.md).
+
 
 ### Features
 
