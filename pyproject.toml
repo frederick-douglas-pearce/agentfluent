@@ -29,7 +29,7 @@ dependencies = [
     # Pinned EXACTLY: we bind to genai-prices' internal (non-``__all__``) rate record in
     # analytics/_genai_source.py, and it is pre-1.0 (no API-stability promise). A bump is a
     # controlled channel (#82) gated by the golden-rate test. Do not loosen to ``>=``.
-    "genai-prices==0.0.71",
+    "genai-prices==0.0.72",
 ]
 
 [project.optional-dependencies]
