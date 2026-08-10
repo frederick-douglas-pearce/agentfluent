@@ -27,6 +27,7 @@ The binding table. The engine names each parameter in `CAPS`; the values here ar
 | `TEST_CMD` | `uv run pytest -m "not integration"` | |
 | `LINT_CMD` | `uv run ruff check src/ tests/` | |
 | `TYPE_CMD` | `uv run mypy src/agentfluent/` | |
+| `HERMETIC_TEST_CMD` | `—` — **no offline/hermetic tier declared** | Deliberate not-applicable, not an unfilled blank (#73 AC2/AC5). The `integration` marker gates **real session data, not network**: `pyproject.toml:77` defines it as "tests that require real session data", and `CLAUDE.md:172-173` confirms they run against real `~/.claude/projects/` data and are skipped in CI. So `TEST_CMD`'s `-m "not integration"` selects a *data*-free tier, **not** a network-free one — no offline tier exists to gate. Verified 2026-08-10. ⚠ **Never delete this row** — an absent row reads as *unknown, and unknown is due* → escalate. |
 | `CI_STATUS_CMD` | `gh pr checks <PR>` | |
 | `BRANCH_FMT` | `feature/<n>-slug` / `fix/<n>-slug` | from CLAUDE.md |
 | `COMMIT_CONV` | Conventional Commits; `.claude/**`→`chore:`/`docs:` | see commit-scope rule below |
