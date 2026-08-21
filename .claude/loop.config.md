@@ -18,7 +18,7 @@ The binding table. The engine names each parameter in `CAPS`; the values here ar
 | `BACKLOG_SOURCE` | GitHub milestone (e.g. `v0.11.0`) via `gh` | could be a label (an epic is the label case — `gh issue list --label epic:<name>`), or a local `TODO.md` |
 | `SCOPE_AGENT` | `pm` (user-global subagent) | answers scope/priority/requirements questions; remove if project has none |
 | `DESIGN_AGENT` | `architect` (user-global subagent) | reviews plans pre-implementation; remove if none |
-| `CODE_REVIEW` | `/code-review` (Claude Code **built-in skill**) | independent post-impl review; verified 2026-06-29. The repo's `/review`/`/simplify` (CLAUDE.md) are alternatives, not this. |
+| `CODE_REVIEW` | `/code-review` (Claude Code **built-in skill**) | independent post-impl review; re-verified 2026-08-20 by the first v0.2.0 iteration (#595 — three review rounds, real findings). The repo's `/review`/`/simplify` (CLAUDE.md) are alternatives, not this. |
 | `SECURITY_REVIEW` | local `/security-review` (built-in skill) for `.claude/`-only; else `needs-security-review` label → `security-review.yml` | see §4 below |
 | `VERIFY` | `/verify` (built-in skill) | runtime behavior check when an AC needs proof-by-running |
 | `PRIORITY_LABELS` | `priority:high > priority:medium > priority:low`; tiebreak: issue number ascending | drives selection (engine → Select / Initialization) |
@@ -85,7 +85,7 @@ The project-specific inputs to the engine's Route classification (engine → Rou
 
 ## 4. Security routing (host-repo / GitHub specifics)
 
-The engine's step-10 security gate reads its *specifics* from here (engine keeps the gate's
+The engine's security gate reads its *specifics* from here (engine keeps the gate's
 position + confidence-bar discipline):
 
 - **`.claude/`-only change** → run local `SECURITY_REVIEW` (`/security-review`). The labeled
