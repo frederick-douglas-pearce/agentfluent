@@ -512,9 +512,17 @@ def _link_subagent_traces(
     to matching invocations.
 
     Scoped per session: subagent files for a session ``<uuid>.jsonl`` live
-    under ``<uuid>/subagents/``. Lazy-loads only traces whose ``agent_id``
-    appears in ``invocations``; skipped files cost one dict lookup each.
-    Orphan traces (file exists, no matching invocation) are debug-logged.
+    under ``<uuid>/subagents/``. Lazy-loads the traces whose ``agent_id``
+    appears in ``invocations``, plus -- since #595 PR B -- any **depth-2**
+    trace being attached as a child, which by construction appears in no
+    invocation. Other files cost one dict lookup each.
+
+    Traces with no matching invocation are debug-logged as orphans. **That log
+    over-counts: a depth-2 trace successfully attached as a child is still
+    logged**, because ``linked_ids`` below is built from invocations only.
+    Harmless at debug level, but #648 AC3 plans to disclose an orphan cohort
+    from this same notion and must not inherit the over-count -- it should read
+    attached children out first.
     """
     # Discover subagent files for this session and build the lookup map.
     session_dir = session_path.parent / session_path.stem
@@ -545,9 +553,15 @@ def _link_subagent_traces(
         for inv in invocations
         if inv.agent_id is not None and inv.trace is not None
     }
-    # Pass the linked agent ids as a second depth-1 source: an invocation row
-    # exists only for a main-session delegation, so it proves depth 1 even when
-    # that agent's sidecar is missing.
+    # Pass the linked agent ids as a second depth-1 source, so a depth-1 agent
+    # whose sidecar is missing does not sever its child's edge.
+    #
+    # ASSUMPTION, not an enforced invariant: that an invocation row implies a
+    # main-session delegation. Nothing filters `isSidechain` anywhere in this
+    # package, so a session JSONL that inlined sidechain lines would mint
+    # invocation rows for nested agents and flatten their children to depth 1.
+    # Holds for every fixture and for the current corpus; tracked separately
+    # rather than asserted here as fact.
     lineages = resolve_lineage(
         subagent_files, main_session_tool_use_ids, set(linked_by_agent_id),
     )
@@ -557,36 +571,26 @@ def _link_subagent_traces(
             trace.parent_invocation_id = lineage.parent_invocation_id
             trace.depth = lineage.depth
 
-    # Depth->=2 traces have no invocation row, so they are parsed here and
+    # Depth-2 traces have no invocation row, so they are parsed here and
     # attached to their parent. Only the residual is parsed -- on a real
     # corpus that is 1.2% of traces, and a session with no nesting parses
     # nothing extra.
     #
-    # Ascending depth order is load-bearing: a depth-3 trace's parent is a
-    # depth-2 trace, which is not an invocation and therefore only becomes
-    # attachable once IT has been attached. Iterating in dict order would drop
-    # every tier below 2 -- silently, and invisibly to this corpus, which
-    # currently bottoms out at depth 2 (1317/16/0). Nothing in the format
-    # caps depth, so the ordering is what makes "at every depth" true rather
-    # than true-so-far.
-    attached_by_agent_id: dict[str, SubagentTrace] = dict(linked_by_agent_id)
-    for agent_id, lineage in sorted(
-        lineages.items(), key=lambda item: item[1].depth,
-    ):
-        if lineage.depth < 2 or lineage.parent_invocation_id is None:
+    # ATTACHMENT IS CAPPED AT DEPTH 2 (#595 AC2 as amended; depth->=3 is #659).
+    # `resolve_lineage` still computes arbitrary depth -- it is attachment that
+    # stops here. The cap is what makes `parent_invocation_id`'s documented
+    # identity domain TRUE: every parent named below owns an invocation row, so
+    # every non-None parent_invocation_id joins against
+    # `SessionAnalysis.invocations`. Lifting the cap without also relaxing that
+    # docstring would reintroduce the defect the cap removed. Measured
+    # prevalence when capped: depth-1 1317, depth-2 16, depth->=3 0 of 1333.
+    for agent_id, lineage in lineages.items():
+        if lineage.depth != 2 or lineage.parent_invocation_id is None:
             continue
-        if agent_id in linked_by_agent_id:
-            # Already reachable as `invocation.trace`. Re-parsing would append a
-            # SECOND object for the same agent: it would serialize twice, any
-            # depth-3 descendant would attach to the copy rather than the object
-            # the invocation holds, and the depth gate would drop it from token
-            # metrics so its spend vanished from total_cost. Cheaper to make the
-            # state unrepresentable than to rely on the invariant holding.
-            continue
-        parent_trace = attached_by_agent_id.get(lineage.parent_invocation_id)
+        parent_trace = linked_by_agent_id.get(lineage.parent_invocation_id)
         if parent_trace is None:
-            # Parent is itself unattached (orphaned subtree). #648 AC3
-            # discloses this residual; PR B does not synthesize a home for it.
+            # Parent is unlinked (orphaned subtree). #648 AC3 discloses this
+            # residual; PR B does not synthesize a home for it.
             continue
         child_trace = loader(agent_id)
         if child_trace is None:
@@ -599,7 +603,6 @@ def _link_subagent_traces(
             # sidecar is the only source of the spawning side's name.
             child_trace.agent_type = lineage.agent_type
         parent_trace.children.append(child_trace)
-        attached_by_agent_id[agent_id] = child_trace
 
     # Orphans: trace files with no matching invocation.
     linked_ids = {inv.agent_id for inv in invocations if inv.trace is not None}

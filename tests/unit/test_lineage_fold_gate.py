@@ -239,19 +239,26 @@ class TestCycleGuard:
         root = f"a{depth}"
         assert _walk_depth("a0", chain, {root}) is None
 
-    def test_chain_just_inside_max_depth_still_resolves(self) -> None:
-        """The other side of the boundary -- the guard must not over-trigger."""
-        chain = {f"b{i}": f"b{i + 1}" for i in range(MAX_DELEGATION_DEPTH - 2)}
-        root = f"b{MAX_DELEGATION_DEPTH - 2}"
-        assert _walk_depth("b0", chain, {root}) == MAX_DELEGATION_DEPTH - 1
+    def test_chain_of_exactly_max_depth_resolves(self) -> None:
+        """The boundary itself: exactly MAX must pass, MAX+1 must not.
 
-    def test_depth_three_chain_resolves_to_3(self) -> None:
-        """Guards the attachment ordering: depth 3 must not silently drop.
-
-        The live corpus bottoms out at depth 2 (1317/16/0), so nothing in the
-        fixtures or the corpus would catch a regression here. Nothing in the
-        format caps depth, so this is tested rather than assumed.
+        The prior version asserted MAX-1 while calling itself "just inside the
+        boundary", so it left both sides of the actual edge untested.
         """
+        links = MAX_DELEGATION_DEPTH - 1
+        chain = {f"b{i}": f"b{i + 1}" for i in range(links)}
+        assert _walk_depth("b0", chain, {f"b{links}"}) == MAX_DELEGATION_DEPTH
+
+    def test_chain_one_past_max_depth_is_rejected(self) -> None:
+        links = MAX_DELEGATION_DEPTH
+        chain = {f"c{i}": f"c{i + 1}" for i in range(links)}
+        assert _walk_depth("c0", chain, {f"c{links}"}) is None
+
+    def test_walk_computes_depth_three(self) -> None:
+        """`_walk_depth` is not capped -- the *attachment* cap lives in the
+        pipeline (#595 AC2 as amended, #659). This asserts the walk only, and
+        deliberately claims nothing about attachment: the prior version of this
+        test named the attach-loop ordering it never exercised."""
         assert _walk_depth("c", {"c": "b", "b": "a"}, {"a"}) == 3
 
     def test_legitimate_deep_chain_still_resolves(self) -> None:
@@ -356,22 +363,40 @@ class TestReviewFindings:
         assert all(lin.depth == 1 for lin in lineages.values())
         assert all(lin.parent_invocation_id is None for lin in lineages.values())
 
-    def test_linked_trace_is_never_attached_twice(self) -> None:
-        """Finding 5: an agent owning an invocation row is not also a child."""
+
+class TestDepthTwoCap:
+    """Attachment is capped at depth 2 (#595 AC2 as amended; depth-≥3 is #659).
+
+    The cap is what makes `parent_invocation_id`'s documented identity domain
+    true, so this is the assertion that replaces the removed dead guard.
+    """
+
+    def test_every_named_parent_owns_an_invocation_row(self) -> None:
+        """The invariant the cap buys, stated as a test rather than as prose."""
         analysis = analyze_session(_NESTED_MAIN)
-        linked = {
-            inv.agent_id for inv in analysis.invocations if inv.trace is not None
-        }
-        seen: list[str] = []
+        invocation_ids = {inv.invocation_id for inv in analysis.invocations}
 
         def walk(trace: object) -> None:
             for child in trace.children:
-                seen.append(child.agent_id)
+                assert child.parent_invocation_id in invocation_ids, (
+                    "a parent_invocation_id names something that is not an "
+                    "invocation row -- the documented identity domain is broken"
+                )
                 walk(child)
 
+        seen_any = False
         for inv in analysis.invocations:
             if inv.trace is not None:
+                seen_any = seen_any or bool(inv.trace.children)
                 walk(inv.trace)
+        assert seen_any, "no children attached -- the invariant is vacuous here"
 
-        assert not (set(seen) & linked), "a linked trace was also attached as a child"
-        assert len(seen) == len(set(seen)), "a trace was attached more than once"
+    def test_attached_children_are_exactly_depth_2(self) -> None:
+        analysis = analyze_session(_NESTED_MAIN)
+        for inv in analysis.invocations:
+            if inv.trace is None:
+                continue
+            for child in inv.trace.children:
+                assert child.depth == 2
+                # The cap: a depth-2 child attaches nothing of its own.
+                assert child.children == []

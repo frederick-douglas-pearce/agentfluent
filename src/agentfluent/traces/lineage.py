@@ -23,10 +23,13 @@ makes the sidecar the only *structured* child-to-parent edge below depth 1.
 
 **Cost.** The sidecar check is the cheap path and resolves every depth-1
 trace, which is the overwhelming majority (measured on a real corpus:
-16/1333 traces, 1.2%, are depth >= 2). Only when a sidecar ``toolUseId``
-fails to resolve against the parent session do we open sibling traces to
-build the emitter index -- once per session, not once per unresolved id.
-Sessions with no nesting never pay it.
+16/1333 traces, 1.2%, are depth >= 2). Sibling traces are opened to build the
+emitter index only when **both** hold: some sidecar ``toolUseId`` failed to
+resolve against the parent session, **and** at least one depth-1 root exists
+to walk back to. With no root every lineage degrades to ``(None, 1)``
+whatever the index says, so building it would read every trace file to
+produce a result that cannot change. Sessions with no nesting never pay it,
+and the index is built once per session, not once per unresolved id.
 """
 
 from __future__ import annotations
@@ -196,9 +199,20 @@ def resolve_lineage(
     depth 1 by definition. Passed in rather than derived so this module stays
     independent of ``agents.models``.
 
+    ``linked_agent_ids`` is a **co-equal second source** for the same
+    decision: an agent owning an ``AgentInvocation`` row was spawned by the
+    main session, which is the depth-1 fact itself and survives a missing
+    sidecar. Without it, deleting a *parent's* sidecar severs its child's edge
+    even though the emitter index still proves it. ``None`` is accepted and
+    means "no second source", not "none exist".
+
     A depth-1 trace gets ``parent_invocation_id = None``. Its parent is the
     main session, which has no invocation id -- and a ``"main"``/``"root"``
     sentinel would be a string that looks like an id and joins to nothing.
+
+    This function computes depth at **any** level. Capping *attachment* at
+    depth 2 is the pipeline's decision (#595 AC2 as amended, #659), not this
+    module's.
 
     Degradation is deliberate and uniform: a trace with **no sidecar**, a
     sidecar whose ``toolUseId`` resolves to no emitter, or a chain that hits

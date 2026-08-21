@@ -161,8 +161,12 @@ class SubagentTrace(BaseModel):
     """Invocation that spawned this agent, or ``None`` at depth 1 (#595 PR B).
 
     Identity domain is ``AgentInvocation.invocation_id`` (``agent_id or
-    tool_use_id``), so a value here joins directly against
-    ``SessionAnalysis.invocations``.
+    tool_use_id``), and **every non-``None`` value here joins against
+    ``SessionAnalysis.invocations``** -- an invariant, not a coincidence:
+    attachment is capped at depth 2 (#595 AC2 as amended), so the only agent
+    that can be named as a parent is one that owns an invocation row. Lifting
+    that cap (#659) makes the domain "parent invocation id *or* parent agent
+    id" and requires relaxing this sentence with it.
 
     **``None`` is the depth-1 value, not a missing value, and there is
     deliberately no sentinel id.** A synthetic "root" id would join to nothing
