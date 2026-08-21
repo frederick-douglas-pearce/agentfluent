@@ -512,10 +512,18 @@ def _link_subagent_traces(
     to matching invocations.
 
     Scoped per session: subagent files for a session ``<uuid>.jsonl`` live
-    under ``<uuid>/subagents/``. Lazy-loads the traces whose ``agent_id``
-    appears in ``invocations``, plus -- since #595 PR B -- any **depth-2**
-    trace being attached as a child, which by construction appears in no
-    invocation. Other files cost one dict lookup each.
+    under ``<uuid>/subagents/``. Parses the traces whose ``agent_id`` appears
+    in ``invocations``, plus -- since #595 PR B -- any **depth-2** trace being
+    attached as a child, which normally appears in no invocation (a trace whose
+    parse failed is the exception: its invocation carries ``trace=None``, so it
+    is absent from ``linked_by_agent_id`` and can be offered here again; the
+    loader returns ``None`` a second time and the attach loop skips it).
+
+    **Not free for the remaining files.** Lineage resolution reads the small
+    ``.meta.json`` sidecar for **every** trace in the session, and on the
+    depth->=2 escalation path it scans sibling trace files line by line. What
+    stays lazy is full trace *parsing*, which is the expensive part; do not
+    read this as "untouched files cost nothing".
 
     Traces with no matching invocation are debug-logged as orphans. **That log
     over-counts: a depth-2 trace successfully attached as a child is still
@@ -545,7 +553,8 @@ def _link_subagent_traces(
     invocations = link_traces(invocations, loader)
 
     # Lineage (#595 PR B): resolve depth + parent for every trace in the
-    # session, then hang depth->=2 traces off their parent as `children`.
+    # session, then hang **depth-2** traces off their parent as `children`
+    # (attachment is capped -- see the loop below; depth->=3 is #659).
     # Depth->=2 agents deliberately do NOT become AgentInvocation rows.
     main_session_tool_use_ids = {inv.tool_use_id for inv in invocations}
     linked_by_agent_id = {
@@ -578,12 +587,24 @@ def _link_subagent_traces(
     #
     # ATTACHMENT IS CAPPED AT DEPTH 2 (#595 AC2 as amended; depth->=3 is #659).
     # `resolve_lineage` still computes arbitrary depth -- it is attachment that
-    # stops here. The cap is what makes `parent_invocation_id`'s documented
-    # identity domain TRUE: every parent named below owns an invocation row, so
-    # every non-None parent_invocation_id joins against
-    # `SessionAnalysis.invocations`. Lifting the cap without also relaxing that
-    # docstring would reintroduce the defect the cap removed. Measured
-    # prevalence when capped: depth-1 1317, depth-2 16, depth->=3 0 of 1333.
+    # stops here.
+    #
+    # TWO things enforce the cap, and the load-bearing one is NOT the depth
+    # predicate. Verified by experiment: relaxing `!= 2` to `< 2` alone still
+    # does not attach a depth-3 trace. What blocks it is that the parent is
+    # looked up in `linked_by_agent_id` -- invocation-owning traces only -- so a
+    # depth-3 trace, whose parent is a depth-2 trace, finds no parent and is
+    # skipped. The depth predicate is a redundant, legible restatement.
+    # Re-admitting depth->=3 takes BOTH a relaxed predicate and an accumulator
+    # that adds each attached child to the lookup. #659 must change both, and
+    # must relax `parent_invocation_id`'s docstring with them -- the invariant
+    # that every non-None value joins to an invocation row holds *because* the
+    # parent lookup is restricted, so widening the lookup is what breaks it.
+    #
+    # Measured prevalence when capped: depth-1 1317, depth-2 16, depth->=3 0
+    # of 1333. Locked by tests/unit/test_lineage_fold_gate.py::TestDepthTwoCap,
+    # which builds a depth-3 session because the committed fixtures cannot
+    # distinguish capped from uncapped code.
     for agent_id, lineage in lineages.items():
         if lineage.depth != 2 or lineage.parent_invocation_id is None:
             continue

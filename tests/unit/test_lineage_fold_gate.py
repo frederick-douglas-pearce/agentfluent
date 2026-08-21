@@ -364,12 +364,129 @@ class TestReviewFindings:
         assert all(lin.parent_invocation_id is None for lin in lineages.values())
 
 
+def _depth_three_session(tmp_path: Path) -> Path:
+    """A depth-3 session: worker001 -> leaf0001 -> deep0001.
+
+    Built here rather than committed because it exists to exercise the CAP,
+    not the format: `nested_session/` bottoms out at depth 2, so on the
+    committed corpus capped and uncapped code are indistinguishable and every
+    assertion about the cap is starved rather than false. Verified to
+    discriminate — with the cap lifted, the two `TestDepthTwoCap` tests go red.
+
+    Depth-3 is representable-but-unobserved (corpus: 1317/16/0), which is the
+    same category as the no-sidecar case and is NOT the barred category: a
+    cyclic fixture was rejected because a cycle is structurally impossible in
+    this format, so encoding one would assert something false about it. Nothing
+    forbids depth 3.
+    """
+    session_dir = tmp_path / "nested-session-1"
+    shutil.copytree(_NESTED_DIR, session_dir)
+    # analyze_session resolves the subagent dir as <stem>/ beside the JSONL, so
+    # the main session file has to come along.
+    shutil.copy(_NESTED_MAIN, tmp_path / "nested-session-1.jsonl")
+    subagents = session_dir / "subagents"
+
+    # leaf0001 spawns deep0001 -- append the emitting tool_use to the leaf.
+    leaf = subagents / "agent-leaf0001.jsonl"
+    leaf.write_text(
+        leaf.read_text()
+        + json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "model": "claude-haiku-4-5-20251001",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_leaf_to_deep",
+                            "name": "Agent",
+                            "input": {"subagent_type": "deep-agent", "prompt": "go"},
+                        }
+                    ],
+                    "usage": {"input_tokens": 10, "output_tokens": 2},
+                },
+                "isSidechain": True,
+                "agentId": "leaf0001",
+                "sessionId": "nested-session-1",
+                "uuid": "l5",
+                "timestamp": "2026-06-22T00:00:09.000Z",
+            }
+        )
+        + "\n"
+    )
+    (subagents / "agent-deep0001.meta.json").write_text(
+        json.dumps(
+            {
+                "agentType": "deep-agent",
+                "description": "depth-3 probe",
+                "toolUseId": "toolu_leaf_to_deep",
+            }
+        )
+    )
+    (subagents / "agent-deep0001.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "model": "claude-haiku-4-5-20251001",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "deep"}],
+                    "usage": {"input_tokens": 20, "output_tokens": 5},
+                },
+                "isSidechain": True,
+                "agentId": "deep0001",
+                "sessionId": "nested-session-1",
+                "uuid": "d1",
+                "timestamp": "2026-06-22T00:00:10.000Z",
+            }
+        )
+        + "\n"
+    )
+    return session_dir
+
+
 class TestDepthTwoCap:
     """Attachment is capped at depth 2 (#595 AC2 as amended; depth-≥3 is #659).
 
     The cap is what makes `parent_invocation_id`'s documented identity domain
     true, so this is the assertion that replaces the removed dead guard.
     """
+
+    def test_depth_three_trace_is_not_attached(self, tmp_path: Path) -> None:
+        """The cap, observed on input that can actually see it.
+
+        Without this, capped and uncapped code are indistinguishable on the
+        committed fixtures -- which would make #659 a trap: an implementer
+        lifting the cap would see a fully green suite.
+        """
+        session_dir = _depth_three_session(tmp_path)
+        lineages = resolve_lineage(
+            discover_session_subagents(session_dir),
+            {_MAIN_TOOL_USE},
+            linked_agent_ids={"worker001"},
+        )
+        # resolve_lineage is NOT capped -- it sees depth 3...
+        assert lineages["deep0001"].depth == 3
+
+        # ...but attachment is, so deep0001 reaches no output at all.
+        analysis = analyze_session(session_dir.parent / "nested-session-1.jsonl")
+        parent = analysis.invocations[0].trace
+        assert [c.agent_id for c in parent.children] == ["leaf0001"]
+        assert parent.children[0].children == []
+
+    def test_depth_three_does_not_break_the_join_invariant(
+        self, tmp_path: Path,
+    ) -> None:
+        """The invariant must hold on input that could violate it."""
+        session_dir = _depth_three_session(tmp_path)
+        analysis = analyze_session(session_dir.parent / "nested-session-1.jsonl")
+        invocation_ids = {inv.invocation_id for inv in analysis.invocations}
+        for inv in analysis.invocations:
+            if inv.trace is None:
+                continue
+            for child in inv.trace.children:
+                assert child.parent_invocation_id in invocation_ids
 
     def test_every_named_parent_owns_an_invocation_row(self) -> None:
         """The invariant the cap buys, stated as a test rather than as prose."""

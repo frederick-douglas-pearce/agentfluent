@@ -171,11 +171,15 @@ class SubagentTrace(BaseModel):
     **``None`` is the depth-1 value, not a missing value, and there is
     deliberately no sentinel id.** A synthetic "root" id would join to nothing
     and force every consumer to special-case it; ``None`` says the same thing
-    in the type. ``None`` also covers the unattributable case — a depth->=2
-    trace whose sidecar is absent or whose ``toolUseId`` resolves to no
-    emitter. Those are distinguished by ``depth``, never by a wrong parent:
-    the linker leaves this ``None`` rather than guessing (#648 AC3 discloses
-    that residual as an orphan cohort).
+    in the type. ``None`` also covers the unattributable case: a trace
+    whose sidecar is absent, or whose ``toolUseId`` resolves to no emitter.
+    The linker leaves this ``None`` rather than guessing a parent.
+
+    **Such a trace is NOT distinguishable from a genuine depth-1 trace by
+    these two fields.** Every degradation branch yields ``(None, 1)``, which is
+    exactly what a real depth-1 trace carries. That is deliberate -- guessing a
+    parent would be worse -- but it is why the orphan cohort needs its own
+    disclosure (#648 AC3) rather than being derivable from ``depth``.
 
     **Public JSON API** (D055): serialized via ``AgentInvocation.trace`` ->
     ``SessionAnalysis.invocations`` -> ``analyze --format json``. Additive, so
@@ -183,7 +187,13 @@ class SubagentTrace(BaseModel):
 
     depth: int = 1
     """Delegation depth: 1 for an agent spawned by the main session, 2 for one
-    spawned by a depth-1 agent, and so on (#595 PR B).
+    spawned by a depth-1 agent (#595 PR B).
+
+    **In emitted output this is only ever 1 or 2** while attachment is capped
+    at depth 2 (#595 AC2 as amended): a deeper trace is never attached, so no
+    object carrying ``depth >= 3`` reaches ``analyze --format json``.
+    ``resolve_lineage`` itself computes arbitrary depth; #659 is what would
+    surface it.
 
     Derived from the cross-file ``toolUseId`` join, never from path shape --
     the on-disk layout is **flat at all depths** (every trace is a sibling in
