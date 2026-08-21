@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 import agentfluent.analytics.pipeline as pipeline_mod
+import agentfluent.traces.lineage as lineage_mod
 from agentfluent.analytics.pipeline import analyze_session
 from agentfluent.traces.discovery import discover_session_subagents
 from agentfluent.traces.lineage import (
@@ -226,10 +227,23 @@ class TestCycleGuard:
         assert _walk_depth("a", {"a": "b"}, set()) is None
 
     def test_long_chain_exceeding_max_depth_is_caught(self) -> None:
-        # A non-cyclic but absurdly deep chain: the visited-set never fires,
-        # so MAX_DELEGATION_DEPTH is what stops it.
-        chain = {f"a{i}": f"a{i + 1}" for i in range(MAX_DELEGATION_DEPTH + 5)}
-        assert _walk_depth("a0", chain, set()) is None
+        """Isolates MAX_DELEGATION_DEPTH, and only it.
+
+        The chain is ROOTED -- its last link is a depth-1 agent -- so the
+        missing-parent branch cannot fire and the visited-set cannot fire.
+        An unrooted chain would return None either way and prove nothing about
+        the guard.
+        """
+        depth = MAX_DELEGATION_DEPTH + 5
+        chain = {f"a{i}": f"a{i + 1}" for i in range(depth)}
+        root = f"a{depth}"
+        assert _walk_depth("a0", chain, {root}) is None
+
+    def test_chain_just_inside_max_depth_still_resolves(self) -> None:
+        """The other side of the boundary -- the guard must not over-trigger."""
+        chain = {f"b{i}": f"b{i + 1}" for i in range(MAX_DELEGATION_DEPTH - 2)}
+        root = f"b{MAX_DELEGATION_DEPTH - 2}"
+        assert _walk_depth("b0", chain, {root}) == MAX_DELEGATION_DEPTH - 1
 
     def test_depth_three_chain_resolves_to_3(self) -> None:
         """Guards the attachment ordering: depth 3 must not silently drop.
@@ -257,3 +271,107 @@ class TestLevelOneRegression:
             assert trace.depth == 1
             assert trace.parent_invocation_id is None
             assert trace.children == []
+
+
+class TestReviewFindings:
+    """Regressions for the round-1 code-review findings (PR #658)."""
+
+    def test_null_message_line_does_not_raise(self, tmp_path: Path) -> None:
+        """Finding 1: totality is a contract, and it was not being kept.
+
+        The line must contain the literal `"tool_use"` to reach the parse at
+        all -- that is what made this reachable rather than theoretical.
+        """
+        trace = tmp_path / "agent-x.jsonl"
+        trace.write_text(
+            '{"type":"assistant","message":null,"note":"tool_use"}\n'
+            '{"type":"assistant","message":{"content":'
+            '[{"type":"tool_use","id":"toolu_ok"}]}}\n'
+        )
+        # Does not raise, and still recovers the good line.
+        assert emitted_tool_use_ids(trace) == {"toolu_ok"}
+
+    def test_non_dict_message_shapes_are_tolerated(self, tmp_path: Path) -> None:
+        trace = tmp_path / "agent-y.jsonl"
+        trace.write_text(
+            '{"type":"assistant","message":"tool_use"}\n'
+            '{"type":"assistant","message":[1,2],"k":"tool_use"}\n'
+        )
+        assert emitted_tool_use_ids(trace) == set()
+
+    def test_depth_two_child_gets_agent_type_from_its_sidecar(self) -> None:
+        """Finding 2: a depth->=2 agent has no invocation row to inherit from.
+
+        Ruling 1 called the sidecar its only source of `agent_type`. Left
+        unset, every child this PR exposes would serialize as `unknown`.
+        """
+        analysis = analyze_session(_NESTED_MAIN)
+        child = analysis.invocations[0].trace.children[0]
+        sidecar = json.loads(
+            (_NESTED_DIR / "subagents" / "agent-leaf0001.meta.json").read_text()
+        )
+        assert child.agent_type == sidecar["agentType"]
+        assert child.agent_type != "unknown"
+
+    def test_missing_parent_sidecar_preserves_the_childs_edge(
+        self, tmp_path: Path,
+    ) -> None:
+        """Finding 3: the depth-1 fact survives a missing sidecar.
+
+        Distinct from the leaf-sidecar case above, which cannot tell these two
+        implementations apart. Here the data still proves the edge via the
+        emitter index, so severing it would be a loss, not a degradation.
+        """
+        session_dir = tmp_path / "nested-session-1"
+        shutil.copytree(_NESTED_DIR, session_dir)
+        (session_dir / "subagents" / "agent-worker001.meta.json").unlink()
+
+        lineages = resolve_lineage(
+            discover_session_subagents(session_dir),
+            {_MAIN_TOOL_USE},
+            linked_agent_ids={"worker001"},
+        )
+        assert lineages["worker001"].depth == 1
+        assert lineages["leaf0001"].depth == 2
+        assert lineages["leaf0001"].parent_invocation_id == "worker001"
+
+    def test_no_depth_1_root_skips_the_emitter_scan(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Finding 4: don't read every trace to produce a result that can't change."""
+        session_dir = tmp_path / "nested-session-1"
+        shutil.copytree(_NESTED_DIR, session_dir)
+
+        calls: list[Path] = []
+        real = lineage_mod.emitted_tool_use_ids
+        monkeypatch.setattr(
+            lineage_mod,
+            "emitted_tool_use_ids",
+            lambda p: (calls.append(p), real(p))[1],
+        )
+        # No parent-session tool_use ids and no invocation rows => no root.
+        lineages = resolve_lineage(discover_session_subagents(session_dir), set())
+
+        assert calls == [], "scanned trace files despite no depth-1 root"
+        assert all(lin.depth == 1 for lin in lineages.values())
+        assert all(lin.parent_invocation_id is None for lin in lineages.values())
+
+    def test_linked_trace_is_never_attached_twice(self) -> None:
+        """Finding 5: an agent owning an invocation row is not also a child."""
+        analysis = analyze_session(_NESTED_MAIN)
+        linked = {
+            inv.agent_id for inv in analysis.invocations if inv.trace is not None
+        }
+        seen: list[str] = []
+
+        def walk(trace: object) -> None:
+            for child in trace.children:
+                seen.append(child.agent_id)
+                walk(child)
+
+        for inv in analysis.invocations:
+            if inv.trace is not None:
+                walk(inv.trace)
+
+        assert not (set(seen) & linked), "a linked trace was also attached as a child"
+        assert len(seen) == len(set(seen)), "a trace was attached more than once"

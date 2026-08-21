@@ -61,6 +61,15 @@ class TraceLineage:
 
     parent_invocation_id: str | None
     depth: int
+    agent_type: str = ""
+    """Agent type as named by the spawning side, from the sidecar.
+
+    Empty when there is no sidecar or it carried none. Load-bearing only at
+    depth >= 2: a depth-1 trace inherits the authoritative value from its
+    ``AgentInvocation`` via ``link_traces``, but a deeper agent **has no
+    invocation row to inherit from**, so the sidecar is its only source. Left
+    empty, every depth->=2 trace this exposes would serialize as ``unknown``
+    -- the one field that makes the ``children`` array usable."""
 
 
 def emitted_tool_use_ids(trace_path: Path) -> set[str]:
@@ -91,7 +100,15 @@ def emitted_tool_use_ids(trace_path: Path) -> set[str]:
                     continue
                 if not isinstance(obj, dict) or obj.get("type") != "assistant":
                     continue
-                content = obj.get("message", {}).get("content", [])
+                message = obj.get("message")
+                if not isinstance(message, dict):
+                    # `"message": null` is real in the corpus and would raise
+                    # AttributeError on .get() -- which `except OSError` below
+                    # does not catch, so one bad line in one trace file would
+                    # take down `analyze` for the whole project. Totality is
+                    # this function's contract; check the type, do not assume.
+                    continue
+                content = message.get("content", [])
                 if not isinstance(content, list):
                     continue
                 for block in content:
@@ -169,6 +186,7 @@ def _walk_depth(
 def resolve_lineage(
     files: list[SubagentFileInfo],
     main_session_tool_use_ids: set[str],
+    linked_agent_ids: set[str] | None = None,
 ) -> dict[str, TraceLineage]:
     """Resolve ``agent_id -> TraceLineage`` for every trace in a session.
 
@@ -201,20 +219,32 @@ def resolve_lineage(
         if sidecar is not None
     }
 
-    # Cheap path: every sidecar toolUseId that names a parent-session tool_use
-    # is a depth-1 spawn. Only an unresolved remainder justifies opening traces.
-    unresolved = {
-        agent_id
-        for agent_id, tool_use_id in tool_use_id_of.items()
-        if tool_use_id not in main_session_tool_use_ids
-    }
-    emitter_index = build_emitter_index(files) if unresolved else {}
-
+    # A trace is depth 1 if its sidecar names a parent-session tool_use, OR if
+    # it already owns an invocation row -- an invocation exists only for a
+    # main-session delegation, so that IS the depth-1 fact, and it survives a
+    # missing sidecar. Without the second source, deleting a *parent's* sidecar
+    # severs its child's edge even though the emitter index still proves it.
     depth_1_agents = {
         agent_id
         for agent_id, tool_use_id in tool_use_id_of.items()
         if tool_use_id in main_session_tool_use_ids
     }
+    depth_1_agents |= linked_agent_ids or set()
+
+    unresolved = {
+        agent_id
+        for agent_id in tool_use_id_of
+        if agent_id not in depth_1_agents
+    }
+    # Requiring a non-empty depth_1_agents is not an optimization. With no
+    # depth-1 root, `_walk_depth` can only terminate via cycle/missing-parent/
+    # max-depth -- every lineage degrades to (None, 1) whatever the index says
+    # -- so building it would read every trace file line by line (some >1MB)
+    # to produce a result that cannot change. Reachable on the #468
+    # trace-missing cohort, where a session yields no extractable invocations.
+    emitter_index = (
+        build_emitter_index(files) if unresolved and depth_1_agents else {}
+    )
     parent_agent_of: dict[str, str] = {}
     for agent_id in unresolved:
         emitter = emitter_index.get(tool_use_id_of[agent_id])
@@ -224,8 +254,13 @@ def resolve_lineage(
     lineages: dict[str, TraceLineage] = {}
     for info in files:
         agent_id = info.agent_id
+        sidecar = sidecars.get(agent_id)
+        agent_type = sidecar.agent_type if sidecar is not None else ""
+
         if agent_id in depth_1_agents:
-            lineages[agent_id] = TraceLineage(parent_invocation_id=None, depth=1)
+            lineages[agent_id] = TraceLineage(
+                parent_invocation_id=None, depth=1, agent_type=agent_type,
+            )
             continue
 
         depth = _walk_depth(agent_id, parent_agent_of, depth_1_agents)
@@ -233,9 +268,11 @@ def resolve_lineage(
         if depth is None or parent_agent is None:
             # Unattributable: no sidecar, an emitter we could not resolve, or a
             # cycle. Never a guessed parent.
-            lineages[agent_id] = TraceLineage(parent_invocation_id=None, depth=1)
+            lineages[agent_id] = TraceLineage(
+                parent_invocation_id=None, depth=1, agent_type=agent_type,
+            )
             continue
         lineages[agent_id] = TraceLineage(
-            parent_invocation_id=parent_agent, depth=depth,
+            parent_invocation_id=parent_agent, depth=depth, agent_type=agent_type,
         )
     return lineages

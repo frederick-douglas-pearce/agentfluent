@@ -540,13 +540,17 @@ def _link_subagent_traces(
     # session, then hang depth->=2 traces off their parent as `children`.
     # Depth->=2 agents deliberately do NOT become AgentInvocation rows.
     main_session_tool_use_ids = {inv.tool_use_id for inv in invocations}
-    lineages = resolve_lineage(subagent_files, main_session_tool_use_ids)
-
     linked_by_agent_id = {
         inv.agent_id: inv.trace
         for inv in invocations
         if inv.agent_id is not None and inv.trace is not None
     }
+    # Pass the linked agent ids as a second depth-1 source: an invocation row
+    # exists only for a main-session delegation, so it proves depth 1 even when
+    # that agent's sidecar is missing.
+    lineages = resolve_lineage(
+        subagent_files, main_session_tool_use_ids, set(linked_by_agent_id),
+    )
     for agent_id, trace in linked_by_agent_id.items():
         lineage = lineages.get(agent_id)
         if lineage is not None:
@@ -571,6 +575,14 @@ def _link_subagent_traces(
     ):
         if lineage.depth < 2 or lineage.parent_invocation_id is None:
             continue
+        if agent_id in linked_by_agent_id:
+            # Already reachable as `invocation.trace`. Re-parsing would append a
+            # SECOND object for the same agent: it would serialize twice, any
+            # depth-3 descendant would attach to the copy rather than the object
+            # the invocation holds, and the depth gate would drop it from token
+            # metrics so its spend vanished from total_cost. Cheaper to make the
+            # state unrepresentable than to rely on the invariant holding.
+            continue
         parent_trace = attached_by_agent_id.get(lineage.parent_invocation_id)
         if parent_trace is None:
             # Parent is itself unattached (orphaned subtree). #648 AC3
@@ -581,6 +593,11 @@ def _link_subagent_traces(
             continue
         child_trace.parent_invocation_id = lineage.parent_invocation_id
         child_trace.depth = lineage.depth
+        if lineage.agent_type:
+            # The parser defaults an unlinked trace to UNKNOWN_AGENT_TYPE, and
+            # there is no invocation row here to overwrite it from -- the
+            # sidecar is the only source of the spawning side's name.
+            child_trace.agent_type = lineage.agent_type
         parent_trace.children.append(child_trace)
         attached_by_agent_id[agent_id] = child_trace
 
