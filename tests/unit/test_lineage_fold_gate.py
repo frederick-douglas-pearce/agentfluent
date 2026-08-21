@@ -223,6 +223,34 @@ class TestCycleGuard:
     def test_two_node_cycle_is_caught(self) -> None:
         assert _walk_depth("a", {"a": "b", "b": "a"}, set()) is None
 
+    def test_cycle_is_caught_by_the_visited_set_not_by_max_depth(self) -> None:
+        """Assert the MECHANISM, not the outcome.
+
+        Both guards return ``None`` on a cycle, so `is None` cannot tell them
+        apart -- a mutation neutering the visited set survived the outcome-only
+        tests above, because MAX_DELEGATION_DEPTH produced the same answer 64
+        steps later. What distinguishes them is *how many parent lookups it
+        takes*: the visited set short-circuits a 2-node cycle almost
+        immediately, MAX_DELEGATION_DEPTH cannot.
+        """
+
+        class CountingParents(dict):  # type: ignore[type-arg]
+            lookups = 0
+
+            def get(self, key, default=None):  # type: ignore[no-untyped-def]
+                type(self).lookups += 1
+                return super().get(key, default)
+
+        CountingParents.lookups = 0
+        parents = CountingParents({"a": "b", "b": "a"})
+        assert _walk_depth("a", parents, set()) is None
+        # A 2-node cycle needs a handful of lookups. Neuter the visited set and
+        # this becomes MAX_DELEGATION_DEPTH-many.
+        assert CountingParents.lookups < 10, (
+            f"{CountingParents.lookups} parent lookups for a 2-node cycle -- "
+            "the visited set is not what stopped the walk"
+        )
+
     def test_chain_with_no_depth_1_root_is_unresolvable(self) -> None:
         assert _walk_depth("a", {"a": "b"}, set()) is None
 
@@ -265,6 +293,66 @@ class TestCycleGuard:
         """The guard must not reject depth that is merely deep."""
         chain = {"d4": "d3", "d3": "d2", "d2": "d1"}
         assert _walk_depth("d4", chain, {"d1"}) == 4
+
+
+class TestDegradationIsUniform:
+    """`resolve_lineage` documents that every degradation branch yields
+    ``(None, 1)``. The cycle branch was reachable only via `_walk_depth`, so a
+    mutation that emitted a guessed parent from it survived the suite.
+    """
+
+    def test_self_parent_sidecar_degrades_through_resolve_lineage(
+        self, tmp_path: Path,
+    ) -> None:
+        """A sidecar whose toolUseId is emitted by its own trace.
+
+        The degenerate cycle a real corruption could produce, driven end-to-end
+        rather than through the private walker.
+        """
+        session_dir = tmp_path / "nested-session-1"
+        shutil.copytree(_NESTED_DIR, session_dir)
+        subagents = session_dir / "subagents"
+
+        # leaf0001 emits the very tool_use its own sidecar names.
+        leaf = subagents / "agent-leaf0001.jsonl"
+        leaf.write_text(
+            leaf.read_text()
+            + json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "toolu_self_parent",
+                                "name": "Agent",
+                                "input": {"subagent_type": "x", "prompt": "y"},
+                            }
+                        ],
+                        "usage": {"input_tokens": 1, "output_tokens": 1},
+                    },
+                    "isSidechain": True,
+                    "agentId": "leaf0001",
+                    "uuid": "sp1",
+                }
+            )
+            + "\n"
+        )
+        sidecar = subagents / "agent-leaf0001.meta.json"
+        meta = json.loads(sidecar.read_text())
+        meta["toolUseId"] = "toolu_self_parent"
+        sidecar.write_text(json.dumps(meta))
+
+        lineages = resolve_lineage(
+            discover_session_subagents(session_dir),
+            {_MAIN_TOOL_USE},
+            linked_agent_ids={"worker001"},
+        )
+        # The documented uniform degradation -- NOT a guessed self-parent.
+        assert lineages["leaf0001"] == TraceLineage(
+            parent_invocation_id=None, depth=1, agent_type=meta["agentType"],
+        )
 
 
 class TestLevelOneRegression:

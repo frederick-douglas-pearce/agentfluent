@@ -259,8 +259,15 @@ def analyze_session(
     #
     # `inv.trace` is always depth 1 (an invocation row exists only for a
     # main-session delegation), so `depth == 1` is currently redundant. It is
-    # written anyway, and tested, because the thing being pinned is a DECISION,
-    # not an accident of how this line happens to be spelled. Depth->=2 traces
+    # written anyway because the thing being pinned is a DECISION, not an
+    # accident of how this line happens to be spelled.
+    #
+    # **It is redundant, therefore it is NOT tested, and cannot be.** The
+    # acceptance gate's mutation pass deleted this predicate and the whole
+    # suite stayed green -- correctly, since removing a no-op changes no
+    # behavior. Do not read the cross-reference below as pinning the
+    # predicate; a test that failed on its removal would be asserting a
+    # tautology. Depth->=2 traces
     # now reach here via `trace.children`, and the moment anyone flattens that
     # tree into this list, depth->=2 usage silently enters `total_cost`,
     # `cache_efficiency`, `by_model` and every `diff` baseline for any session
@@ -272,7 +279,10 @@ def analyze_session(
     # #648 AC2's deliberate act, with its own CHANGELOG line and its own
     # before/after dogfood read. It is not PR B's.
     #
-    # Locked by: tests/unit/test_lineage_fold_gate.py::TestNonFoldingGate
+    # What IS locked, by
+    # tests/unit/test_lineage_fold_gate.py::TestNonFoldingGate: that the
+    # child tree is not flattened into this list. That mutation -- the
+    # regression this gate exists to stop -- is killed by the suite.
     subagent_traces = [
         inv.trace
         for inv in invocations
