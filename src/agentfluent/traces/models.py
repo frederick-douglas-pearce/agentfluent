@@ -157,6 +157,78 @@ class SubagentTrace(BaseModel):
 
     source_file: Path | None = None
 
+    parent_invocation_id: str | None = None
+    """Invocation that spawned this agent, or ``None`` at depth 1 (#595 PR B).
+
+    Identity domain is ``AgentInvocation.invocation_id`` (``agent_id or
+    tool_use_id``), and **every non-``None`` value here joins against
+    ``SessionAnalysis.invocations``** -- an invariant, not a coincidence:
+    attachment is capped at depth 2 (#595 AC2 as amended), so the only agent
+    that can be named as a parent is one that owns an invocation row. Lifting
+    that cap (#659) makes the domain "parent invocation id *or* parent agent
+    id" and requires relaxing this sentence with it.
+
+    **``None`` is the depth-1 value, not a missing value, and there is
+    deliberately no sentinel id.** A synthetic "root" id would join to nothing
+    and force every consumer to special-case it; ``None`` says the same thing
+    in the type. ``None`` also covers the unattributable case: a trace
+    whose sidecar is absent, or whose ``toolUseId`` resolves to no emitter.
+    The linker leaves this ``None`` rather than guessing a parent.
+
+    **Such a trace is NOT distinguishable from a genuine depth-1 trace by
+    these two fields.** Every degradation branch yields ``(None, 1)``, which is
+    exactly what a real depth-1 trace carries. That is deliberate -- guessing a
+    parent would be worse -- but it is why the orphan cohort needs its own
+    disclosure (#648 AC3) rather than being derivable from ``depth``.
+
+    **Public JSON API** (D055): serialized via ``AgentInvocation.trace`` ->
+    ``SessionAnalysis.invocations`` -> ``analyze --format json``. Additive, so
+    the envelope stays ``"2"`` (D029)."""
+
+    depth: int = 1
+    """Delegation depth: 1 for an agent spawned by the main session, 2 for one
+    spawned by a depth-1 agent (#595 PR B).
+
+    **In emitted output this is only ever 1 or 2** while attachment is capped
+    at depth 2 (#595 AC2 as amended): a deeper trace is never attached, so no
+    object carrying ``depth >= 3`` reaches ``analyze --format json``.
+    ``resolve_lineage`` itself computes arbitrary depth; #659 is what would
+    surface it.
+
+    Derived from the cross-file ``toolUseId`` join, never from path shape --
+    the on-disk layout is **flat at all depths** (every trace is a sibling in
+    ``subagents/``), so depth is not recoverable from the filesystem.
+
+    ``1`` is also the fallback when depth cannot be established (no sidecar,
+    or a ``toolUseId`` that resolves to no emitter). That biases toward
+    under-reporting nesting rather than inventing it, and pairs with
+    ``parent_invocation_id = None`` so no consumer sees a depth it cannot
+    trace to a parent.
+
+    **Public JSON API** (D055), additive; envelope stays ``"2"`` (D029)."""
+
+    children: list[SubagentTrace] = Field(default_factory=list)
+    """Traces spawned *by this agent* -- the depth+1 tier (#595 PR B).
+
+    This is how a depth->=2 trace reaches public JSON at all. It deliberately
+    does **not** become an ``AgentInvocation`` row: ``SessionAnalysis.invocations``
+    means "one row = one main-session delegation", and synthesizing rows for
+    deeper agents would silently move every published agent aggregate
+    (``total_invocations``, ``by_agent_type``, ``builtin``/``custom`` counts)
+    while minting rows whose ``total_tokens`` could only be scraped from a
+    prose trailer -- indistinguishable, to every consumer, from JSON-sourced
+    rows. Hanging the child off its parent keeps invalid states
+    unrepresentable.
+
+    **Size caveat.** This inlines the full child payload (``tool_calls``,
+    ``retry_sequences``) into ``analyze --format json``. Accepted for KISS and
+    for consistency with the existing ``invocation.trace`` nesting; if payload
+    size bites, the escape hatch is a flat adjacency map on ``SessionAnalysis``
+    keyed by ``invocation_id``, which does not change these two fields.
+
+    Empty for the overwhelming majority of traces -- 1.2% of a real 1333-trace
+    corpus had any child at all."""
+
     model: str | None = None
     """Model observed on the first assistant message in the subagent's
     trace (e.g., ``'claude-sonnet-4-6'``). ``None`` when the trace has
