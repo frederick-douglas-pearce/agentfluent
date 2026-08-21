@@ -446,6 +446,22 @@ def _depth_three_session(tmp_path: Path) -> Path:
     return session_dir
 
 
+def _all_descendants(trace: object) -> list[object]:
+    """Every trace below `trace`, at any depth.
+
+    Shared deliberately. The depth-3 invariant test previously inlined a
+    one-level loop over `inv.trace.children`, so it passed on input that
+    violated the invariant it named -- a depth-3 trace attached under a depth-2
+    one was never visited. Any check of "every named parent" has to reach
+    every named parent.
+    """
+    out: list[object] = []
+    for child in trace.children:
+        out.append(child)
+        out.extend(_all_descendants(child))
+    return out
+
+
 class TestDepthTwoCap:
     """Attachment is capped at depth 2 (#595 AC2 as amended; depth-≥3 is #659).
 
@@ -485,27 +501,30 @@ class TestDepthTwoCap:
         for inv in analysis.invocations:
             if inv.trace is None:
                 continue
-            for child in inv.trace.children:
-                assert child.parent_invocation_id in invocation_ids
+            for descendant in _all_descendants(inv.trace):
+                assert descendant.parent_invocation_id in invocation_ids, (
+                    f"{descendant.agent_id} names parent "
+                    f"{descendant.parent_invocation_id!r}, which is not an "
+                    "invocation row -- the documented identity domain is broken"
+                )
 
     def test_every_named_parent_owns_an_invocation_row(self) -> None:
         """The invariant the cap buys, stated as a test rather than as prose."""
         analysis = analyze_session(_NESTED_MAIN)
         invocation_ids = {inv.invocation_id for inv in analysis.invocations}
 
-        def walk(trace: object) -> None:
-            for child in trace.children:
-                assert child.parent_invocation_id in invocation_ids, (
-                    "a parent_invocation_id names something that is not an "
-                    "invocation row -- the documented identity domain is broken"
-                )
-                walk(child)
-
         seen_any = False
         for inv in analysis.invocations:
-            if inv.trace is not None:
-                seen_any = seen_any or bool(inv.trace.children)
-                walk(inv.trace)
+            if inv.trace is None:
+                continue
+            descendants = _all_descendants(inv.trace)
+            seen_any = seen_any or bool(descendants)
+            for descendant in descendants:
+                assert descendant.parent_invocation_id in invocation_ids, (
+                    f"{descendant.agent_id} names parent "
+                    f"{descendant.parent_invocation_id!r}, which is not an "
+                    "invocation row -- the documented identity domain is broken"
+                )
         assert seen_any, "no children attached -- the invariant is vacuous here"
 
     def test_attached_children_are_exactly_depth_2(self) -> None:
