@@ -49,6 +49,7 @@ from agentfluent.diagnostics.mcp_assessment import (
 )
 from agentfluent.diagnostics.models import DiagnosticsResult
 from agentfluent.traces.discovery import discover_session_subagents
+from agentfluent.traces.lineage import resolve_lineage
 from agentfluent.traces.linker import link_traces
 from agentfluent.traces.models import SubagentTrace
 from agentfluent.traces.parser import parse_subagent_trace
@@ -254,7 +255,29 @@ def analyze_session(
     invocations = _link_subagent_traces(invocations, path)
     mcp_tool_calls = extract_mcp_calls_from_messages(messages)
 
-    subagent_traces = [inv.trace for inv in invocations if inv.trace is not None]
+    # NON-FOLDING GATE (#595 PR B, architect ruling 3) -- depth-1 traces ONLY.
+    #
+    # `inv.trace` is always depth 1 (an invocation row exists only for a
+    # main-session delegation), so `depth == 1` is currently redundant. It is
+    # written anyway, and tested, because the thing being pinned is a DECISION,
+    # not an accident of how this line happens to be spelled. Depth->=2 traces
+    # now reach here via `trace.children`, and the moment anyone flattens that
+    # tree into this list, depth->=2 usage silently enters `total_cost`,
+    # `cache_efficiency`, `by_model` and every `diff` baseline for any session
+    # with nested delegation -- a cost-number movement inside a milestone
+    # themed "Cost correctness", arriving as an implementation side effect
+    # nobody chose.
+    #
+    # Folding that spend in IS correct in principle and IS wanted -- it is
+    # #648 AC2's deliberate act, with its own CHANGELOG line and its own
+    # before/after dogfood read. It is not PR B's.
+    #
+    # Locked by: tests/unit/test_lineage_fold_gate.py::TestNonFoldingGate
+    subagent_traces = [
+        inv.trace
+        for inv in invocations
+        if inv.trace is not None and inv.trace.depth == 1
+    ]
     subagent_rows = compute_subagent_token_metrics(subagent_traces, timestamp=price_date)
     token_metrics = fold_subagent_metrics_in(token_metrics, subagent_rows)
 
@@ -512,6 +535,54 @@ def _link_subagent_traces(
             return None
 
     invocations = link_traces(invocations, loader)
+
+    # Lineage (#595 PR B): resolve depth + parent for every trace in the
+    # session, then hang depth->=2 traces off their parent as `children`.
+    # Depth->=2 agents deliberately do NOT become AgentInvocation rows.
+    main_session_tool_use_ids = {inv.tool_use_id for inv in invocations}
+    lineages = resolve_lineage(subagent_files, main_session_tool_use_ids)
+
+    linked_by_agent_id = {
+        inv.agent_id: inv.trace
+        for inv in invocations
+        if inv.agent_id is not None and inv.trace is not None
+    }
+    for agent_id, trace in linked_by_agent_id.items():
+        lineage = lineages.get(agent_id)
+        if lineage is not None:
+            trace.parent_invocation_id = lineage.parent_invocation_id
+            trace.depth = lineage.depth
+
+    # Depth->=2 traces have no invocation row, so they are parsed here and
+    # attached to their parent. Only the residual is parsed -- on a real
+    # corpus that is 1.2% of traces, and a session with no nesting parses
+    # nothing extra.
+    #
+    # Ascending depth order is load-bearing: a depth-3 trace's parent is a
+    # depth-2 trace, which is not an invocation and therefore only becomes
+    # attachable once IT has been attached. Iterating in dict order would drop
+    # every tier below 2 -- silently, and invisibly to this corpus, which
+    # currently bottoms out at depth 2 (1317/16/0). Nothing in the format
+    # caps depth, so the ordering is what makes "at every depth" true rather
+    # than true-so-far.
+    attached_by_agent_id: dict[str, SubagentTrace] = dict(linked_by_agent_id)
+    for agent_id, lineage in sorted(
+        lineages.items(), key=lambda item: item[1].depth,
+    ):
+        if lineage.depth < 2 or lineage.parent_invocation_id is None:
+            continue
+        parent_trace = attached_by_agent_id.get(lineage.parent_invocation_id)
+        if parent_trace is None:
+            # Parent is itself unattached (orphaned subtree). #648 AC3
+            # discloses this residual; PR B does not synthesize a home for it.
+            continue
+        child_trace = loader(agent_id)
+        if child_trace is None:
+            continue
+        child_trace.parent_invocation_id = lineage.parent_invocation_id
+        child_trace.depth = lineage.depth
+        parent_trace.children.append(child_trace)
+        attached_by_agent_id[agent_id] = child_trace
 
     # Orphans: trace files with no matching invocation.
     linked_ids = {inv.agent_id for inv in invocations if inv.trace is not None}
