@@ -7,12 +7,16 @@ assumption the 1h derivation rests on, and the local-first (no-network) contract
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
 
 from agentfluent.analytics import pricing
 from agentfluent.analytics._genai_source import (
+    _ANTHROPIC,
+    REQUIRED_PRICE_KEYS,
+    ModelPrice,
     UpstreamRates,
     _base_rate,
     _required_rate,
@@ -71,13 +75,11 @@ class TestCacheWriteFieldBinding:
     `cache_write_5m` must still equal 6.25 rather than 10.0.
     """
 
-    def _upstream_price(self, model: str) -> object:
-        from datetime import UTC, datetime
-
-        from genai_prices.data import providers
-
-        anthropic = next(p for p in providers if p.id == "anthropic")
-        model_info = anthropic.find_model(model)
+    def _upstream_price(self, model: str) -> ModelPrice:
+        # Reuses the adapter's own module-global provider rather than re-scanning `providers`,
+        # so the guard is bound to the exact object `_resolve_rates` reads.
+        assert _ANTHROPIC is not None
+        model_info = _ANTHROPIC.find_model(model)
         assert model_info is not None
         return model_info.get_prices(datetime.now(UTC))
 
@@ -87,16 +89,36 @@ class TestCacheWriteFieldBinding:
         rates = _resolve_rates(model)
         assert rates is not None
 
-        five_m = _base_rate(upstream.cache_write_mtok)  # type: ignore[attr-defined]
+        five_m = _base_rate(upstream.cache_write_mtok)
         one_h = _base_rate(getattr(upstream, "cache_write_1h_mtok", None))
 
-        assert one_h is not None, (
-            f"{model}: genai-prices no longer populates cache_write_1h_mtok, so this guard is "
-            "no longer exercising anything -- re-check the upstream shape before deleting it."
-        )
+        if one_h is None:
+            # Upstream carries no 1h rate for this model, so there is no adjacent field to
+            # collapse onto and nothing for this case to discriminate. Skip rather than fail:
+            # the adapter has no dependency on the 1h key, so reddening CI over its absence
+            # would report an upstream data change as a defect in code that never reads it.
+            # `test_guard_is_live_on_at_least_one_model` below is what stops every case
+            # skipping silently.
+            pytest.skip(f"{model}: upstream carries no cache_write_1h_mtok to discriminate")
+
         assert five_m != one_h, f"{model}: upstream 5m and 1h coincide; guard cannot discriminate"
         assert rates.cache_write_5m == five_m
         assert rates.cache_write_5m != one_h
+
+    def test_guard_is_live_on_at_least_one_model(self) -> None:
+        # Liveness backstop for the per-model skip above: if upstream ever stopped populating
+        # `cache_write_1h_mtok` everywhere, every case would skip and the non-collapse guard
+        # would pass by vacuity. This fails instead.
+        discriminating = [
+            m
+            for m in _COVERED
+            if _base_rate(getattr(self._upstream_price(m), "cache_write_1h_mtok", None))
+            is not None
+        ]
+        assert discriminating, (
+            "no curated model carries an upstream cache_write_1h_mtok -- the 5m/1h "
+            "non-collapse guard is now vacuous; re-check the upstream shape before trusting it."
+        )
 
 
 class _StubPrice:
@@ -129,9 +151,15 @@ class TestRequiredRateFailsLoud:
     under-reporting, structurally the same defect #661 fixes.
     """
 
-    _REQUIRED = frozenset(
-        {"input_mtok", "output_mtok", "cache_write_mtok", "cache_read_mtok"}
-    )
+    # Imported, never restated: a local copy is exactly how a test set drifts out of sync
+    # with the code it covers (#663 review).
+    _REQUIRED = frozenset(REQUIRED_PRICE_KEYS)
+
+    def test_present_key_resolves_to_its_value(self) -> None:
+        # Exercises the stub's value branch, so all three states of the contract it models are
+        # pinned -- not just the two failure ones.
+        price = _StubPrice(self._REQUIRED, input_mtok=Decimal("5"))
+        assert _required_rate(price, "input_mtok") == 5.0  # type: ignore[arg-type]
 
     def test_registered_but_unset_resolves_to_none_quietly(
         self, caplog: pytest.LogCaptureFixture
@@ -154,26 +182,26 @@ class TestRequiredRateFailsLoud:
             for rec in caplog.records
         ), "a deregistered required key must be surfaced at WARNING, not DEBUG"
 
-    def test_deregistered_key_does_not_degrade_to_zero_cost(self) -> None:
+    def test_deregistered_key_does_not_degrade_to_zero_cost(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         # The end-to-end shape of the failure this guards: `get_pricing` must NOT hand back a
         # priced-at-nothing result. It raises instead of returning None, because None here is
         # indistinguishable from "unknown model" and prices as $0.
-        import agentfluent.analytics._genai_source as source
+        from agentfluent.analytics import _genai_source as source
 
         class _BrokenModel:
             def get_prices(self, _when: object) -> _StubPrice:
                 return _StubPrice(frozenset())
 
-        original = source._ANTHROPIC
-        assert original is not None
-        try:
-            source._ANTHROPIC = type(  # type: ignore[assignment]
-                "_P", (), {"find_model": staticmethod(lambda _ref: _BrokenModel())}
-            )()
-            with pytest.raises(AttributeError):
-                pricing.get_pricing("claude-opus-4-8")
-        finally:
-            source._ANTHROPIC = original
+        class _BrokenProvider:
+            @staticmethod
+            def find_model(_ref: str) -> _BrokenModel:
+                return _BrokenModel()
+
+        monkeypatch.setattr(source, "_ANTHROPIC", _BrokenProvider())
+        with pytest.raises(AttributeError):
+            pricing.get_pricing("claude-opus-4-8")
 
 
 class TestBaseRate:

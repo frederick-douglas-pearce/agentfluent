@@ -37,6 +37,14 @@ Collapsing the second into ``None`` would route a broken binding down the same s
 default. ``getattr(price, key, None)`` is correct only for *genuinely optional* keys -- the
 first of those is #662's ``cache_write_1h_mtok``, which this module deliberately does not read
 (see ``UpstreamRates``).
+
+**What the first row does NOT buy you.** ``_RESIDUAL`` is the documented escape hatch, but it is
+currently ``{}`` (``pricing._RESIDUAL``), so a *curated* model missing one required key resolves
+to ``None`` for the whole model and prices at ``$0`` -- the other three rates are discarded with
+it. That is a narrower version of the same silent-underreporting hazard, one model at a time.
+``pricing.get_pricing`` therefore logs that specific case at **WARNING**, not DEBUG: a model we
+curated but cannot price is always a defect worth surfacing, whether the cause is partial
+upstream coverage or an empty residual.
 """
 
 from __future__ import annotations
@@ -61,9 +69,18 @@ _ANTHROPIC = next((p for p in providers if p.id == "anthropic"), None)
 class UpstreamRates:
     """Anthropic base rates from genai-prices, in USD per 1M tokens.
 
-    genai-prices models a *single* ``cache_write_mtok`` (the 5-minute-equivalent write
-    rate); the 1-hour cache-write dimension (#534) has no upstream field and is supplied
-    by the local overlay -- the adapter must never collapse 1h onto this 5m rate.
+    ``cache_write_5m`` binds the upstream ``cache_write_mtok`` (the 5-minute-equivalent write
+    rate). The 1-hour dimension (#534) is supplied by the local overlay
+    (``ModelPricing.__post_init__`` derives it as 2x input) and this adapter must never collapse
+    1h onto the 5m rate.
+
+    **As of genai-prices 0.1.4 there IS an upstream 1h field** -- ``cache_write_1h_mtok``,
+    populated on 19 of 21 Anthropic models including all nine curated ones. Not reading it is a
+    deliberate deferral to #662 (which owns the switch from derived to upstream-sourced, and its
+    price-neutrality proof), **not** an absence. Earlier revisions of this docstring said the
+    field did not exist; that was true at the 0.0.71 pin and is false now, which is exactly why
+    the non-collapse invariant stopped being vacuous and got a real guard
+    (``test_cache_write_binds_5m_field_not_1h``).
     """
 
     input: float
@@ -88,6 +105,17 @@ def _base_rate(value: Decimal | TieredPrices | None) -> float | None:
     return float(value)  # scalar Decimal
 
 
+# The price keys this adapter REQUIRES upstream to supply. Single source of truth: the resolver
+# iterates it, and the tests import it rather than restating the list (which is how a test set
+# silently drifts out of sync with the code it covers).
+REQUIRED_PRICE_KEYS: tuple[str, ...] = (
+    "input_mtok",
+    "output_mtok",
+    "cache_write_mtok",
+    "cache_read_mtok",
+)
+
+
 def _required_rate(price: ModelPrice, key: str) -> float | None:
     """Read a **required** upstream rate key, failing loudly if it is deregistered.
 
@@ -105,7 +133,7 @@ def _required_rate(price: ModelPrice, key: str) -> float | None:
     broken.
     """
     try:
-        return _base_rate(getattr(price, key))
+        value = getattr(price, key)
     except AttributeError:
         logger.warning(
             "genai-prices deregistered the required price key '%s' -- the _genai_source "
@@ -113,6 +141,10 @@ def _required_rate(price: ModelPrice, key: str) -> float | None:
             key,
         )
         raise
+    # Deliberately OUTSIDE the try: only the attribute lookup can signal a deregistration.
+    # An AttributeError raised inside ``_base_rate`` (an unexpected *value* shape) would
+    # otherwise be reported as a registry break, pointing the reader at the wrong layer.
+    return _base_rate(value)
 
 
 def _resolve_rates(
@@ -141,11 +173,16 @@ def _resolve_rates(
     # deliberately NOT read here: sourcing 1h from upstream is #662, and reading it into
     # ``cache_write_5m`` would be exactly the 5m/1h collapse this adapter must never perform
     # (guarded by ``test_cache_write_binds_5m_field_not_1h`` in tests/unit/test_genai_source.py).
-    input_rate = _required_rate(price, "input_mtok")
-    output_rate = _required_rate(price, "output_mtok")
-    cache_write = _required_rate(price, "cache_write_mtok")
-    cache_read = _required_rate(price, "cache_read_mtok")
+    # Every required key is read (not short-circuited) so a deregistration anywhere in the set
+    # still raises, even when an earlier key is merely unset.
+    rates = {key: _required_rate(price, key) for key in REQUIRED_PRICE_KEYS}
+    input_rate = rates["input_mtok"]
+    output_rate = rates["output_mtok"]
+    cache_write = rates["cache_write_mtok"]
+    cache_read = rates["cache_read_mtok"]
     if input_rate is None or output_rate is None or cache_write is None or cache_read is None:
+        # Partial upstream coverage. ``pricing.get_pricing`` surfaces this at WARNING rather
+        # than DEBUG -- see the module docstring's "What the first row does NOT buy you".
         return None
     return UpstreamRates(
         input=input_rate,

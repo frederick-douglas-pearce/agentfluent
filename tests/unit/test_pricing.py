@@ -381,6 +381,16 @@ class TestCuratedRegistry:
         # magic number on every addition is churn that asserts nothing extra.
         assert get_known_models() == sorted(_GOLDEN_RATES)
 
+    def test_no_curated_id_is_a_legacy_generation(self) -> None:
+        # UNIVERSAL invariant over the whole curated set, restored family-agnostically. The
+        # original form (`all(m.startswith("claude-opus-4") or ...)`) had to be widened for
+        # every new family and broke outright on `claude-opus-5`; this denies the legacy
+        # generations by prefix instead, so a new family needs no edit and a dated legacy id
+        # (`claude-3-opus-20240229`, `claude-instant-1`) is still caught.
+        legacy_prefixes = ("claude-v1", "claude-2", "claude-instant", "claude-3-")
+        leaked = [m for m in get_known_models() if m.startswith(legacy_prefixes)]
+        assert leaked == [], f"legacy generation(s) leaked into the curated registry: {leaked}"
+
     @pytest.mark.parametrize(
         "legacy_id",
         [
@@ -394,7 +404,6 @@ class TestCuratedRegistry:
             "claude-3-7-sonnet-latest",
             "claude-opus-4-0",
             "claude-opus-4-1",
-            "claude-sonnet-4-0",
         ],
     )
     def test_upstream_catalog_not_leaked(self, legacy_id: str) -> None:
@@ -403,6 +412,11 @@ class TestCuratedRegistry:
         # (#661 architect review): a `startswith("claude-...-4")` predicate has to be widened for
         # every new family (it broke on `claude-opus-5`), and widening it carelessly is exactly
         # how an id nobody vetted slips in.
+        #
+        # NOT listed: `claude-sonnet-4-0`. genai-prices resolves our curated dated id
+        # `claude-sonnet-4-20250514` to that upstream model id, so it is very much curated --
+        # naming it here would misinform, and would turn red as a phantom "legacy leak" the
+        # moment `_KNOWN_MODELS` normalizes to undated ids (as opus-4-6/4-7/4-8 already have).
         #
         # Deliberately ABSENT from this list: `claude-sonnet-5` and `claude-fable-5`. Those are
         # current models that are simply uncurated -- genai-prices prices both -- so asserting
@@ -502,7 +516,7 @@ class TestModelConstants:
 class TestResidualFallback:
     """The documented local-overlay escape hatch when genai-prices lacks a model.
 
-    ``_RESIDUAL`` is empty at genai-prices==0.0.71 (full upstream coverage), so these
+    ``_RESIDUAL`` is empty at genai-prices==0.1.4 (full upstream coverage), so these
     tests simulate an upstream miss to lock the fallback contract for a future uncovered
     model.
     """

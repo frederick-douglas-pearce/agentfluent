@@ -9,7 +9,7 @@ This file keeps only what is **AgentFluent-specific**: how our pricing implement
 
 ## genai-prices coverage and local overlay
 
-AgentFluent prices sessions on top of [pydantic/genai-prices](https://github.com/pydantic/genai-prices) (MIT). For Anthropic it models only `input_mtok`, `output_mtok`, `cache_read_mtok`, a single `cache_write_mtok` (5m-equivalent), context-length `tiers`, and dated `constraint`s. The levers it does **not** model — which AgentFluent must supply via a local pricing overlay, and/or request upstream — are our coverage ledger. Each lever plugs into the [base ⊕ overlay merge seam](#the-base--overlay-merge-seam-547) at one of three named plug points (its **Class** below):
+AgentFluent prices sessions on top of [pydantic/genai-prices](https://github.com/pydantic/genai-prices) (MIT). For Anthropic at the pinned `0.1.4` it models `input_mtok`, `output_mtok`, `cache_read_mtok`, `cache_write_mtok` (5m-equivalent), `cache_write_1h_mtok`, `web_searches_kcount`, context-length `tiers`, and dated `constraint`s. The last two landed upstream at `0.1.4` (see the rows below); AgentFluent still supplies both through its local overlay, so the rows record status rather than a retirement. The levers it does **not** model — which AgentFluent must supply via a local pricing overlay, and/or request upstream — are our coverage ledger. Each lever plugs into the [base ⊕ overlay merge seam](#the-base--overlay-merge-seam-547) at one of three named plug points (its **Class** below):
 
 | Gap | Class | Seam plug point | Cost impact for users | Local status | Upstream (genai-prices) |
 |---|---|---|---|---|---|

@@ -62,11 +62,16 @@ class ModelPricing:
     ``cache_creation_1h`` is derived as ``2x input`` when left at the
     ``-1.0`` sentinel, so the 2x multiplier has a single source of truth
     and any ``ModelPricing`` built without it still prices 1h writes
-    correctly. genai-prices (the upstream pricing source, see
-    docs/COST_MODEL.md) models only a single 5m-equivalent
-    ``cache_write_mtok`` — the 1h dimension is supplied by this overlay
-    and has no upstream field; an adapter mapping must not collapse it
-    back onto the 5m rate.
+    correctly. The adapter binds only the upstream 5m-equivalent
+    ``cache_write_mtok``, and must never collapse the 1h dimension back
+    onto that rate.
+
+    genai-prices 0.1.4 *does* carry an upstream 1h field
+    (``cache_write_1h_mtok``, on 19 of 21 Anthropic models). Continuing
+    to derive 1h locally is a deliberate deferral to #662 — which owns
+    the switch and its price-neutrality proof — not evidence the field
+    is unavailable. Earlier text here said it had "no upstream field";
+    that was true at the 0.0.71 pin and is false now.
 
     This rate table is the **class-A plug point** of the base ⊕ overlay
     seam (see the module docstring): rate-table overlays (the 1h-cache
@@ -170,6 +175,14 @@ def get_pricing(model: str, timestamp: datetime | None = None) -> ModelPricing |
     Returns None and logs at DEBUG level if the model is unknown. The caller is expected
     to skip synthetic sentinel values (see ``SYNTHETIC_MODELS``) before invoking this.
 
+    **Raises** ``AttributeError`` if genai-prices has *deregistered* one of the required price
+    keys, which breaks the rate binding for every model at once (see
+    ``_genai_source._required_rate``). This is deliberate and is NOT the unknown-model path:
+    returning ``None`` there would price a broken binding at ``$0``, the failure this module's
+    #661 fix exists to remove. The exact pin in ``pyproject.toml`` keeps it unreachable short of
+    a loosened pin or a broken install, and it is unrecoverable when it does happen — pricing
+    cannot be done at all — so it surfaces rather than degrading.
+
     ``timestamp`` selects the base rate in effect on that date via genai-prices' dated
     constraints (#546); ``None``/omitted → the latest rate, preserving every existing
     caller. Note (#546 falsifier finding, re-confirmed at genai-prices==0.1.4, #661): no model in
@@ -199,7 +212,17 @@ def get_pricing(model: str, timestamp: datetime | None = None) -> ModelPricing |
     if residual is not None:
         return residual
 
-    logger.debug("Known model '%s' has neither upstream nor residual pricing", canonical)
+    # WARNING, not DEBUG: this is a *curated* id -- we asserted we support it -- that still
+    # cannot be priced, so it contributes $0 to every cost figure. Partial upstream coverage
+    # (a model missing one required key) lands here too, and ``_RESIDUAL`` is empty by design,
+    # so nothing downstream would otherwise surface it. The truly-unknown-model path above
+    # stays at DEBUG; conflating the two is what made #661 invisible for as long as it was.
+    logger.warning(
+        "Known model '%s' has neither upstream nor residual pricing -- it will contribute $0 "
+        "to every cost figure. Upstream coverage may have changed; check _KNOWN_MODELS and "
+        "_RESIDUAL against the pinned genai-prices version.",
+        canonical,
+    )
     return None
 
 
