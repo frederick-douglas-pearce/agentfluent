@@ -6,6 +6,7 @@ assumption the 1h derivation rests on, and the local-first (no-network) contract
 
 from __future__ import annotations
 
+import logging
 from decimal import Decimal
 
 import pytest
@@ -14,11 +15,13 @@ from agentfluent.analytics import pricing
 from agentfluent.analytics._genai_source import (
     UpstreamRates,
     _base_rate,
+    _required_rate,
     _resolve_rates,
 )
 
-# The curated ids AgentFluent knows (== _KNOWN_MODELS); all upstream-covered at 0.0.71.
+# The curated ids AgentFluent knows (== _KNOWN_MODELS); all upstream-covered at 0.1.4 (#661).
 _COVERED = [
+    "claude-opus-5",
     "claude-opus-4-8",
     "claude-opus-4-7",
     "claude-opus-4-6",
@@ -50,6 +53,127 @@ class TestResolveRates:
         rates = _resolve_rates(model)
         assert rates is not None
         assert rates.cache_write_5m == pytest.approx(1.25 * rates.input)
+
+
+class TestCacheWriteFieldBinding:
+    """AC3 at the 0.1.x shape: 5m is bound to `cache_write_mtok`, never to `cache_write_1h_mtok`.
+
+    Under genai-prices==0.0.71 this could not be written -- there was no upstream 1h field, so
+    "never collapse 1h onto 5m" was vacuous. 0.1.4 populates `cache_write_1h_mtok` right beside
+    `cache_write_mtok`, so the hazard is live and gets a real guard.
+
+    Complements rather than duplicates `test_cache_write_is_5m_equivalent` above: that one pins
+    the 5m rate to a RATIO (1.25x input); this one pins the FIELD the adapter reads. A collapse
+    onto the 1h key would be caught by the ratio test only by coincidence of arithmetic, and
+    would not say which field was wrong.
+
+    Survives #662 unchanged: when 1h is sourced upstream it lands on `cache_creation_1h`, and
+    `cache_write_5m` must still equal 6.25 rather than 10.0.
+    """
+
+    def _upstream_price(self, model: str) -> object:
+        from datetime import UTC, datetime
+
+        from genai_prices.data import providers
+
+        anthropic = next(p for p in providers if p.id == "anthropic")
+        model_info = anthropic.find_model(model)
+        assert model_info is not None
+        return model_info.get_prices(datetime.now(UTC))
+
+    @pytest.mark.parametrize("model", _COVERED)
+    def test_cache_write_binds_5m_field_not_1h(self, model: str) -> None:
+        upstream = self._upstream_price(model)
+        rates = _resolve_rates(model)
+        assert rates is not None
+
+        five_m = _base_rate(upstream.cache_write_mtok)  # type: ignore[attr-defined]
+        one_h = _base_rate(getattr(upstream, "cache_write_1h_mtok", None))
+
+        assert one_h is not None, (
+            f"{model}: genai-prices no longer populates cache_write_1h_mtok, so this guard is "
+            "no longer exercising anything -- re-check the upstream shape before deleting it."
+        )
+        assert five_m != one_h, f"{model}: upstream 5m and 1h coincide; guard cannot discriminate"
+        assert rates.cache_write_5m == five_m
+        assert rates.cache_write_5m != one_h
+
+
+class _StubPrice:
+    """Stands in for genai-prices' `ModelPrice` at the 0.1.x dynamic-registry contract.
+
+    A key passed to the constructor resolves to its value; a key named in `registered` but not
+    supplied resolves to None (registered-but-unset); anything else raises AttributeError
+    (deregistered). That three-way behavior is exactly what `_required_rate` discriminates on.
+    """
+
+    def __init__(self, registered: frozenset[str], **prices: object) -> None:
+        self._registered = registered
+        self._prices = prices
+
+    def __getattr__(self, name: str) -> object:
+        prices = self.__dict__["_prices"]
+        if name in prices:
+            return prices[name]
+        if name in self.__dict__["_registered"]:
+            return None
+        raise AttributeError(name)
+
+
+class TestRequiredRateFailsLoud:
+    """A DEREGISTERED required key must be loud; a registered-but-unset one must not be.
+
+    The distinction is the whole point (#661 architect review, Concern 1). Collapsing both to
+    None -- which `getattr(price, key, None)` would do -- routes a broken binding into
+    `get_pricing`'s empty-`_RESIDUAL` path and out as $0 logged at DEBUG: silent catastrophic
+    under-reporting, structurally the same defect #661 fixes.
+    """
+
+    _REQUIRED = frozenset(
+        {"input_mtok", "output_mtok", "cache_write_mtok", "cache_read_mtok"}
+    )
+
+    def test_registered_but_unset_resolves_to_none_quietly(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # A legitimate per-model gap: upstream knows the key, this model has no value for it.
+        price = _StubPrice(self._REQUIRED)
+        with caplog.at_level(logging.WARNING):
+            assert _required_rate(price, "cache_read_mtok") is None  # type: ignore[arg-type]
+        assert caplog.records == [], "a legitimate per-model gap must not warn"
+
+    def test_deregistered_key_warns_and_raises(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # The binding contract broke for EVERY model -- never silently $0.
+        price = _StubPrice(frozenset())
+        with caplog.at_level(logging.WARNING), pytest.raises(AttributeError):
+            _required_rate(price, "input_mtok")  # type: ignore[arg-type]
+        assert any(
+            rec.levelno >= logging.WARNING and "input_mtok" in rec.getMessage()
+            for rec in caplog.records
+        ), "a deregistered required key must be surfaced at WARNING, not DEBUG"
+
+    def test_deregistered_key_does_not_degrade_to_zero_cost(self) -> None:
+        # The end-to-end shape of the failure this guards: `get_pricing` must NOT hand back a
+        # priced-at-nothing result. It raises instead of returning None, because None here is
+        # indistinguishable from "unknown model" and prices as $0.
+        import agentfluent.analytics._genai_source as source
+
+        class _BrokenModel:
+            def get_prices(self, _when: object) -> _StubPrice:
+                return _StubPrice(frozenset())
+
+        original = source._ANTHROPIC
+        assert original is not None
+        try:
+            source._ANTHROPIC = type(  # type: ignore[assignment]
+                "_P", (), {"find_model": staticmethod(lambda _ref: _BrokenModel())}
+            )()
+            with pytest.raises(AttributeError):
+                pricing.get_pricing("claude-opus-4-8")
+        finally:
+            source._ANTHROPIC = original
 
 
 class TestBaseRate:

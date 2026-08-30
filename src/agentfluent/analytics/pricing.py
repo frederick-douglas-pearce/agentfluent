@@ -92,15 +92,23 @@ class ModelPricing:
 # sourced upstream-first from genai-prices (D045) via ``_resolve_rates``; ``_RESIDUAL``
 # supplies a documented local fallback for any id genai-prices does not cover.
 #
-# The #545 coverage probe found genai-prices==0.0.71 covers ALL of these ids, with
-# base-tier rates identical to the former hand-maintained ``_PRICING`` dict:
+# The #661 coverage probe found genai-prices==0.1.4 covers ALL of these ids, with base-tier
+# rates identical to those the #545 probe locked under 0.0.71 (the bump moved no rate):
 #   Opus 4.5/4.6/4.7/4.8  -> $5 / $25 / $6.25 / $0.50
+#   Opus 5                -> $5 / $25 / $6.25 / $0.50   (NEW at 0.1.4 -- absent from 0.0.71,
+#                                                        which is why it priced at $0; #661)
 #   Sonnet 4.0/4.5/4.6    -> $3 / $15 / $3.75 / $0.30   (4.5 is context-tiered upstream;
 #                                                        base tier taken -- see _genai_source)
 #   Haiku 4.5             -> $1 / $5  / $1.25 / $0.10
 # so ``_RESIDUAL`` is currently empty. The golden-rate regression test locks these values.
+#
+# NOTE (#661 architect review, Concern 2): this frozenset is consulted BEFORE upstream, so an id
+# missing here fails closed to None -> $0 at DEBUG even when genai-prices can price it. That is a
+# known structural defect with a live instance (``claude-sonnet-5``) tracked separately -- do not
+# read the curation here as evidence that an absent id is unpriceable.
 _KNOWN_MODELS: frozenset[str] = frozenset(
     {
+        "claude-opus-5",
         "claude-opus-4-8",
         "claude-opus-4-7",
         "claude-opus-4-6",
@@ -113,7 +121,7 @@ _KNOWN_MODELS: frozenset[str] = frozenset(
 )
 
 # Documented local residual: model id -> ModelPricing for any model genai-prices lacks.
-# Empty as of genai-prices==0.0.71 (see _KNOWN_MODELS above). Add an entry ONLY for a model
+# Empty as of genai-prices==0.1.4 (see _KNOWN_MODELS above). Add an entry ONLY for a model
 # the coverage probe shows upstream does not price -- this is the local-overlay escape
 # hatch, not a re-introduction of the hand-maintained rate table.
 _RESIDUAL: dict[str, ModelPricing] = {}
@@ -127,6 +135,7 @@ _ALIASES: dict[str, str] = {
     "sonnet": "claude-sonnet-4-6",
     "haiku": "claude-haiku-4-5-20251001",
     "claude-haiku-4-5": "claude-haiku-4-5-20251001",
+    "claude-opus-5[1m]": "claude-opus-5",
     "claude-opus-4-8[1m]": "claude-opus-4-8",
     "claude-opus-4-7[1m]": "claude-opus-4-7",
     "claude-opus-4-6[1m]": "claude-opus-4-6",
@@ -163,7 +172,7 @@ def get_pricing(model: str, timestamp: datetime | None = None) -> ModelPricing |
 
     ``timestamp`` selects the base rate in effect on that date via genai-prices' dated
     constraints (#546); ``None``/omitted → the latest rate, preserving every existing
-    caller. Note (#546 falsifier finding, genai-prices==0.0.71): no model in
+    caller. Note (#546 falsifier finding, re-confirmed at genai-prices==0.1.4, #661): no model in
     ``_KNOWN_MODELS`` currently carries a dated *base-rate* change -- the only dated
     Anthropic constraints move the >200K context tier, which the adapter discards (see
     ``_genai_source._base_rate``) -- so a timestamp is presently date-invariant at base-rate
