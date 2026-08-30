@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from agentfluent.analytics import pricing
 from agentfluent.analytics.pricing import (
     SYNTHETIC_MODELS,
     ModelPricing,
@@ -100,6 +101,25 @@ class TestGetPricing:
         warning_records = [r for r in caplog.records if r.levelno >= logging.WARNING]
         assert any("some-future-model" in r.getMessage() for r in debug_records)
         assert warning_records == []
+
+    def test_curated_but_unpriceable_logs_at_warning_not_debug(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # The other half of the split above. An id we *curated* -- asserted we support --
+        # that still cannot be priced contributes $0 to every cost figure, and ``_RESIDUAL``
+        # is empty by design, so this log line is the only signal that ever fires.
+        #
+        # This is NOT the branch #661 took: `claude-opus-5` was absent from `_KNOWN_MODELS`
+        # and exited at the unknown-model DEBUG path above. This guards the neighbouring case
+        # (curated, upstream coverage later lost), which nothing else would surface.
+        monkeypatch.setattr(pricing, "_resolve_rates", lambda *a, **kw: None)
+        monkeypatch.setattr(pricing, "_RESIDUAL", {})
+        with caplog.at_level(logging.DEBUG, logger="agentfluent.analytics.pricing"):
+            assert get_pricing("claude-opus-5") is None
+        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any("claude-opus-5" in r.getMessage() for r in warnings), (
+            "a curated model that cannot be priced must surface at WARNING, not DEBUG"
+        )
 
 
 class TestSyntheticModels:
@@ -330,12 +350,18 @@ class TestGetKnownModels:
 
 # Golden base rates (USD per 1M tokens): input, output, cache_creation_5m, cache_read.
 # These are the pre-migration `_PRICING` values -- the regression lock for the genai-prices
-# swap (#545). COVERAGE PROBE (genai-prices==0.0.71, 2026-07-11): all 8 ids below are
+# swap (#545). COVERAGE PROBE (genai-prices==0.1.4, 2026-08-30, #661): all 9 ids below are
 # covered upstream with base-tier rates equal to these values; the local `_RESIDUAL` is
 # therefore empty. `claude-sonnet-4-5-20250929` is context-tiered upstream (>200K surcharge);
 # the adapter takes the standard (base) tier. If a pin bump changes any value, this test
 # goes red -- that is the intended gate for #82.
+#
+# `claude-opus-5` joined at the 0.1.4 bump (#661). It is the ONE intentional delta of that
+# bump and it is one-directional: opus-5 went None -> real pricing (it was $0 before, on ~37%
+# of a real corpus). Every other id below is byte-identical across 0.0.71 -> 0.1.4, which is
+# what makes that PR's cost-neutrality claim checkable here rather than merely asserted.
 _GOLDEN_RATES: dict[str, tuple[float, float, float, float]] = {
+    "claude-opus-5": (5.0, 25.0, 6.25, 0.50),
     "claude-opus-4-8": (5.0, 25.0, 6.25, 0.50),
     "claude-opus-4-7": (5.0, 25.0, 6.25, 0.50),
     "claude-opus-4-6": (5.0, 25.0, 6.25, 0.50),
@@ -370,22 +396,96 @@ class TestGoldenRateRegression:
 
 
 class TestCuratedRegistry:
-    def test_known_models_is_the_curated_eight(self) -> None:
+    def test_known_models_matches_the_golden_set(self) -> None:
+        # Deliberately count-agnostic: the registry grows (8 -> 9 at #661), and renaming a
+        # magic number on every addition is churn that asserts nothing extra.
         assert get_known_models() == sorted(_GOLDEN_RATES)
 
-    def test_upstream_catalog_not_leaked(self) -> None:
-        # genai-prices carries many older ids (claude-2, claude-3-*) -- they must NOT appear.
-        known = get_known_models()
-        assert "claude-2" not in known
-        assert "claude-3-opus-latest" not in known
-        assert all(m.startswith("claude-opus-4") or m.startswith("claude-sonnet-4")
-                   or m.startswith("claude-haiku-4") for m in known)
+    def test_no_curated_id_is_a_legacy_generation(self) -> None:
+        # UNIVERSAL invariant over the whole curated set, restored family-agnostically. The
+        # original form (`all(m.startswith("claude-opus-4") or ...)`) had to be widened for
+        # every new family and broke outright on `claude-opus-5`; this denies the legacy
+        # generations by prefix instead, so a new family needs no edit and a dated legacy id
+        # (`claude-3-opus-20240229`, `claude-instant-1`) is still caught.
+        legacy_prefixes = ("claude-v1", "claude-2", "claude-instant", "claude-3-")
+        leaked = [m for m in get_known_models() if m.startswith(legacy_prefixes)]
+        assert leaked == [], f"legacy generation(s) leaked into the curated registry: {leaked}"
+
+    @pytest.mark.parametrize(
+        "legacy_id",
+        [
+            "claude-v1",
+            "claude-2",
+            "claude-3-haiku",
+            "claude-3-sonnet",
+            "claude-3-opus-latest",
+            "claude-3-5-sonnet",
+            "claude-3-5-haiku-latest",
+            "claude-3-7-sonnet-latest",
+            "claude-opus-4-0",
+            "claude-opus-4-1",
+        ],
+    )
+    def test_upstream_catalog_not_leaked(self, legacy_id: str) -> None:
+        # genai-prices carries many ids AgentFluent deliberately does not curate. Asserted as a
+        # DENY-canary over known-legacy ids rather than as an allow-prefix over the curated set
+        # (#661 architect review): a `startswith("claude-...-4")` predicate has to be widened for
+        # every new family (it broke on `claude-opus-5`), and widening it carelessly is exactly
+        # how an id nobody vetted slips in.
+        #
+        # NOT listed: `claude-sonnet-4-0`. genai-prices resolves our curated dated id
+        # `claude-sonnet-4-20250514` to that upstream model id, so it is very much curated --
+        # naming it here would misinform, and would turn red as a phantom "legacy leak" the
+        # moment `_KNOWN_MODELS` normalizes to undated ids (as opus-4-6/4-7/4-8 already have).
+        #
+        # Deliberately ABSENT from this list: `claude-sonnet-5` and `claude-fable-5`. Those are
+        # current models that are simply uncurated -- genai-prices prices both -- so asserting
+        # they must stay out would lock in the silent-$0 defect tracked by the #661 architect
+        # review's Concern 2, not guard against it. This canary is for *legacy* ids only.
+        assert legacy_id not in get_known_models()
 
     @pytest.mark.parametrize("canonical", ["claude-opus-4-7", "claude-sonnet-4-6",
                                            "claude-haiku-4-5-20251001"])
     def test_canonical_targets_never_none(self, canonical: str) -> None:
         # model_routing savings math breaks on a None -- recommendation targets must price.
         assert get_pricing(canonical) is not None
+
+
+class TestOpus5Regression:
+    """#661: `claude-opus-5` priced at $0 -- ~37% of a real corpus, logged at DEBUG only.
+
+    Pins the defect at the surface a user actually hits (`get_pricing`), not at the adapter.
+    Two independent things had to be true for the bug, so both are asserted: the id must be
+    present upstream (the `genai-prices` pin -- it is absent from 0.0.71 entirely), and it must
+    be in the curated `_KNOWN_MODELS` allow-list, which `get_pricing` consults FIRST and which
+    fails closed to None.
+    """
+
+    @pytest.mark.parametrize("model_id", ["claude-opus-5", "claude-opus-5[1m]"])
+    def test_opus_5_is_priced(self, model_id: str) -> None:
+        pricing = get_pricing(model_id)
+        assert pricing is not None, (
+            f"{model_id} resolved to None -- it would contribute $0 to every cost figure, "
+            "silently (the lookup miss logs at DEBUG). This is #661 regressing."
+        )
+        assert pricing.input == 5.0
+        assert pricing.output == 25.0
+        assert pricing.cache_creation_5m == 6.25
+        assert pricing.cache_read == 0.50
+
+    def test_opus_5_1h_write_is_derived_not_upstream(self) -> None:
+        # genai-prices 0.1.4 DOES carry `cache_write_1h_mtok` for this model, but the adapter
+        # deliberately does not read it (that is #662). Upstream's 1h rate is itself exactly
+        # 2x input, so this pins the VALUE and cannot discriminate provenance -- swapping in
+        # the upstream key would keep it green. The provenance guard is
+        # `test_cache_write_binds_5m_field_not_1h` in tests/unit/test_genai_source.py.
+        pricing = get_pricing("claude-opus-5")
+        assert pricing is not None
+        assert pricing.cache_creation_1h == 10.0
+        assert pricing.cache_creation_1h == pytest.approx(2.0 * pricing.input)
+
+    def test_opus_5_context_suffix_resolves_to_same_rates(self) -> None:
+        assert get_pricing("claude-opus-5[1m]") == get_pricing("claude-opus-5")
 
 
 class TestCacheCreation1hNonCollapse:
@@ -437,7 +537,7 @@ class TestModelConstants:
 class TestResidualFallback:
     """The documented local-overlay escape hatch when genai-prices lacks a model.
 
-    ``_RESIDUAL`` is empty at genai-prices==0.0.71 (full upstream coverage), so these
+    ``_RESIDUAL`` is empty at genai-prices==0.1.4 (full upstream coverage), so these
     tests simulate an upstream miss to lock the fallback contract for a future uncovered
     model.
     """

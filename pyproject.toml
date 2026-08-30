@@ -29,7 +29,13 @@ dependencies = [
     # Pinned EXACTLY: we bind to genai-prices' internal (non-``__all__``) rate record in
     # analytics/_genai_source.py, and it is pre-1.0 (no API-stability promise). A bump is a
     # controlled channel (#82) gated by the golden-rate test. Do not loosen to ``>=``.
-    "genai-prices==0.0.71",
+    #
+    # As of 0.1.x that record is no longer a fixed-field dataclass: ``ModelPrice`` takes
+    # ``**price_kwargs`` over a dynamic unit registry, and its ``__getattr__`` returns ``None``
+    # for a *registered* price key while raising ``AttributeError`` for a *deregistered* one
+    # (#661). Named-key access therefore still works, but the way a bump can break us changed
+    # from a static attribute error to a runtime one -- which is what the exact pin now bounds.
+    "genai-prices==0.1.4",
 ]
 
 [project.optional-dependencies]
