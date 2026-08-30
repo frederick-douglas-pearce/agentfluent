@@ -105,9 +105,22 @@ def _base_rate(value: Decimal | TieredPrices | None) -> float | None:
     return float(value)  # scalar Decimal
 
 
-# The price keys this adapter REQUIRES upstream to supply. Single source of truth: the resolver
-# iterates it, and the tests import it rather than restating the list (which is how a test set
-# silently drifts out of sync with the code it covers).
+# The price keys this adapter REQUIRES upstream to supply -- a contract, not a convenience list.
+# The resolver iterates it and the tests import it rather than restating the list (which is how a
+# test set silently drifts out of sync with the code it covers).
+#
+# **Do not add an optional key here.** Membership means *mandatory for every model*: a model that
+# does not carry the key resolves to ``None`` for the whole model -- all four rates discarded --
+# and prices at ``$0``. Promoting a partially-populated upstream field into this tuple therefore
+# converts a per-model gap into a global kill-switch, which is the exact failure #661 fixed.
+#
+# Concretely, for #662: ``cache_write_1h_mtok`` is populated on 19 of 21 Anthropic models, so it
+# does **not** belong here. Read it on a separate optional path with ``getattr(price, key, None)``
+# -- the form that is correct precisely because the key is allowed to be absent.
+#
+# The set is only half of the required-key representation: the resolver still names its four reads
+# as locals, so removing a member fails loudly (``KeyError``) while adding one passes silently.
+# ``test_required_price_keys_is_pinned`` supplies the missing half of that tripwire.
 REQUIRED_PRICE_KEYS: tuple[str, ...] = (
     "input_mtok",
     "output_mtok",

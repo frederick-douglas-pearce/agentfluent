@@ -204,6 +204,45 @@ class TestRequiredRateFailsLoud:
             pricing.get_pricing("claude-opus-4-8")
 
 
+class TestRequiredPriceKeysMembership:
+    """The required set is a contract, not a convenience list (#661 -> #662 tripwire)."""
+
+    def test_required_price_keys_is_pinned(self) -> None:
+        # This set fails asymmetrically. REMOVING a key is already loud: the resolver reads
+        # named locals out of the dict it builds, so a removal raises KeyError. ADDING one is
+        # the silent direction -- and it is the direction the next issue on this file walks.
+        #
+        # #662 retires the derived 1h cache-write onto upstream's ``cache_write_1h_mtok``, and
+        # the obvious first move is to add that key here. It must not be: the key is populated
+        # on 19 of 21 Anthropic models, so promoting it to *required* turns an optional field
+        # into a global kill-switch -- the two models without it would resolve to None for all
+        # four rates and price at $0. That is #661's own defect, reintroduced by #661's fix.
+        # Optional keys belong on a ``getattr(price, key, None)`` path, not in this tuple.
+        assert REQUIRED_PRICE_KEYS == (
+            "input_mtok",
+            "output_mtok",
+            "cache_write_mtok",
+            "cache_read_mtok",
+        ), (
+            "REQUIRED_PRICE_KEYS changed. A key added here becomes mandatory for EVERY model; "
+            "add one only if upstream populates it on every curated model. Optional keys "
+            "(cache_write_1h_mtok, #662) go on a getattr(..., None) path -- see the constant's "
+            "docstring in analytics/_genai_source.py."
+        )
+
+    def test_every_required_key_is_read_by_the_resolver(self) -> None:
+        # Pins the *behaviour* the tuple promises, not just its contents: each member must be
+        # read for a covered model, so the set cannot quietly become decorative.
+        assert _ANTHROPIC is not None, "genai-prices has no anthropic provider record"
+        model = _ANTHROPIC.find_model("claude-opus-5")
+        assert model is not None, "claude-opus-5 is curated but absent upstream"
+        price = model.get_prices(datetime.now(UTC))
+        for key in REQUIRED_PRICE_KEYS:
+            assert _required_rate(price, key) is not None, (
+                f"{key} is declared required but resolves to None on a curated model"
+            )
+
+
 class TestBaseRate:
     def test_scalar_decimal_passthrough(self) -> None:
         assert _base_rate(Decimal("3.5")) == 3.5

@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from agentfluent.analytics import pricing
 from agentfluent.analytics.pricing import (
     SYNTHETIC_MODELS,
     ModelPricing,
@@ -100,6 +101,23 @@ class TestGetPricing:
         warning_records = [r for r in caplog.records if r.levelno >= logging.WARNING]
         assert any("some-future-model" in r.getMessage() for r in debug_records)
         assert warning_records == []
+
+    def test_curated_but_unpriceable_logs_at_warning_not_debug(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # The other half of the split above, and the one that matters for #661. An id we
+        # *curated* -- asserted we support -- that still cannot be priced contributes $0 to
+        # every cost figure. ``_RESIDUAL`` is empty by design, so this log line is the only
+        # signal that ever fires; leaving it at DEBUG beside the unknown-model path is
+        # exactly what kept claude-opus-5's $0 invisible across ~37% of the corpus.
+        monkeypatch.setattr(pricing, "_resolve_rates", lambda *a, **kw: None)
+        monkeypatch.setattr(pricing, "_RESIDUAL", {})
+        with caplog.at_level(logging.DEBUG, logger="agentfluent.analytics.pricing"):
+            assert get_pricing("claude-opus-5") is None
+        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any("claude-opus-5" in r.getMessage() for r in warnings), (
+            "a curated model that cannot be priced must surface at WARNING, not DEBUG"
+        )
 
 
 class TestSyntheticModels:
