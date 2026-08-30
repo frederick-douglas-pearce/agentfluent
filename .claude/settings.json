@@ -43,7 +43,8 @@
     ]
   },
   "enabledPlugins": {
-    "security-guidance@claude-plugins-official": true
+    "security-guidance@claude-plugins-official": true,
+    "dev-loop@claude-code-loop": true
   },
   "env": {
     "ENABLE_CODE_SECURITY_REVIEW": "0",
