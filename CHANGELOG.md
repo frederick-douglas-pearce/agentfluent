@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.12.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.11.0...v0.12.0) (2026-08-30)
+
+
+### Features
+
+* **traces:** multi-level subagent trace linker — parent_invocation_id + depth ([#658](https://github.com/frederick-douglas-pearce/agentfluent/issues/658)) ([98be0c9](https://github.com/frederick-douglas-pearce/agentfluent/commit/98be0c94de5d7b3598db564fe58744e490501bb9)), closes [#595](https://github.com/frederick-douglas-pearce/agentfluent/issues/595)
+
+
+### Bug Fixes
+
+* **pricing:** bump genai-prices to 0.1.4 and price claude-opus-5 ([#663](https://github.com/frederick-douglas-pearce/agentfluent/issues/663)) ([8c53cee](https://github.com/frederick-douglas-pearce/agentfluent/commit/8c53ceead9e9da37df17993ddf4547931b0cfcd1)), closes [#661](https://github.com/frederick-douglas-pearce/agentfluent/issues/661)
+
 ## [0.11.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.10.0...v0.11.0) (2026-07-22) — "Recognize the SDK Session"
 
 AgentFluent's stated primary audience is the Agent SDK developer, yet for ten releases the tool could not tell an SDK-hosted session apart from a Claude Code interactive one — the two sit side by side in the same `~/.claude/projects/` directories, indistinguishable. v0.11 teaches it to **recognize an SDK session on sight**: the parser reads each session's `entrypoint` and classifies it `sdk`/`cli`/`unknown` (#591); `analyze` shows it as a footer composition line, an `[SDK]` badge under `--session`, and a `Kind` column under `--verbose`, with matching JSON `session_kind`/`entrypoint` (#592); and the first SDK-specific consumer arrives — model-routing diagnostics scoped to the SDK *main* session via a new `routing_scope` discriminator (#112). Two further pieces make that audience first-class rather than merely labeled: `resolvedModel` is surfaced on `ToolResultMetadata` (#593), and a repo-tracked SDK **dogfood-runner** (#590) now exercises AgentFluent on exactly the sessions its primary user produces.
