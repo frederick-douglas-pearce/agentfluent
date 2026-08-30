@@ -105,11 +105,13 @@ class TestGetPricing:
     def test_curated_but_unpriceable_logs_at_warning_not_debug(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
     ) -> None:
-        # The other half of the split above, and the one that matters for #661. An id we
-        # *curated* -- asserted we support -- that still cannot be priced contributes $0 to
-        # every cost figure. ``_RESIDUAL`` is empty by design, so this log line is the only
-        # signal that ever fires; leaving it at DEBUG beside the unknown-model path is
-        # exactly what kept claude-opus-5's $0 invisible across ~37% of the corpus.
+        # The other half of the split above. An id we *curated* -- asserted we support --
+        # that still cannot be priced contributes $0 to every cost figure, and ``_RESIDUAL``
+        # is empty by design, so this log line is the only signal that ever fires.
+        #
+        # This is NOT the branch #661 took: `claude-opus-5` was absent from `_KNOWN_MODELS`
+        # and exited at the unknown-model DEBUG path above. This guards the neighbouring case
+        # (curated, upstream coverage later lost), which nothing else would surface.
         monkeypatch.setattr(pricing, "_resolve_rates", lambda *a, **kw: None)
         monkeypatch.setattr(pricing, "_RESIDUAL", {})
         with caplog.at_level(logging.DEBUG, logger="agentfluent.analytics.pricing"):
@@ -473,9 +475,10 @@ class TestOpus5Regression:
 
     def test_opus_5_1h_write_is_derived_not_upstream(self) -> None:
         # genai-prices 0.1.4 DOES carry `cache_write_1h_mtok` for this model, but the adapter
-        # deliberately does not read it (that is #662). The 1h rate must still come from the
-        # local 2x-input derivation -- same number here, different provenance, and the guard
-        # that stops #662's field being absorbed early.
+        # deliberately does not read it (that is #662). Upstream's 1h rate is itself exactly
+        # 2x input, so this pins the VALUE and cannot discriminate provenance -- swapping in
+        # the upstream key would keep it green. The provenance guard is
+        # `test_cache_write_binds_5m_field_not_1h` in tests/unit/test_genai_source.py.
         pricing = get_pricing("claude-opus-5")
         assert pricing is not None
         assert pricing.cache_creation_1h == 10.0

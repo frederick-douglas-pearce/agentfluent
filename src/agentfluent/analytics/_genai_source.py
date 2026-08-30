@@ -32,11 +32,10 @@ registered but unset         a legitimate per-model gap             ``None`` -> 
                              model, not just this one**
 ===========================  =====================================  ==========================
 
-Collapsing the second into ``None`` would route a broken binding down the same silent
-``$0``-logged-at-DEBUG path that #661 exists to fix, so a required key never gets a silent
-default. ``getattr(price, key, None)`` is correct only for *genuinely optional* keys -- the
-first of those is #662's ``cache_write_1h_mtok``, which this module deliberately does not read
-(see ``UpstreamRates``).
+Collapsing the second into ``None`` would price every model at ``$0`` while reporting success,
+so a required key never gets a silent default. ``getattr(price, key, None)`` is correct only for
+*genuinely optional* keys -- the first of those is #662's ``cache_write_1h_mtok``, which this
+module deliberately does not read (see ``UpstreamRates``).
 
 **What the first row does NOT buy you.** ``_RESIDUAL`` is the documented escape hatch, but it is
 currently ``{}`` (``pricing._RESIDUAL``), so a *curated* model missing one required key resolves
@@ -109,18 +108,17 @@ def _base_rate(value: Decimal | TieredPrices | None) -> float | None:
 # The resolver iterates it and the tests import it rather than restating the list (which is how a
 # test set silently drifts out of sync with the code it covers).
 #
-# **Do not add an optional key here.** Membership means *mandatory for every model*: a model that
-# does not carry the key resolves to ``None`` for the whole model -- all four rates discarded --
-# and prices at ``$0``. Promoting a partially-populated upstream field into this tuple therefore
-# converts a per-model gap into a global kill-switch, which is the exact failure #661 fixed.
+# **Membership is not self-enforcing -- do not add a key here expecting it to become required.**
+# The resolver reads every member through ``_required_rate`` (so *deregistering* any member
+# raises), but the ``None`` check below it names four locals explicitly and is **not** derived
+# from this tuple. Adding a fifth member therefore changes no pricing at all: the key is read and
+# discarded. That inertness is the hazard -- the edit looks load-bearing, so the two
+# representations drift and the key that was meant to become required silently isn't.
 #
-# Concretely, for #662: ``cache_write_1h_mtok`` is populated on 19 of 21 Anthropic models, so it
-# does **not** belong here. Read it on a separate optional path with ``getattr(price, key, None)``
-# -- the form that is correct precisely because the key is allowed to be absent.
-#
-# The set is only half of the required-key representation: the resolver still names its four reads
-# as locals, so removing a member fails loudly (``KeyError``) while adding one passes silently.
-# ``test_required_price_keys_is_pinned`` supplies the missing half of that tripwire.
+# Concretely, for #662: read ``cache_write_1h_mtok`` on a separate optional path via
+# ``getattr(price, key, None)`` -- correct precisely because the key is allowed to be absent
+# (upstream populates it on 19 of 21 Anthropic models). ``test_required_price_keys_is_pinned``
+# fails on any edit to this tuple, so a change here has to be deliberate.
 REQUIRED_PRICE_KEYS: tuple[str, ...] = (
     "input_mtok",
     "output_mtok",
@@ -140,10 +138,10 @@ def _required_rate(price: ModelPrice, key: str) -> float | None:
 
     The second is logged at WARNING and re-raised rather than flattened to ``None``: returning
     ``None`` would hand a broken binding to ``pricing.get_pricing``, which maps it to an empty
-    residual and then to ``$0`` logged at DEBUG -- silent catastrophic under-reporting, the exact
-    failure class #661 exists to fix. The exact pin in ``pyproject.toml`` is what keeps this
-    unreachable in practice; the loudness is for the pin being loosened or the install being
-    broken.
+    residual and then to ``$0``. That path does warn, but it names the *model* -- so a binding
+    broken for all of them would read as one model losing coverage. The exact pin in
+    ``pyproject.toml`` is what keeps this unreachable in practice; the loudness is for the pin
+    being loosened or the install being broken.
     """
     try:
         value = getattr(price, key)

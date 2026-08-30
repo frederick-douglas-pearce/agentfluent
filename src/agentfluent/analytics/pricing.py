@@ -216,7 +216,11 @@ def get_pricing(model: str, timestamp: datetime | None = None) -> ModelPricing |
     # cannot be priced, so it contributes $0 to every cost figure. Partial upstream coverage
     # (a model missing one required key) lands here too, and ``_RESIDUAL`` is empty by design,
     # so nothing downstream would otherwise surface it. The truly-unknown-model path above
-    # stays at DEBUG; conflating the two is what made #661 invisible for as long as it was.
+    # stays at DEBUG -- an id we never claimed to support is not a defect.
+    #
+    # Note the limit of this signal: it would NOT have caught #661 itself. `claude-opus-5` was
+    # missing from `_KNOWN_MODELS`, so it exited at that DEBUG branch and never reached here.
+    # Curated-but-unpriceable is the case this covers; uncurated-but-priceable is #664.
     logger.warning(
         "Known model '%s' has neither upstream nor residual pricing -- it will contribute $0 "
         "to every cost figure. Upstream coverage may have changed; check _KNOWN_MODELS and "

@@ -147,8 +147,8 @@ class TestRequiredRateFailsLoud:
 
     The distinction is the whole point (#661 architect review, Concern 1). Collapsing both to
     None -- which `getattr(price, key, None)` would do -- routes a broken binding into
-    `get_pricing`'s empty-`_RESIDUAL` path and out as $0 logged at DEBUG: silent catastrophic
-    under-reporting, structurally the same defect #661 fixes.
+    `get_pricing`'s empty-`_RESIDUAL` path and out as $0: structurally the same
+    under-reporting defect #661 fixes.
     """
 
     # Imported, never restated: a local copy is exactly how a test set drifts out of sync
@@ -213,11 +213,10 @@ class TestRequiredPriceKeysMembership:
         # the silent direction -- and it is the direction the next issue on this file walks.
         #
         # #662 retires the derived 1h cache-write onto upstream's ``cache_write_1h_mtok``, and
-        # the obvious first move is to add that key here. It must not be: the key is populated
-        # on 19 of 21 Anthropic models, so promoting it to *required* turns an optional field
-        # into a global kill-switch -- the two models without it would resolve to None for all
-        # four rates and price at $0. That is #661's own defect, reintroduced by #661's fix.
-        # Optional keys belong on a ``getattr(price, key, None)`` path, not in this tuple.
+        # the obvious first move is to add that key here. That edit is INERT -- the resolver's
+        # None check names four locals, not this tuple, so the fifth key is read and discarded
+        # and every model prices exactly as before. Looking load-bearing while doing nothing is
+        # why this pin exists: it forces the edit to be argued rather than assumed.
         assert REQUIRED_PRICE_KEYS == (
             "input_mtok",
             "output_mtok",
