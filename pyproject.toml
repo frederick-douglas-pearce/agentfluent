@@ -35,7 +35,7 @@ dependencies = [
     # for a *registered* price key while raising ``AttributeError`` for a *deregistered* one
     # (#661). Named-key access therefore still works, but the way a bump can break us changed
     # from a static attribute error to a runtime one -- which is what the exact pin now bounds.
-    "genai-prices==0.1.4",
+    "genai-prices==0.1.5",
 ]
 
 [project.optional-dependencies]
