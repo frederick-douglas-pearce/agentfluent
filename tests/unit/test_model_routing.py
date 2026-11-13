@@ -7,7 +7,7 @@ from pathlib import Path
 from agentfluent.agents.models import AgentInvocation
 from agentfluent.analytics.pricing import get_known_models
 from agentfluent.config.models import AgentConfig, Scope, Severity
-from agentfluent.diagnostics._complexity import compute_error_rate
+from agentfluent.diagnostics._complexity import compute_error_rate, faster_tier
 from agentfluent.diagnostics.delegation import (
     MODEL_HAIKU,
     MODEL_OPUS,
@@ -512,17 +512,34 @@ class TestHelpers:
         assert classify_model_tier("claude-sonnet-4-5-20250929") == "moderate"
         assert classify_model_tier("claude-opus-4-5-20251101") == "complex"
 
+    def test_classify_model_tier_claims_the_fable_family(self) -> None:
+        # #674 curated Fable for pricing, which made it reachable here. Placed in
+        # `complex` by price rank (it prices above every Opus) -- see the caveat on
+        # `_TIER_BY_FAMILY`. Without this the family falls to the `moderate` default,
+        # which is precisely what `test_every_priced_model_classifies_by_family` forbids.
+        assert classify_model_tier("claude-fable-5-1") == "complex"
+        assert classify_model_tier("claude-fable-5-2") == "complex"
+
+    def test_faster_tier_steps_fable_down_one_tier_not_two(self) -> None:
+        # The one consumer where the tier choice actually bites (#674 architect review):
+        # DurationOutlier recommends `faster_tier(current_model)`. On the `moderate`
+        # default a slow Fable agent would be told to drop straight to Haiku -- two steps
+        # down from the most expensive model in the lineup. One step is the contract.
+        assert faster_tier("claude-fable-5-1") == "moderate"
+        assert faster_tier("claude-fable-5-2") == "moderate"
+
     def test_classify_model_tier_unknown_family_defaults_moderate(self) -> None:
         assert classify_model_tier("claude-experimental-9000") == "moderate"
         assert classify_model_tier("") == "moderate"
 
     def test_every_priced_model_classifies_by_family(self) -> None:
-        # Regression guard: every model pricing knows about should
-        # match one of the three family prefixes (haiku / sonnet /
-        # opus). A priced model landing on the "moderate" default
-        # without being sonnet means we've shipped a new family the
-        # classifier doesn't recognize — which would silently suppress
-        # real MODEL_MISMATCH emissions.
+        # Regression guard: every model pricing knows about should match
+        # a family prefix in `_TIER_BY_FAMILY`. A priced model landing on
+        # the "moderate" default without being sonnet means we've shipped
+        # a new family the classifier doesn't recognize — which would
+        # silently suppress real MODEL_MISMATCH emissions. (Deliberately
+        # not restating the family list here: that is `_TIER_BY_FAMILY`'s
+        # to define, and a second copy goes stale — it did, at #674.)
         priced = get_known_models()
         unknown = [
             m for m in priced

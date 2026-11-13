@@ -59,10 +59,26 @@ _TIER_ORDER: tuple[ComplexityTier, ...] = ("simple", "moderate", "complex")
 # (`claude-haiku-4-5-20251001`) that subagent traces record at runtime.
 # Lives here (not in the pricing module) so all model↔tier knowledge is
 # co-located with the tier→model mapping above (#170).
+#
+# `claude-fable` joined at #674, when the family was first curated for
+# pricing. It is placed by PRICE RANK AS A STAND-IN FOR CAPABILITY --
+# Fable prices above every Opus ($10/$50 and $8/$40 vs $5/$25) -- and
+# that placement is PROVISIONAL: we do not know Fable is more capable
+# than Opus, only that it is more expensive, and it could be a
+# specialized line rather than a higher tier. `complex` is nonetheless
+# the safe choice on every consumer: MODEL_MISMATCH treats `complex`
+# and the unmatched-family `moderate` default identically, and on
+# `faster_tier` it yields one step down (Sonnet) instead of two
+# (Haiku), which is what "one tier faster" is meant to mean.
+#
+# The deeper gap -- that ComplexityTier conflates how hard the work is
+# with where a model sits on price/capability, so there is no
+# "same tier, cheaper model" recommendation -- is tracked separately
+# and is deliberately NOT resolved by adding a fourth tier here.
 _TIER_BY_FAMILY: dict[ComplexityTier, tuple[str, ...]] = {
     "simple": ("claude-haiku",),
     "moderate": ("claude-sonnet",),
-    "complex": ("claude-opus",),
+    "complex": ("claude-opus", "claude-fable"),
 }
 
 
