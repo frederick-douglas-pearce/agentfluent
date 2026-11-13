@@ -352,8 +352,10 @@ class TestGetKnownModels:
 # The 4.x values are the pre-migration `_PRICING` values -- the regression lock for the
 # genai-prices swap (#545). COVERAGE PROBE (genai-prices==0.2.3, 2026-11-13, #674): all 15 ids
 # below are covered upstream with base-tier rates equal to these values; the local `_RESIDUAL`
-# is therefore still empty. `claude-sonnet-4-5-20250929` is context-tiered upstream (>200K
-# surcharge); the adapter takes the standard (base) tier. If a pin bump changes any value, this
+# is therefore still empty. These are **standard (base) tier** rates: where upstream prices a
+# model by prompt length the adapter discards the tiers, which is its documented contract --
+# see the CONTEXT TIERS note in `analytics/pricing.py` for the one case reachable today
+# (`claude-haiku-5-5`, 5x above 100K prompt tokens, #682). If a pin bump changes any value, this
 # test goes red -- that is the intended gate for a bump (#674; earlier revisions named #82,
 # which was re-scoped out of that role).
 #
@@ -446,10 +448,16 @@ class TestCuratedRegistry:
         # moment `_KNOWN_MODELS` normalizes to undated ids (as opus-4-6/4-7/4-8 already have).
         #
         # Deliberately ABSENT from this list: `claude-sonnet-5` (CURATED as of #674) and
-        # `claude-fable-5` (still uncurated -- genai-prices prices it, but it has no corpus
-        # presence, so #674's exact-record curation left it out). Asserting either must stay out
-        # would lock in the silent-$0 defect tracked by the #661 architect review's Concern 2,
-        # not guard against it. This canary is for *legacy* ids only.
+        # `claude-fable-5` (still uncurated -- genai-prices prices it). Asserting either must
+        # stay out would lock in the silent-$0 defect tracked by the #661 architect review's
+        # Concern 2, not guard against it. This canary is for *legacy* ids only.
+        #
+        # The criterion for curating an id is an EXACT upstream record plus a reason to expect
+        # it in real data -- NOT corpus presence alone. `claude-fable-5-2` has zero corpus rows
+        # and IS curated (it is the current Fable in the live lineup); `claude-fable-5` and
+        # `claude-mythos-5-2` have exact records and zero rows and are NOT, because nothing
+        # suggests they will be emitted. Stating it as "no corpus presence" would be a rule the
+        # registry sitting next to it already violates, and the next curator reads this.
         assert legacy_id not in get_known_models()
 
     @pytest.mark.parametrize("canonical", ["claude-opus-4-7", "claude-sonnet-4-6",
@@ -510,10 +518,15 @@ class TestCacheCreation1hNonCollapse:
 class TestCurrentFamilyRegression:
     """#674: the entire current Claude family priced at $0 -- the THIRD recurrence of this shape.
 
-    `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-sonnet-5`, `claude-haiku-5-5`,
-    `claude-fable-5-1` and `claude-fable-5-2` all resolved to None, so three of four measured
-    corpora reported a total cost of $0.00. `claude-opus-5-5` alone was the single most common
-    model id in the corpus (165,219 rows at the 2026-11-13 enumeration).
+    Five corpus-present ids resolved to None -- `claude-opus-5-5`, `claude-sonnet-5-5`,
+    `claude-sonnet-5`, `claude-haiku-5-5` and `claude-fable-5-1` -- so three of four measured
+    corpora reported a total cost of $0.00. `claude-fable-5-2` is covered here too but was NOT
+    part of that measurement: it has zero corpus rows, and is curated as a deliberate, approved
+    expansion (the current Fable in the live lineup, with an exact upstream record) because
+    omitting it would reproduce this same $0 defect the first time anyone runs it.
+
+    `claude-opus-5-5` alone was the single most common model id in the corpus (165,219 rows at
+    the 2026-11-13 enumeration).
 
     **Why this class exists when `_GOLDEN_RATES` already covers these ids.** The golden tests are
     driven BY the curated registry and are pinned to it by
@@ -566,19 +579,32 @@ class TestCurrentFamilyRegression:
         [
             "claude-opus-5-5[1m]",
             "claude-sonnet-5-5[1m]",
+            "claude-sonnet-5[1m]",
             "claude-haiku-5-5[1m]",
             "claude-fable-5-1[1m]",
+            "claude-fable-5-2[1m]",
         ],
     )
     def test_1m_variants_resolve_to_base(self, variant: str) -> None:
+        # All SIX `[1m]` aliases #674 added, not a subset: two were previously untested,
+        # so deleting either alias line left the suite green (#674 review).
         base = variant.removesuffix("[1m]")
+        # `is not None` first -- `==` alone is satisfied by `None == None`, so a variant
+        # and base that BOTH failed to resolve would read as agreement.
+        assert get_pricing(variant) is not None
         assert get_pricing(variant) == get_pricing(base)
 
-    def test_bare_fable_alias_is_priced(self) -> None:
-        # 7 corpus rows carry the bare `fable` id and priced at $0 before #674. The bare short
-        # names are pinned to one generation each (see `_ALIASES`), so this asserts resolution,
-        # not that it points at the newest Fable.
-        assert get_pricing("fable") is not None
+    def test_bare_fable_alias_resolves_to_the_pinned_generation(self) -> None:
+        # 7 corpus rows carry the bare `fable` id and priced at $0 before #674.
+        #
+        # Asserting only `is not None` would NOT pin the decision that was actually made
+        # (#674 review): both candidate targets are curated and both price, so that
+        # assertion holds for either binding while the two differ by 20-25% per token
+        # ($10/$50 vs $8/$40). The alias points at 5-1 deliberately -- it is the generation
+        # with corpus presence (4,468 rows vs 0) -- so the test observes WHICH target it
+        # resolves to, the only thing that can detect the binding being flipped.
+        assert get_pricing("fable") == get_pricing("claude-fable-5-1")
+        assert get_pricing("fable") != get_pricing("claude-fable-5-2")
 
 
 class TestModelConstants:

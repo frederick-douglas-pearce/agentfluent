@@ -22,25 +22,15 @@ from agentfluent.analytics._genai_source import (
     _required_rate,
     _resolve_rates,
 )
+from agentfluent.analytics.pricing import get_known_models
 
-# The curated ids AgentFluent knows (== _KNOWN_MODELS); all upstream-covered at 0.2.3 (#674).
-_COVERED = [
-    "claude-opus-5-5",
-    "claude-opus-5",
-    "claude-opus-4-8",
-    "claude-opus-4-7",
-    "claude-opus-4-6",
-    "claude-opus-4-5-20251101",
-    "claude-sonnet-5-5",
-    "claude-sonnet-5",
-    "claude-sonnet-4-6",
-    "claude-sonnet-4-5-20250929",
-    "claude-sonnet-4-20250514",
-    "claude-haiku-5-5",
-    "claude-haiku-4-5-20251001",
-    "claude-fable-5-2",
-    "claude-fable-5-1",
-]
+# The curated ids AgentFluent knows. **Imported, never restated** -- the convention this file
+# already states for `REQUIRED_PRICE_KEYS` below, applied to the registry too (#674 review).
+# These tests ask "does every curated id resolve upstream", so the registry IS the right set,
+# and a hand-synced copy silently stops covering any id someone forgets to add to it. That is
+# not hypothetical: the previous literal had to be edited by hand in two files at #661 and
+# again at #674.
+_COVERED = sorted(get_known_models())
 
 
 class TestResolveRates:

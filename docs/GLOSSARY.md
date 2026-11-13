@@ -1238,15 +1238,27 @@ cluster_size: 12 -- confident enough to propose a new subagent based on size alo
 
 **Short:** A 3-level classification of an agent's task complexity.
 
-**Detail:** Computed from observed mean tool calls, mean tokens, error rate, and
-write-tool usage. Tiers map 1:1 to Claude model families:
+**Detail:** Computed from observed mean tool calls, mean tokens, and error rate.
+Each tier has a recommended model family, but the mapping is not 1:1 --
+a family may share a tier with another:
 
-- **`simple`** -- `claude-haiku` family. Triggered when mean tool calls
-  <= 5 AND mean tokens <= 2,000 AND no write tools.
-- **`moderate`** -- `claude-sonnet` family. Default tier when neither
-  simple nor complex thresholds are met.
-- **`complex`** -- `claude-opus` family. Triggered when mean tool calls
-  >= 10 OR mean tokens >= 5,000 OR error rate >= 0.20 OR write tools used.
+- **`simple`** -- recommended family `claude-haiku`. Requires observed
+  data (mean tool calls > 0 OR mean tokens > 0) AND mean tool calls < 5
+  AND mean tokens < 2,000.
+- **`moderate`** -- recommended family `claude-sonnet`. The default tier
+  when neither the simple nor the complex conditions are met.
+- **`complex`** -- recommended families `claude-opus` and `claude-fable`.
+  Triggered when mean tool calls > 10 OR mean tokens > 5,000 OR error
+  rate > 0.20.
+
+Write-tool usage is deliberately NOT a classification input (#185):
+write-tool presence alone, without high token volume or tool-call count,
+must not escalate an agent to "complex". It is retained as observation
+metadata for other diagnostics.
+
+An agent with no observed tool calls and no token data falls through to
+`moderate` rather than `simple`, so the recommendation reflects
+uncertainty instead of asserting the work is small.
 
 Calibration note (#140): these thresholds are pending multi-contributor
 validation. On v0.3 single-dataset calibration, every observed agent

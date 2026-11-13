@@ -289,9 +289,30 @@ def filter_bursts(bursts: list[ToolBurst]) -> list[ToolBurst]:
 
 
 def pick_alternative_model(parent_model: str) -> str:
-    """Pick the next-cheaper tier; Haiku and unknowns are returned unchanged."""
+    """Pick the next-cheaper tier; Haiku and unknowns are returned unchanged.
+
+    **This is a second model-to-tier ladder, and it must agree with the first.**
+    ``_complexity._TIER_BY_FAMILY`` / ``faster_tier`` is the other one, and the two
+    drifting apart is a real defect rather than a tidiness concern: #674 curated the
+    Fable family for pricing, this ladder did not know it, and the result was an
+    offload candidate recommending the model the parent was *already running* —
+    with a large negative saving that also tripped the "cache appears load-bearing"
+    note, a false diagnosis. ``test_ladders_agree_for_every_curated_model`` pins the
+    agreement for every id in the curated registry, so the next new family fails
+    here instead of shipping a nonsense recommendation.
+
+    It is deliberately NOT rewritten to delegate to ``faster_tier``: that helper
+    classifies an unknown model as ``moderate`` (the unmatched-family default), so
+    delegating would map a non-Claude parent to Haiku and break the unknowns-unchanged
+    contract this function's own tests assert. Collapsing the two ladders needs an
+    explicit "unknown" result from ``classify_model_tier`` first — see #683.
+    """
     lowered = parent_model.lower()
     if "opus" in lowered:
+        return MODEL_SONNET
+    if "fable" in lowered:
+        # Fable prices above every curated Opus, so its next step down is Sonnet --
+        # matching `faster_tier`, which classifies the family as `complex` (#674).
         return MODEL_SONNET
     if "sonnet" in lowered:
         return MODEL_HAIKU

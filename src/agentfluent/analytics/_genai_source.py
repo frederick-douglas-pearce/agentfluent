@@ -123,8 +123,8 @@ def _base_rate(value: Decimal | TieredPrices | None) -> float | None:
 # Concretely, for #662: read ``cache_write_1h_mtok`` on a separate optional path via
 # ``getattr(price, key, None)`` -- correct precisely because the key is allowed to be absent
 # (upstream populates it on 25 of 27 Anthropic models at 0.2.3).
-# ``test_required_price_keys_is_pinned``
-# fails on any edit to this tuple, so a change here has to be deliberate.
+# ``test_required_price_keys_is_pinned`` fails on any edit to this tuple, so a change here
+# has to be deliberate.
 REQUIRED_PRICE_KEYS: tuple[str, ...] = (
     "input_mtok",
     "output_mtok",
@@ -187,8 +187,8 @@ def _resolve_rates(
     when = timestamp if timestamp is not None else datetime.now(UTC)
     price: ModelPrice = model.get_prices(when)
     # Required keys only. ``cache_write_1h_mtok`` is populated upstream as of 0.1.4 (and still
-    # at the current 0.2.3 pin) but is
-    # deliberately NOT read here: sourcing 1h from upstream is #662, and reading it into
+    # at the current 0.2.3 pin) but is deliberately NOT read here: sourcing 1h from upstream
+    # is #662, and reading it into
     # ``cache_write_5m`` would be exactly the 5m/1h collapse this adapter must never perform
     # (guarded by ``test_cache_write_binds_5m_field_not_1h`` in tests/unit/test_genai_source.py).
     # Every required key is read (not short-circuited) so a deregistration anywhere in the set

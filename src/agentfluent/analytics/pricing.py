@@ -66,12 +66,15 @@ class ModelPricing:
     ``cache_write_mtok``, and must never collapse the 1h dimension back
     onto that rate.
 
-    genai-prices 0.1.4 *does* carry an upstream 1h field
-    (``cache_write_1h_mtok``, on 19 of 21 Anthropic models). Continuing
+    genai-prices *does* carry an upstream 1h field
+    (``cache_write_1h_mtok``) at the pinned version. Continuing
     to derive 1h locally is a deliberate deferral to #662 — which owns
     the switch and its price-neutrality proof — not evidence the field
     is unavailable. Earlier text here said it had "no upstream field";
-    that was true at the 0.0.71 pin and is false now.
+    that was true at the 0.0.71 pin and is false now. **The per-model
+    count is deliberately not restated here** — ``_genai_source`` owns
+    that number, and keeping a second copy is how this very sentence
+    drifted out of sync with its twin (#674).
 
     This rate table is the **class-A plug point** of the base ⊕ overlay
     seam (see the module docstring): rate-table overlays (the 1h-cache
@@ -104,8 +107,7 @@ class ModelPricing:
 #   Opus 5                -> $5 / $25 / $6.25 / $0.50   (NEW at 0.1.4 -- absent from 0.0.71,
 #                                                        which is why it priced at $0; #661)
 #   Opus 5.5              -> $4 / $20 / $5.00 / $0.20   (NEW at 0.2.3 -- #674)
-#   Sonnet 4.0/4.5/4.6    -> $3 / $15 / $3.75 / $0.30   (4.5 is context-tiered upstream;
-#                                                        base tier taken -- see _genai_source)
+#   Sonnet 4.0/4.5/4.6    -> $3 / $15 / $3.75 / $0.30
 #   Sonnet 5              -> $2 / $10 / $2.50 / $0.20   (NEW at 0.2.3 -- #674)
 #   Sonnet 5.5            -> $2 / $10 / $2.50 / $0.10   (NEW at 0.2.3 -- #674)
 #   Haiku 4.5             -> $1 / $5  / $1.25 / $0.10
@@ -113,6 +115,19 @@ class ModelPricing:
 #   Fable 5.1             -> $10 / $50 / $12.50 / $0.25                (NEW at 0.2.3 -- #674)
 #   Fable 5.2             -> $8 / $40 / $10.00 / $0.20                 (NEW at 0.2.3 -- #674)
 # so ``_RESIDUAL`` is still empty. The golden-rate regression test locks these values.
+#
+# CONTEXT TIERS: the rates above are the **standard (base) tier**. Where upstream prices a
+# model by prompt length, ``_genai_source._base_rate`` takes ``TieredPrices.base`` and
+# DISCARDS the tiers -- a documented contract of that adapter, not an oversight here. The
+# contract is stated rather than a list of which ids are tiered, because such a list is what
+# went stale: it named the one tiered id it knew and missed a live one.
+#   Known reachable case: ``claude-haiku-5-5`` is tiered at **5x above 100K prompt tokens**
+#   on all four rate keys, so long-prompt requests to it under-report. Tracked in **#682**;
+#   fixing it needs the per-request prompt size at the pricing call site, which is a behavior
+#   change with its own golden tests.
+#   Not reachable today: sonnet-4-5's >200K tier is historical (upstream retired the 1M beta
+#   on 2026-04-30 and >200k now errors), and opus-4-6 / sonnet-4-6 carry theirs only in a
+#   pre-2026-03-13 conditional price whose currently-active successor is flat.
 #
 # Why the 5.x family read $0 before #674, and why ONE fix was not enough: the pin sat at 0.1.4,
 # which carries none of those ids, AND this frozenset gated them out before upstream was
@@ -168,9 +183,12 @@ _RESIDUAL: dict[str, ModelPricing] = {}
 # The bare short names are PINNED to one generation each, not to "the newest". ``fable`` was
 # added by #674 because 7 corpus rows carry it and it priced at $0; it points at Fable 5.1, the
 # generation actually present (4,468 rows, vs 0 for 5.2). Note the known limit of this scheme,
-# which #674 did NOT change: ``opus`` resolves to 4.8 while ``claude-opus-5-5`` now dominates
-# the corpus, so bare-``opus`` rows price at an older generation's rate. That staleness is its
-# own concern, not this issue's.
+# which #674 did NOT change: every bare name resolves to an older generation than the one now
+# in use, so those rows price at the wrong generation's rate. ``haiku`` is the widest gap --
+# it resolves to 4.5 at $1/$5 while ``claude-haiku-5-5`` is $0.10/$0.50, a **10x** over-price
+# (11 corpus rows); ``sonnet`` -> 4.6 is 1.5x over (35 rows) and ``opus`` -> 4.8 is 1.25x over
+# (163 rows). Dollar impact is small at these volumes, but note the ranking is by RATIO and
+# the row counts run the other way. That staleness is its own concern, not this issue's.
 #
 # ``[1m]`` entries resolve the 1M-context variant string to its base id, which prices it at the
 # base tier (``_genai_source._base_rate`` discards context tiers for every model). The entries
