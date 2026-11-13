@@ -68,9 +68,13 @@ _TIER_ORDER: tuple[ComplexityTier, ...] = ("simple", "moderate", "complex")
 # specialized line rather than a higher tier. `complex` is the safe
 # choice on all three consumers OF THIS MAP -- `_detect_mismatch`
 # treats `complex` and the unmatched-family `moderate` default
-# identically, `select_target_model` is reached with a fixed tier, and
-# `faster_tier` yields one step down (Sonnet) instead of two (Haiku),
-# which is what "one tier faster" is meant to mean. Scoped to this map
+# identically at both its `current_tier` uses; `select_target_model`
+# returns the same target either way (its `model_routing` call sites
+# pass a fixed tier, and its `correlator` path passes the tier
+# `faster_tier` computed, which is `moderate` for Fable in both
+# readings); and `faster_tier` itself yields one step down (Sonnet)
+# instead of two (Haiku), which is what "one tier faster" is meant to
+# mean. Scoped to this map
 # deliberately: `parent_workload.pick_alternative_model` is a SECOND
 # ladder that does not consult it, and tiering Fable here did not fix
 # it -- that needed its own branch (#674), and consolidating the two

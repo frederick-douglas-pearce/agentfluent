@@ -1006,14 +1006,21 @@
     Each tier has a recommended model family, but the mapping is not 1:1 --
     a family may share a tier with another:
 
-    - **`simple`** -- recommended family `claude-haiku`. Requires observed
-      data (mean tool calls > 0 OR mean tokens > 0) AND mean tool calls < 5
-      AND mean tokens < 2,000.
-    - **`moderate`** -- recommended family `claude-sonnet`. The default tier
-      when neither the simple nor the complex conditions are met.
-    - **`complex`** -- recommended families `claude-opus` and `claude-fable`.
-      Triggered when mean tool calls > 10 OR mean tokens > 5,000 OR error
-      rate > 0.20.
+    - **`simple`** -- classifies the `claude-haiku` family; recommended
+      target `claude-haiku-4-5`. Requires observed data (mean tool calls > 0
+      OR mean tokens > 0) AND mean tool calls < 5 AND mean tokens < 2,000.
+    - **`moderate`** -- classifies the `claude-sonnet` family; recommended
+      target `claude-sonnet-4-6`. The default tier when neither the simple
+      nor the complex conditions are met.
+    - **`complex`** -- classifies the `claude-opus` and `claude-fable`
+      families; recommended target `claude-opus-4-7`. Triggered when mean
+      tool calls > 10 OR mean tokens > 5,000 OR error rate > 0.20.
+
+    Note the two halves of each bullet are different maps and do not have to
+    agree: which families *classify into* a tier is one question, and which
+    single model is *recommended* for it is another. AgentFluent never
+    recommends a Fable model -- Fable classifies as `complex`, whose
+    recommended target is Opus.
 
     Write-tool usage is deliberately NOT a classification input (#185):
     write-tool presence alone, without high token volume or tool-call count,
