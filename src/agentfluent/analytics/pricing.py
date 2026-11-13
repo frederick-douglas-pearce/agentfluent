@@ -145,9 +145,11 @@ class ModelPricing:
 # regress coverage. Prefix matching is #664's structural business, not this list's.
 #
 # NOTE (#661 architect review, Concern 2): this frozenset is consulted BEFORE upstream, so an id
-# missing here fails closed to None -> $0 at DEBUG even when genai-prices can price it. #674
-# cleared today's instances by curation; the structural defect itself is tracked in #664 -- do
-# not read the curation here as evidence that an absent id is unpriceable.
+# missing here still fails closed to None -> $0 even when genai-prices can price it. #664 made
+# that miss LOUD rather than silent -- see ``_warn_if_priceable_but_uncurated``, which logs it at
+# WARNING (DEBUG only for a legacy id or one upstream cannot price). The $0 itself is unchanged,
+# deliberately (option (i), D063(1)). #674 cleared the then-live instances by curation -- do not
+# read the curation here as evidence that an absent id is unpriceable.
 _KNOWN_MODELS: frozenset[str] = frozenset(
     {
         "claude-opus-5-5",
@@ -179,7 +181,11 @@ _KNOWN_MODELS: frozenset[str] = frozenset(
 #: 2026-11-13). Upstream can still price several of these, so without the carve-out they would
 #: each emit a WARNING -- noise on archived sessions rather than a signal about today's lineup.
 #:
-#: The deny-canary in tests/unit/test_pricing.py imports this constant so the two cannot drift.
+#: ``test_no_curated_id_is_a_legacy_generation`` (tests/unit/test_pricing.py) imports this
+#: constant, so the registry prohibition and this carve-out cannot drift apart. Note that is a
+#: DIFFERENT test from the deny-canary ``test_upstream_catalog_not_leaked``, which keeps its own
+#: hard-coded id list on purpose and does not read this constant (#664 review r1 corrected an
+#: earlier version of this comment, which named the wrong test).
 #: It carries ``claude-instant`` as well, which the ratified AC2'(c) wording does not name: that
 #: prefix is inert at the current pin (``claude-instant-1`` resolves to no rates, so it takes the
 #: absent/DEBUG path regardless) and is listed to keep one definition rather than two. If a future
@@ -238,6 +244,12 @@ _ALIASES: dict[str, str] = {
     "claude-haiku-5-5[1m]": "claude-haiku-5-5",
     "claude-fable-5-2[1m]": "claude-fable-5-2",
     "claude-fable-5-1[1m]": "claude-fable-5-1",
+    # #664: the two ids curated there get their `[1m]` forms too. Omitting them is the exact
+    # fail-closed-to-$0 shape this issue exists to remove -- and these two are worse than the
+    # others, because both records match only by equality/dated-regex, so a bare `[1m]` form is
+    # ABSENT upstream and takes the DEBUG path where the new WARNING cannot even see it.
+    "claude-fable-5[1m]": "claude-fable-5",
+    "claude-mythos-5-2[1m]": "claude-mythos-5-2",
 }
 
 # Sentinel model names emitted by Claude Code for synthetic/internal messages.
@@ -314,8 +326,11 @@ def get_pricing(model: str, timestamp: datetime | None = None) -> ModelPricing |
 
     Resolves aliases first (short names, ``[1m]`` suffixes), then sources the rate
     upstream-first from genai-prices, falling back to the documented local residual.
-    Returns None and logs at DEBUG level if the model is unknown. The caller is expected
-    to skip synthetic sentinel values (see ``SYNTHETIC_MODELS``) before invoking this.
+    Returns None for an unknown model. **The log level depends on why it is unknown**
+    (#664, see ``_warn_if_priceable_but_uncurated``): WARNING when genai-prices *could* have
+    priced it and only our curation is missing, DEBUG for a legacy id or one upstream cannot
+    price either. The caller is expected to skip synthetic sentinel values (see
+    ``SYNTHETIC_MODELS``) before invoking this.
 
     **Raises** ``AttributeError`` if genai-prices has *deregistered* one of the required price
     keys, which breaks the rate binding for every model at once (see
@@ -363,8 +378,9 @@ def get_pricing(model: str, timestamp: datetime | None = None) -> ModelPricing |
     # stays at DEBUG -- an id we never claimed to support is not a defect.
     #
     # Note the limit of this signal: it would NOT have caught #661 itself. `claude-opus-5` was
-    # missing from `_KNOWN_MODELS`, so it exited at that DEBUG branch and never reached here.
-    # Curated-but-unpriceable is the case this covers; uncurated-but-priceable is #664.
+    # missing from `_KNOWN_MODELS`, so it exited at the uncurated branch and never reached here.
+    # Curated-but-unpriceable is the case this covers; uncurated-but-priceable is handled by
+    # `_warn_if_priceable_but_uncurated` (#664), which now warns rather than staying silent.
     logger.warning(
         "Known model '%s' has neither upstream nor residual pricing -- it will contribute $0 "
         "to every cost figure. Upstream coverage may have changed; check _KNOWN_MODELS and "

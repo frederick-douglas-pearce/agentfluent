@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import pytest
 
 from agentfluent.analytics import pricing
+from agentfluent.analytics._genai_source import classify_upstream_match
 from agentfluent.analytics.pricing import (
     LEGACY_MODEL_PREFIXES,
     SYNTHETIC_MODELS,
@@ -467,9 +468,12 @@ class TestCuratedRegistry:
         # Both ids are now curated on exact-record grounds alone; neither has corpus rows, so
         # nothing about the measured cost figures moved.
         #
-        # The four ids that resolve by DATE-SUFFIX stripping onto uncurated base records
+        # The four ids that resolve by FAMILY PREFIX onto uncurated base records
         # (`claude-opus-4-5-20251101` -> `claude-opus-4-5`, etc.) are still curated in their dated
         # form deliberately -- see `_KNOWN_MODELS`. #683 owns whether the bare forms get aliased.
+        # (#664 review r1: an earlier revision of this comment said "DATE-SUFFIX stripping". That
+        # was wrong -- these match via `ClauseStartsWith` -- and it had replaced the correct
+        # FAMILY PREFIX wording that `pricing.py` still carries. Restored here.)
         assert legacy_id not in get_known_models()
 
     @pytest.mark.parametrize("canonical", ["claude-opus-4-7", "claude-sonnet-4-6",
@@ -798,15 +802,21 @@ class TestUncuratedButPriceableWarning:
             assert get_pricing("claude-opus-4-1") is None  # pricing unchanged
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert len(warnings) == 1
-        assert "claude-opus-4-1" in warnings[0].getMessage()
-        assert "not curated" in warnings[0].getMessage()
+        message = warnings[0].getMessage()
+        assert "claude-opus-4-1" in message
+        assert "not curated" in message
+        # AC2'(a) requires the warning to say what to DO about it, not merely that it happened.
+        assert "_KNOWN_MODELS" in message
+        assert "alias it onto a curated id" in message
 
     def test_inexact_match_warns_and_names_the_matched_record(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        # A future-dated snapshot of a known family: upstream strips the date suffix and
-        # matches `claude-sonnet-5`. NOT `claude-sonnet-5-9` -- that resolves to nothing at
-        # this pin (D063(2) records the refutation of the earlier prefix-match claim).
+        # A future-dated snapshot of a known family: the 5.x records match via
+        # `ClauseEquals` + `^...-\d{8}$`, so this resolves to `claude-sonnet-5` while
+        # `claude-sonnet-5-9` is absent. That dated-regex mode is specific to the 5.x
+        # records -- 3.x/4.x match by family prefix, where `claude-opus-4-19` DOES resolve
+        # (see the direct classifier test below).
         probe = "claude-sonnet-5-20991231"
         with caplog.at_level(logging.DEBUG, logger="agentfluent.analytics.pricing"):
             assert get_pricing(probe) is None
@@ -830,20 +840,30 @@ class TestUncuratedButPriceableWarning:
         assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
 
     @pytest.mark.parametrize(
-        "legacy_id", ["claude-v1", "claude-2", "claude-3-5-sonnet", "claude-3-opus-latest"]
+        "legacy_id",
+        [
+            "claude-3-5-sonnet",
+            "claude-3-opus-latest",
+            "claude-3-haiku",
+            "claude-3-sonnet",
+        ],
     )
     def test_legacy_ids_stay_silent(
         self, legacy_id: str, caplog: pytest.LogCaptureFixture
     ) -> None:
-        # AC2'(c), ratified 2026-11-13. `claude-3-5-sonnet` and `claude-3-opus-latest` ARE
-        # priceable upstream, so without the carve-out they would warn -- asserted as a
-        # precondition so this proves the carve-out silenced a priceable id, rather than
+        # AC2'(c), ratified 2026-11-13. EVERY param here is priceable upstream, asserted as a
+        # precondition, so each case proves the carve-out silenced a *priceable* id rather than
         # passing as an 'absent upstream' case after some future pin bump.
-        if legacy_id in {"claude-3-5-sonnet", "claude-3-opus-latest"}:
-            assert pricing._resolve_rates(legacy_id) is not None, (
-                f"precondition: {legacy_id} must be priceable upstream for this test to "
-                "prove the legacy carve-out is what silenced it"
-            )
+        #
+        # `claude-v1` and `claude-2` were deliberately REMOVED from this list (#664 review r1):
+        # both carry only `input_mtok`/`output_mtok` upstream, so `_resolve_rates` returns None
+        # and they take the absent/DEBUG path with or without the carve-out -- they asserted
+        # nothing about AC2'(c). `test_no_curated_id_is_a_legacy_generation` still covers them
+        # for the registry-exclusion direction.
+        assert pricing._resolve_rates(legacy_id) is not None, (
+            f"precondition: {legacy_id} must be priceable upstream for this test to "
+            "prove the legacy carve-out is what silenced it"
+        )
         with caplog.at_level(logging.DEBUG, logger="agentfluent.analytics.pricing"):
             assert get_pricing(legacy_id) is None
         assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
@@ -872,3 +892,69 @@ class TestUncuratedButPriceableWarning:
             for model_id in ("claude-fable-5", "claude-mythos-5-2"):
                 assert get_pricing(model_id) is not None
         assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
+
+
+class TestClassifyUpstreamMatch:
+    """#664: direct tests for the exact/inexact/absent classifier.
+
+    Added by code review r1, which found the classifier had **zero** direct tests despite its
+    docstring calling it "the single definition" that #688 and #669 are meant to call rather
+    than parsing log text. Every prior assertion about it was indirect, through
+    ``get_pricing``'s log output -- i.e. through the very surface the docstring says is not an
+    API.
+
+    These cases also pin the **corrected** mechanism characterization (D063(2)). An earlier
+    revision of this PR claimed upstream fuzzy-matching strips date suffixes only; that was
+    generalized from a probe of the 5.x records alone and is false for 3.x/4.x, which carry
+    ``ClauseStartsWith``. ``claude-opus-4-19`` below is what makes the correction a tested
+    fact instead of a sentence.
+    """
+
+    @pytest.mark.parametrize(
+        ("model_ref", "expected_kind", "expected_match"),
+        [
+            # Exact upstream record, deliberately uncurated.
+            ("claude-opus-4-1", "exact", "claude-opus-4-1"),
+            # FAMILY-PREFIX inexact: no such model, yet upstream resolves it to the 4-1 record
+            # at $15/$75. This is the "prices a model that does not exist" hazard that D063(2)
+            # once recorded as refuted; it is live, and this case is the guard against the
+            # claim regressing into the prose again.
+            ("claude-opus-4-19", "inexact", "claude-opus-4-1"),
+            # Same hazard, landing on a CURATED record: `claude-sonnet-4-6` is in
+            # `_KNOWN_MODELS`, so a fabricated `-69` bump borrows a rate we vouch for while
+            # itself staying unpriced. Worth a case of its own -- the opus one above resolves
+            # onto an *uncurated* record, and only the gate keeps either from pricing.
+            ("claude-sonnet-4-69", "inexact", "claude-sonnet-4-6"),
+            # DATED-REGEX inexact: the 5.x records' own mode.
+            ("claude-sonnet-5-20991231", "inexact", "claude-sonnet-5"),
+            # A fabricated 5.x version bump really is absent -- the observation that was
+            # over-generalized. Keeping it pins the boundary between the two modes.
+            ("claude-sonnet-5-9", "absent", None),
+            ("claude-nonsense-7", "absent", None),
+            # Case variance must NOT read as a different record (review r1 defect B).
+            ("CLAUDE-OPUS-4-5", "exact", "claude-opus-4-5"),
+            ("Claude-Sonnet-5", "exact", "claude-sonnet-5"),
+            # Partial upstream coverage: `claude-2` holds an exact record but carries only
+            # input/output rates, so no full rate set can be built. This is the one branch
+            # unreachable through `get_pricing` (the legacy carve-out short-circuits first),
+            # so without this case deleting it would be undetectable.
+            ("claude-2", "absent", None),
+        ],
+    )
+    def test_classification(
+        self, model_ref: str, expected_kind: str, expected_match: str | None
+    ) -> None:
+        kind, matched = classify_upstream_match(model_ref)
+        assert kind == expected_kind
+        assert matched == expected_match
+
+    def test_inexact_family_prefix_really_would_have_priced_a_nonexistent_model(self) -> None:
+        # The teeth behind the `claude-opus-4-19` case above: assert not merely that the match
+        # is inexact, but that upstream would hand back a full, plausible rate set for an id
+        # that does not exist. That is what makes naive option (ii) unsafe (D063(2) corrected),
+        # and asserting only the `inexact` label would not establish it.
+        rates = pricing._resolve_rates("claude-opus-4-19")
+        assert rates is not None
+        assert (rates.input, rates.output) == (15.0, 75.0)
+        # ...and the gate still refuses to price it, which is option (i) holding.
+        assert get_pricing("claude-opus-4-19") is None

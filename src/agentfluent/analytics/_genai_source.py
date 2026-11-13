@@ -214,14 +214,23 @@ def _resolve_rates(
 
 
 #: How an id resolves against the upstream catalog. ``exact`` -- upstream holds a record whose
-#: own id equals the one asked for. ``inexact`` -- upstream matched a *different* record (at the
-#: 0.2.3 pin the only such mode is date-suffix stripping: ``claude-sonnet-5-20991231`` ->
-#: ``claude-sonnet-5``). ``absent`` -- upstream cannot price it at all.
+#: own id equals the one asked for (compared case-insensitively, as ``find_model`` lowercases).
+#: ``inexact`` -- upstream matched a *different* record. ``absent`` -- upstream cannot price it.
 #:
-#: The vocabulary is deliberately ``exact``/``inexact`` and NOT "family-prefix" (#664 architect
-#: review): at this pin a fabricated version bump (``claude-sonnet-5-9``, ``claude-sonnet-99``)
-#: resolves to *nothing*, so a message naming a family-prefix mechanism would describe behavior
-#: genai-prices no longer has. D063(2) records the refutation of the earlier claim.
+#: The vocabulary is ``exact``/``inexact`` because that is the distinction the caller acts on, and
+#: because it is the correct **superset** of the two match modes genai-prices actually uses. Both
+#: are live at the 0.2.3 pin:
+#:   * **family prefix** -- most 3.x/4.x records carry a ``ClauseStartsWith``, so
+#:     ``claude-opus-4-19`` matches the ``claude-opus-4-1`` record and resolves to $15/$75 for a
+#:     model that does not exist;
+#:   * **dated regex** -- the 5.x records use ``ClauseEquals`` plus ``^...-\d{8}$``, so
+#:     ``claude-sonnet-5-20991231`` matches ``claude-sonnet-5`` while ``claude-sonnet-5-9`` is
+#:     absent.
+#:
+#: CORRECTED (#664 code review r1): an earlier revision of this comment claimed date-suffix
+#: stripping was the only inexact mode and that a family-prefix mechanism no longer existed. That
+#: was generalized from a probe of the 5.x records alone and is FALSE for 3.x/4.x. See D063(2),
+#: corrected pre-merge, and ``pricing.py``'s own FAMILY PREFIX note, which was right all along.
 UpstreamMatch = Literal["exact", "inexact", "absent"]
 
 
@@ -242,10 +251,14 @@ def classify_upstream_match(
     record for but cannot produce a full rate set from (partial coverage -- see ``_resolve_rates``)
     is ``absent`` here, because the caller's only decision is whether a rate could be had.
 
-    Note on cost: on the ``absent``/``inexact`` paths this resolves the model twice -- once here
-    and once inside ``_resolve_rates``. Both are dict lookups over a static in-process snapshot,
-    and the whole function is reached only for ids outside the curated registry, so the duplicate
-    is deliberate: it keeps the required-key logic in exactly one place.
+    Note on cost: whenever ``find_model`` matches, this resolves the model **twice** -- once here
+    and once inside ``_resolve_rates`` -- which is every ``exact`` and ``inexact`` path, and the
+    partial-coverage ``absent`` path. (The common ``absent`` case, where ``find_model`` returns
+    ``None``, resolves once.) Each resolution is a **linear scan** over the provider's records
+    evaluating a match-clause tree, not a dict lookup. It is bounded and I/O-free, and the whole
+    function is reached only for ids outside the curated registry, so the duplicate is deliberate:
+    it keeps the required-key logic in exactly one place. (#664 review r1 corrected an earlier
+    version of this note, which named the wrong paths and called the lookups dict lookups.)
     """
     if _ANTHROPIC is None:  # pragma: no cover -- broken genai-prices install; see #687
         return "absent", None
@@ -255,4 +268,7 @@ def classify_upstream_match(
     if _resolve_rates(model_ref, timestamp) is None:
         # Upstream knows the id but cannot yield a full rate set. Nothing to offer the caller.
         return "absent", None
-    return ("exact" if model.id == model_ref else "inexact"), model.id
+    # Compare against the LOWERCASED ref: ``find_model`` lowercases its input and upstream ids
+    # are lowercase, so comparing to the raw ref reports a mere case variant as a *different*
+    # record -- telling the operator to curate an id that is already curated (#664 review r1).
+    return ("exact" if model.id == model_ref.lower() else "inexact"), model.id
