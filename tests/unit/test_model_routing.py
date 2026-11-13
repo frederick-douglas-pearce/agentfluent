@@ -7,7 +7,12 @@ from pathlib import Path
 from agentfluent.agents.models import AgentInvocation
 from agentfluent.analytics.pricing import get_known_models
 from agentfluent.config.models import AgentConfig, Scope, Severity
-from agentfluent.diagnostics._complexity import compute_error_rate
+from agentfluent.diagnostics._complexity import (
+    _TIER_BY_FAMILY,
+    _TIER_TO_MODEL,
+    compute_error_rate,
+    faster_tier,
+)
 from agentfluent.diagnostics.delegation import (
     MODEL_HAIKU,
     MODEL_OPUS,
@@ -512,23 +517,71 @@ class TestHelpers:
         assert classify_model_tier("claude-sonnet-4-5-20250929") == "moderate"
         assert classify_model_tier("claude-opus-4-5-20251101") == "complex"
 
+    def test_classify_model_tier_claims_the_fable_family(self) -> None:
+        # #674 curated Fable for pricing, which made it reachable here. Placed in
+        # `complex` by price rank (it prices above every Opus) -- see the caveat on
+        # `_TIER_BY_FAMILY`. Without this the family falls to the `moderate` default,
+        # which is precisely what `test_every_priced_model_classifies_by_family` forbids.
+        assert classify_model_tier("claude-fable-5-1") == "complex"
+        assert classify_model_tier("claude-fable-5-2") == "complex"
+
+    def test_faster_tier_steps_fable_down_one_tier_not_two(self) -> None:
+        # The one consumer where the tier choice actually bites (#674 architect review):
+        # DurationOutlier recommends `faster_tier(current_model)`. On the `moderate`
+        # default a slow Fable agent would be told to drop straight to Haiku -- two steps
+        # down from the most expensive model in the lineup. One step is the contract.
+        assert faster_tier("claude-fable-5-1") == "moderate"
+        assert faster_tier("claude-fable-5-2") == "moderate"
+
+    def test_ladders_agree_for_every_curated_model(self) -> None:
+        # `parent_workload.pick_alternative_model` is a SECOND model->tier ladder,
+        # hand-written and not derived from `_TIER_BY_FAMILY`. #674 curated the Fable
+        # family for pricing and that ladder did not know it, so a Fable parent session
+        # was recommended the model it was already running — with a large negative
+        # saving that also tripped a "cache appears load-bearing" note, a false
+        # diagnosis. Neither half of #674 caused that alone: it needed pricing to make
+        # Fable priceable AND the ladder to not know the family.
+        #
+        # This pins the two ladders together over the whole curated registry, so the
+        # NEXT family added fails here instead of shipping a nonsense recommendation.
+        # Consolidating them outright is #683 — it needs an explicit "unknown" result
+        # from `classify_model_tier` first, since `faster_tier` currently maps an
+        # unknown model to "simple" via the moderate default.
+        from agentfluent.diagnostics.parent_workload import pick_alternative_model
+
+        mismatched = []
+        for model in get_known_models():
+            tier = faster_tier(model)
+            expected = _TIER_TO_MODEL[tier] if tier is not None else model
+            actual = pick_alternative_model(model)
+            if actual != expected:
+                mismatched.append((model, actual, expected))
+        assert not mismatched, (
+            "pick_alternative_model disagrees with faster_tier/_TIER_TO_MODEL for: "
+            f"{mismatched}"
+        )
+
     def test_classify_model_tier_unknown_family_defaults_moderate(self) -> None:
         assert classify_model_tier("claude-experimental-9000") == "moderate"
         assert classify_model_tier("") == "moderate"
 
     def test_every_priced_model_classifies_by_family(self) -> None:
-        # Regression guard: every model pricing knows about should
-        # match one of the three family prefixes (haiku / sonnet /
-        # opus). A priced model landing on the "moderate" default
-        # without being sonnet means we've shipped a new family the
-        # classifier doesn't recognize — which would silently suppress
-        # real MODEL_MISMATCH emissions.
-        priced = get_known_models()
-        unknown = [
-            m for m in priced
-            if classify_model_tier(m) == "moderate"
-            and not m.startswith("claude-sonnet")
-        ]
+        # Regression guard: every model pricing knows about must match a family
+        # prefix in `_TIER_BY_FAMILY`. A priced model matching none of them has
+        # shipped a family the classifier doesn't recognize, and it lands on the
+        # "moderate" default — which would silently suppress real MODEL_MISMATCH
+        # emissions.
+        #
+        # Iterate the prefixes rather than testing the classifier's OUTPUT against
+        # a hard-coded family name (#674 review). The earlier form asked for
+        # `classify_model_tier(m) == "moderate" and not m.startswith("claude-sonnet")`,
+        # which could not fail for a REMOVED family: "moderate" is also the
+        # unmatched-family default, so deleting `claude-sonnet` from
+        # `_TIER_BY_FAMILY` sent every sonnet id to the default, the literal
+        # excluded them all, and the guard stayed green. Reading the map is what
+        # makes removal detectable, and it keeps the family list in exactly one place.
+        prefixes = tuple(p for ps in _TIER_BY_FAMILY.values() for p in ps)
+        unknown = [m for m in get_known_models() if not m.startswith(prefixes)]
         assert not unknown, (
             f"Priced models not claimed by any family prefix: {unknown}"
         )

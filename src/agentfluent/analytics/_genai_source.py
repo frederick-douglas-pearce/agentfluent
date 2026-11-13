@@ -73,13 +73,18 @@ class UpstreamRates:
     (``ModelPricing.__post_init__`` derives it as 2x input) and this adapter must never collapse
     1h onto the 5m rate.
 
-    **As of genai-prices 0.1.4 there IS an upstream 1h field** -- ``cache_write_1h_mtok``,
-    populated on 19 of 21 Anthropic models including all nine curated ones. Not reading it is a
-    deliberate deferral to #662 (which owns the switch from derived to upstream-sourced, and its
-    price-neutrality proof), **not** an absence. Earlier revisions of this docstring said the
-    field did not exist; that was true at the 0.0.71 pin and is false now, which is exactly why
-    the non-collapse invariant stopped being vacuous and got a real guard
-    (``test_cache_write_binds_5m_field_not_1h``).
+    **As of genai-prices 0.2.3 there IS an upstream 1h field** -- ``cache_write_1h_mtok``,
+    populated on 25 of 27 Anthropic models (all but the legacy ``claude-2`` and ``claude-v1``),
+    which covers all fifteen curated ones. Not reading it is a deliberate deferral to #662 (which
+    owns the switch from derived to upstream-sourced, and its price-neutrality proof), **not** an
+    absence. Earlier revisions of this docstring said the field did not exist; that was true at
+    the 0.0.71 pin and is false now, which is exactly why the non-collapse invariant stopped
+    being vacuous and got a real guard (``test_cache_write_binds_5m_field_not_1h``).
+
+    **#674 re-measured the ratio #662 turns on:** upstream ``cache_write_1h_mtok`` equals exactly
+    2.00x ``input_mtok`` on every curated id, old and new (15/15). The local derivation in
+    ``ModelPricing.__post_init__`` therefore already agrees with upstream, which makes #662 a
+    cleanup rather than a correctness fix.
     """
 
     input: float
@@ -117,8 +122,9 @@ def _base_rate(value: Decimal | TieredPrices | None) -> float | None:
 #
 # Concretely, for #662: read ``cache_write_1h_mtok`` on a separate optional path via
 # ``getattr(price, key, None)`` -- correct precisely because the key is allowed to be absent
-# (upstream populates it on 19 of 21 Anthropic models). ``test_required_price_keys_is_pinned``
-# fails on any edit to this tuple, so a change here has to be deliberate.
+# (upstream populates it on 25 of 27 Anthropic models at 0.2.3).
+# ``test_required_price_keys_is_pinned`` fails on any edit to this tuple, so a change here
+# has to be deliberate.
 REQUIRED_PRICE_KEYS: tuple[str, ...] = (
     "input_mtok",
     "output_mtok",
@@ -180,8 +186,9 @@ def _resolve_rates(
         return None
     when = timestamp if timestamp is not None else datetime.now(UTC)
     price: ModelPrice = model.get_prices(when)
-    # Required keys only. ``cache_write_1h_mtok`` is populated upstream as of 0.1.4 but is
-    # deliberately NOT read here: sourcing 1h from upstream is #662, and reading it into
+    # Required keys only. ``cache_write_1h_mtok`` is populated upstream as of 0.1.4 (and still
+    # at the current 0.2.3 pin) but is deliberately NOT read here: sourcing 1h from upstream
+    # is #662, and reading it into
     # ``cache_write_5m`` would be exactly the 5m/1h collapse this adapter must never perform
     # (guarded by ``test_cache_write_binds_5m_field_not_1h`` in tests/unit/test_genai_source.py).
     # Every required key is read (not short-circuited) so a deregistration anywhere in the set

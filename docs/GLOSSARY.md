@@ -1238,15 +1238,34 @@ cluster_size: 12 -- confident enough to propose a new subagent based on size alo
 
 **Short:** A 3-level classification of an agent's task complexity.
 
-**Detail:** Computed from observed mean tool calls, mean tokens, error rate, and
-write-tool usage. Tiers map 1:1 to Claude model families:
+**Detail:** Computed from observed mean tool calls, mean tokens, and error rate.
+Each tier has a recommended model family, but the mapping is not 1:1 --
+a family may share a tier with another:
 
-- **`simple`** -- `claude-haiku` family. Triggered when mean tool calls
-  <= 5 AND mean tokens <= 2,000 AND no write tools.
-- **`moderate`** -- `claude-sonnet` family. Default tier when neither
-  simple nor complex thresholds are met.
-- **`complex`** -- `claude-opus` family. Triggered when mean tool calls
-  >= 10 OR mean tokens >= 5,000 OR error rate >= 0.20 OR write tools used.
+- **`simple`** -- classifies the `claude-haiku` family; recommended
+  target `claude-haiku-4-5`. Requires observed data (mean tool calls > 0
+  OR mean tokens > 0) AND mean tool calls < 5 AND mean tokens < 2,000.
+- **`moderate`** -- classifies the `claude-sonnet` family; recommended
+  target `claude-sonnet-4-6`. The default tier when neither the simple
+  nor the complex conditions are met.
+- **`complex`** -- classifies the `claude-opus` and `claude-fable`
+  families; recommended target `claude-opus-4-7`. Triggered when mean
+  tool calls > 10 OR mean tokens > 5,000 OR error rate > 0.20.
+
+Note the two halves of each bullet are different maps and do not have to
+agree: which families *classify into* a tier is one question, and which
+single model is *recommended* for it is another. AgentFluent never
+recommends a Fable model -- Fable classifies as `complex`, whose
+recommended target is Opus.
+
+Write-tool usage is deliberately NOT a classification input (#185):
+write-tool presence alone, without high token volume or tool-call count,
+must not escalate an agent to "complex". It is retained as observation
+metadata for other diagnostics.
+
+An agent with no observed tool calls and no token data falls through to
+`moderate` rather than `simple`, so the recommendation reflects
+uncertainty instead of asserting the work is small.
 
 Calibration note (#140): these thresholds are pending multi-contributor
 validation. On v0.3 single-dataset calibration, every observed agent

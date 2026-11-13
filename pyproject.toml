@@ -28,14 +28,28 @@ dependencies = [
     "pyyaml>=6.0",
     # Pinned EXACTLY: we bind to genai-prices' internal (non-``__all__``) rate record in
     # analytics/_genai_source.py, and it is pre-1.0 (no API-stability promise). A bump is a
-    # controlled channel (#82) gated by the golden-rate test. Do not loosen to ``>=``.
+    # controlled channel. Do not loosen to ``>=``.
     #
-    # As of 0.1.x that record is no longer a fixed-field dataclass: ``ModelPrice`` takes
+    # What actually enforces that channel, stated precisely because an earlier draft of this
+    # comment overstated it: the **golden-rate regression test** (tests/unit/test_pricing.py)
+    # fails on any rate drift, and ``_required_rate`` raises on a deregistered price key. Those
+    # are the automated gates. A binding probe is ALSO run by hand before a bump and recorded on
+    # the bump's issue (#674 AC1 is the last one) -- but it is a manual step with no artifact in
+    # this tree, so it is not something CI checks. #684 tracks the gap that follows: nothing
+    # stops an automated dependency bump from moving this pin without that probe.
+    #
+    # Earlier revisions named #82 (an upstream-coverage drift detector) as the channel. #82 was
+    # re-scoped and ejected from v0.12.0 -- a detector cannot fire while the pin is exact, which
+    # is the whole point of the pin -- so the channel is the bump issue itself. See #674.
+    #
+    # As of 0.2.x that record is no longer a fixed-field dataclass: ``ModelPrice`` takes
     # ``**price_kwargs`` over a dynamic unit registry, and its ``__getattr__`` returns ``None``
     # for a *registered* price key while raising ``AttributeError`` for a *deregistered* one
     # (#661). Named-key access therefore still works, but the way a bump can break us changed
     # from a static attribute error to a runtime one -- which is what the exact pin now bounds.
-    "genai-prices==0.1.4",
+    # The 0.1.4 -> 0.2.3 bump (#674) re-ran that probe: all four ``REQUIRED_PRICE_KEYS`` are
+    # still registered, and every previously-curated rate is byte-identical across the bump.
+    "genai-prices==0.2.3",
 ]
 
 [project.optional-dependencies]

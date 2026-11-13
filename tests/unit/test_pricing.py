@@ -349,27 +349,36 @@ class TestGetKnownModels:
 
 
 # Golden base rates (USD per 1M tokens): input, output, cache_creation_5m, cache_read.
-# These are the pre-migration `_PRICING` values -- the regression lock for the genai-prices
-# swap (#545). COVERAGE PROBE (genai-prices==0.1.4, 2026-08-30, #661): all 9 ids below are
-# covered upstream with base-tier rates equal to these values; the local `_RESIDUAL` is
-# therefore empty. `claude-sonnet-4-5-20250929` is context-tiered upstream (>200K surcharge);
-# the adapter takes the standard (base) tier. If a pin bump changes any value, this test
-# goes red -- that is the intended gate for #82.
+# The 4.x values are the pre-migration `_PRICING` values -- the regression lock for the
+# genai-prices swap (#545). COVERAGE PROBE (genai-prices==0.2.3, 2026-11-13, #674): all 15 ids
+# below are covered upstream with base-tier rates equal to these values; the local `_RESIDUAL`
+# is therefore still empty. These are **standard (base) tier** rates: where upstream prices a
+# model by prompt length the adapter discards the tiers, which is its documented contract --
+# see the CONTEXT TIERS note in `analytics/pricing.py` for the one case reachable today
+# (`claude-haiku-5-5`, 5x above 100K prompt tokens, #682). If a pin bump changes any value, this
+# test goes red -- that is the intended gate for a bump (#674; earlier revisions named #82,
+# which was re-scoped out of that role).
 #
-# `claude-opus-5` joined at the 0.1.4 bump (#661). It is the ONE intentional delta of that
-# bump and it is one-directional: opus-5 went None -> real pricing (it was $0 before, on ~37%
-# of a real corpus). Every other id below is byte-identical across 0.0.71 -> 0.1.4, which is
-# what makes that PR's cost-neutrality claim checkable here rather than merely asserted.
+# `claude-opus-5` joined at the 0.1.4 bump (#661). The six 5.x ids joined at the 0.2.3 bump
+# (#674). Both deltas are one-directional -- None -> real pricing -- and every pre-existing id
+# is byte-identical across 0.0.71 -> 0.1.4 -> 0.2.3, which is what makes each PR's
+# cost-neutrality claim checkable here rather than merely asserted.
 _GOLDEN_RATES: dict[str, tuple[float, float, float, float]] = {
+    "claude-opus-5-5": (4.0, 20.0, 5.00, 0.20),
     "claude-opus-5": (5.0, 25.0, 6.25, 0.50),
     "claude-opus-4-8": (5.0, 25.0, 6.25, 0.50),
     "claude-opus-4-7": (5.0, 25.0, 6.25, 0.50),
     "claude-opus-4-6": (5.0, 25.0, 6.25, 0.50),
     "claude-opus-4-5-20251101": (5.0, 25.0, 6.25, 0.50),
+    "claude-sonnet-5-5": (2.0, 10.0, 2.50, 0.10),
+    "claude-sonnet-5": (2.0, 10.0, 2.50, 0.20),
     "claude-sonnet-4-6": (3.0, 15.0, 3.75, 0.30),
     "claude-sonnet-4-5-20250929": (3.0, 15.0, 3.75, 0.30),
     "claude-sonnet-4-20250514": (3.0, 15.0, 3.75, 0.30),
+    "claude-haiku-5-5": (0.1, 0.5, 0.125, 0.01),
     "claude-haiku-4-5-20251001": (1.0, 5.0, 1.25, 0.10),
+    "claude-fable-5-2": (8.0, 40.0, 10.00, 0.20),
+    "claude-fable-5-1": (10.0, 50.0, 12.50, 0.25),
 }
 
 
@@ -438,10 +447,17 @@ class TestCuratedRegistry:
         # naming it here would misinform, and would turn red as a phantom "legacy leak" the
         # moment `_KNOWN_MODELS` normalizes to undated ids (as opus-4-6/4-7/4-8 already have).
         #
-        # Deliberately ABSENT from this list: `claude-sonnet-5` and `claude-fable-5`. Those are
-        # current models that are simply uncurated -- genai-prices prices both -- so asserting
-        # they must stay out would lock in the silent-$0 defect tracked by the #661 architect
-        # review's Concern 2, not guard against it. This canary is for *legacy* ids only.
+        # Deliberately ABSENT from this list: `claude-sonnet-5` (CURATED as of #674) and
+        # `claude-fable-5` (still uncurated -- genai-prices prices it). Asserting either must
+        # stay out would lock in the silent-$0 defect tracked by the #661 architect review's
+        # Concern 2, not guard against it. This canary is for *legacy* ids only.
+        #
+        # The criterion for curating an id is an EXACT upstream record plus a reason to expect
+        # it in real data -- NOT corpus presence alone. `claude-fable-5-2` has zero corpus rows
+        # and IS curated (it is the current Fable in the live lineup); `claude-fable-5` and
+        # `claude-mythos-5-2` have exact records and zero rows and are NOT, because nothing
+        # suggests they will be emitted. Stating it as "no corpus presence" would be a rule the
+        # registry sitting next to it already violates, and the next curator reads this.
         assert legacy_id not in get_known_models()
 
     @pytest.mark.parametrize("canonical", ["claude-opus-4-7", "claude-sonnet-4-6",
@@ -499,6 +515,98 @@ class TestCacheCreation1hNonCollapse:
         assert pricing.cache_creation_1h != pricing.cache_creation_5m
 
 
+class TestCurrentFamilyRegression:
+    """#674: the entire current Claude family priced at $0 -- the THIRD recurrence of this shape.
+
+    Five corpus-present ids resolved to None -- `claude-opus-5-5`, `claude-sonnet-5-5`,
+    `claude-sonnet-5`, `claude-haiku-5-5` and `claude-fable-5-1` -- so three of four measured
+    corpora reported a total cost of $0.00. `claude-fable-5-2` is covered here too but was NOT
+    part of that measurement: it has zero corpus rows, and is curated as a deliberate, approved
+    expansion (the current Fable in the live lineup, with an exact upstream record) because
+    omitting it would reproduce this same $0 defect the first time anyone runs it.
+
+    `claude-opus-5-5` alone was the single most common model id in the corpus (165,219 rows at
+    the 2026-11-13 enumeration).
+
+    **Why this class exists when `_GOLDEN_RATES` already covers these ids.** The golden tests are
+    driven BY the curated registry and are pinned to it by
+    `test_golden_set_is_exactly_the_curated_registry`, so dropping a family from `_KNOWN_MODELS`
+    and from `_GOLDEN_RATES` together leaves every one of them green -- the two sides agree about
+    an id neither contains any more. That is exactly how #661 and #674 happened. The ids below are
+    therefore written as **literals, independent of the registry under test**, so the assertion
+    survives the registry changing underneath it.
+
+    Two independent things had to be true for the defect, and each alone reproduces it, so the
+    guard fails on either: the id must be present upstream (the `genai-prices` pin -- these are
+    absent from 0.1.4 entirely) and it must be in `_KNOWN_MODELS`, which `get_pricing` consults
+    FIRST and which fails closed to None.
+    """
+
+    # Written out deliberately -- see the class docstring. Do NOT refactor this to derive from
+    # `get_known_models()` or `_GOLDEN_RATES`: that would make the guard agree with whatever the
+    # registry happens to say, which is the failure it exists to catch.
+    _CURRENT_FAMILY = (
+        "claude-opus-5-5",
+        "claude-sonnet-5-5",
+        "claude-sonnet-5",
+        "claude-haiku-5-5",
+        "claude-fable-5-1",
+        "claude-fable-5-2",
+    )
+
+    @pytest.mark.parametrize("model_id", _CURRENT_FAMILY)
+    def test_current_family_is_priced(self, model_id: str) -> None:
+        pricing = get_pricing(model_id)
+        assert pricing is not None, (
+            f"{model_id} resolved to None -- it would contribute $0 to every cost figure, "
+            "silently (the lookup miss logs at DEBUG). This is #674 regressing: either the "
+            "genai-prices pin moved below 0.2.3, or the id was dropped from _KNOWN_MODELS."
+        )
+
+    @pytest.mark.parametrize("model_id", _CURRENT_FAMILY)
+    def test_current_family_rates_are_nonzero(self, model_id: str) -> None:
+        # A ModelPricing of all zeros is "priced" by the None check above and still bills $0.
+        # The defect is a dollar figure of zero, so the guard has to reach the rate itself.
+        pricing = get_pricing(model_id)
+        assert pricing is not None
+        assert pricing.input > 0
+        assert pricing.output > 0
+        assert pricing.cache_creation_5m > 0
+        assert pricing.cache_read > 0
+
+    @pytest.mark.parametrize(
+        "variant",
+        [
+            "claude-opus-5-5[1m]",
+            "claude-sonnet-5-5[1m]",
+            "claude-sonnet-5[1m]",
+            "claude-haiku-5-5[1m]",
+            "claude-fable-5-1[1m]",
+            "claude-fable-5-2[1m]",
+        ],
+    )
+    def test_1m_variants_resolve_to_base(self, variant: str) -> None:
+        # All SIX `[1m]` aliases #674 added, not a subset: two were previously untested,
+        # so deleting either alias line left the suite green (#674 review).
+        base = variant.removesuffix("[1m]")
+        # `is not None` first -- `==` alone is satisfied by `None == None`, so a variant
+        # and base that BOTH failed to resolve would read as agreement.
+        assert get_pricing(variant) is not None
+        assert get_pricing(variant) == get_pricing(base)
+
+    def test_bare_fable_alias_resolves_to_the_pinned_generation(self) -> None:
+        # 7 corpus rows carry the bare `fable` id and priced at $0 before #674.
+        #
+        # Asserting only `is not None` would NOT pin the decision that was actually made
+        # (#674 review): both candidate targets are curated and both price, so that
+        # assertion holds for either binding while the two differ by 20-25% per token
+        # ($10/$50 vs $8/$40). The alias points at 5-1 deliberately -- it is the generation
+        # with corpus presence (4,468 rows vs 0) -- so the test observes WHICH target it
+        # resolves to, the only thing that can detect the binding being flipped.
+        assert get_pricing("fable") == get_pricing("claude-fable-5-1")
+        assert get_pricing("fable") != get_pricing("claude-fable-5-2")
+
+
 class TestModelConstants:
     """#252 fold: MODEL_* live in pricing.py; the re-export chain stays green."""
 
@@ -537,7 +645,7 @@ class TestModelConstants:
 class TestResidualFallback:
     """The documented local-overlay escape hatch when genai-prices lacks a model.
 
-    ``_RESIDUAL`` is empty at genai-prices==0.1.4 (full upstream coverage), so these
+    ``_RESIDUAL`` is empty at genai-prices==0.2.3 (full upstream coverage), so these
     tests simulate an upstream miss to lock the fallback contract for a future uncovered
     model.
     """

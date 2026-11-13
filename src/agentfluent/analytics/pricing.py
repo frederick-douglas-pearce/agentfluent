@@ -66,12 +66,15 @@ class ModelPricing:
     ``cache_write_mtok``, and must never collapse the 1h dimension back
     onto that rate.
 
-    genai-prices 0.1.4 *does* carry an upstream 1h field
-    (``cache_write_1h_mtok``, on 19 of 21 Anthropic models). Continuing
+    genai-prices *does* carry an upstream 1h field
+    (``cache_write_1h_mtok``) at the pinned version. Continuing
     to derive 1h locally is a deliberate deferral to #662 — which owns
     the switch and its price-neutrality proof — not evidence the field
     is unavailable. Earlier text here said it had "no upstream field";
-    that was true at the 0.0.71 pin and is false now.
+    that was true at the 0.0.71 pin and is false now. **The per-model
+    count is deliberately not restated here** — ``_genai_source`` owns
+    that number, and keeping a second copy is how this very sentence
+    drifted out of sync with its twin (#674).
 
     This rate table is the **class-A plug point** of the base ⊕ overlay
     seam (see the module docstring): rate-table overlays (the 1h-cache
@@ -97,36 +100,77 @@ class ModelPricing:
 # sourced upstream-first from genai-prices (D045) via ``_resolve_rates``; ``_RESIDUAL``
 # supplies a documented local fallback for any id genai-prices does not cover.
 #
-# The #661 coverage probe found genai-prices==0.1.4 covers ALL of these ids, with base-tier
-# rates identical to those the #545 probe locked under 0.0.71 (the bump moved no rate):
+# The #674 coverage probe found genai-prices==0.2.3 covers ALL of these ids. The nine curated
+# under 0.1.4 (#661) keep byte-identical base-tier rates across the 0.1.4 -> 0.2.3 bump -- that
+# bump moved no rate -- and the current (5.x) family joined at it:
 #   Opus 4.5/4.6/4.7/4.8  -> $5 / $25 / $6.25 / $0.50
 #   Opus 5                -> $5 / $25 / $6.25 / $0.50   (NEW at 0.1.4 -- absent from 0.0.71,
 #                                                        which is why it priced at $0; #661)
-#   Sonnet 4.0/4.5/4.6    -> $3 / $15 / $3.75 / $0.30   (4.5 is context-tiered upstream;
-#                                                        base tier taken -- see _genai_source)
+#   Opus 5.5              -> $4 / $20 / $5.00 / $0.20   (NEW at 0.2.3 -- #674)
+#   Sonnet 4.0/4.5/4.6    -> $3 / $15 / $3.75 / $0.30
+#   Sonnet 5              -> $2 / $10 / $2.50 / $0.20   (NEW at 0.2.3 -- #674)
+#   Sonnet 5.5            -> $2 / $10 / $2.50 / $0.10   (NEW at 0.2.3 -- #674)
 #   Haiku 4.5             -> $1 / $5  / $1.25 / $0.10
-# so ``_RESIDUAL`` is currently empty. The golden-rate regression test locks these values.
+#   Haiku 5.5             -> $0.10 / $0.50 / $0.125 / $0.01            (NEW at 0.2.3 -- #674)
+#   Fable 5.1             -> $10 / $50 / $12.50 / $0.25                (NEW at 0.2.3 -- #674)
+#   Fable 5.2             -> $8 / $40 / $10.00 / $0.20                 (NEW at 0.2.3 -- #674)
+# so ``_RESIDUAL`` is still empty. The golden-rate regression test locks these values.
+#
+# CONTEXT TIERS: the rates above are the **standard (base) tier**. Where upstream prices a
+# model by prompt length, ``_genai_source._base_rate`` takes ``TieredPrices.base`` and
+# DISCARDS the tiers -- a documented contract of that adapter, not an oversight here. The
+# contract is stated rather than a list of which ids are tiered, because such a list is what
+# went stale: it named the one tiered id it knew and missed a live one.
+#   Known reachable case: ``claude-haiku-5-5`` is tiered at **5x above 100K prompt tokens**
+#   on all four rate keys, so long-prompt requests to it under-report. Tracked in **#682**;
+#   fixing it needs the per-request prompt size at the pricing call site, which is a behavior
+#   change with its own golden tests.
+#   Not reachable today: sonnet-4-5's >200K tier is historical (upstream retired the 1M beta
+#   on 2026-04-30 and >200k now errors), and opus-4-6 / sonnet-4-6 carry theirs only in a
+#   pre-2026-03-13 conditional price whose currently-active successor is flat.
+#
+# Why the 5.x family read $0 before #674, and why ONE fix was not enough: the pin sat at 0.1.4,
+# which carries none of those ids, AND this frozenset gated them out before upstream was
+# consulted. Both had to change. ``claude-opus-5-5`` was the single most common model id in a
+# real corpus at the 2026-11-13 enumeration (165,219 rows), so the defect zeroed the largest
+# cost component present. Third recurrence of the shape (``claude-opus-5`` -> #661 was the
+# second).
+#
+# EXACT records only (#674 AC3): an id is curated here only when upstream holds a record whose
+# own id equals it (``find_model(x).id == x``). Four ids curated earlier resolve by FAMILY
+# PREFIX instead -- ``claude-opus-4-5-20251101`` -> ``claude-opus-4-5``,
+# ``claude-sonnet-4-5-20250929`` -> ``claude-sonnet-4-5``, ``claude-sonnet-4-20250514`` ->
+# ``claude-sonnet-4-0``, ``claude-haiku-4-5-20251001`` -> ``claude-haiku-4-5``. They are
+# REPORTED here, deliberately NOT decurated: they price correctly today and dropping them would
+# regress coverage. Prefix matching is #664's structural business, not this list's.
 #
 # NOTE (#661 architect review, Concern 2): this frozenset is consulted BEFORE upstream, so an id
-# missing here fails closed to None -> $0 at DEBUG even when genai-prices can price it. That is a
-# known structural defect with a live instance (``claude-sonnet-5``) tracked separately -- do not
-# read the curation here as evidence that an absent id is unpriceable.
+# missing here fails closed to None -> $0 at DEBUG even when genai-prices can price it. #674
+# cleared today's instances by curation; the structural defect itself is tracked in #664 -- do
+# not read the curation here as evidence that an absent id is unpriceable.
 _KNOWN_MODELS: frozenset[str] = frozenset(
     {
+        "claude-opus-5-5",
         "claude-opus-5",
         "claude-opus-4-8",
         "claude-opus-4-7",
         "claude-opus-4-6",
         "claude-opus-4-5-20251101",
+        "claude-sonnet-5-5",
+        "claude-sonnet-5",
         "claude-sonnet-4-6",
         "claude-sonnet-4-5-20250929",
         "claude-sonnet-4-20250514",
+        "claude-haiku-5-5",
         "claude-haiku-4-5-20251001",
+        "claude-fable-5-2",
+        "claude-fable-5-1",
     }
 )
 
 # Documented local residual: model id -> ModelPricing for any model genai-prices lacks.
-# Empty as of genai-prices==0.1.4 (see _KNOWN_MODELS above). Add an entry ONLY for a model
+# Empty as of genai-prices==0.2.3 (see _KNOWN_MODELS above): upstream holds an exact record for
+# every curated id, so #674 added none. Add an entry ONLY for a model
 # the coverage probe shows upstream does not price -- this is the local-overlay escape
 # hatch, not a re-introduction of the hand-maintained rate table.
 _RESIDUAL: dict[str, ModelPricing] = {}
@@ -135,16 +179,39 @@ _RESIDUAL: dict[str, ModelPricing] = {}
 # Aliases mirror the ID forms used elsewhere in the codebase (e.g.
 # diagnostics/delegation.py recommends `claude-haiku-4-5`, the
 # undated alias — pricing must resolve the same string).
+#
+# The bare short names are PINNED to one generation each, not to "the newest". ``fable`` was
+# added by #674 because 7 corpus rows carry it and it priced at $0; it points at Fable 5.1, the
+# generation actually present (4,468 rows, vs 0 for 5.2). Note the known limit of this scheme,
+# which #674 did NOT change: every bare name resolves to an older generation than the one now
+# in use, so those rows price at the wrong generation's rate. ``haiku`` is the widest gap --
+# it resolves to 4.5 at $1/$5 while ``claude-haiku-5-5`` is $0.10/$0.50, a **10x** over-price
+# (11 corpus rows); ``sonnet`` -> 4.6 is 1.5x over (35 rows) and ``opus`` -> 4.8 is 1.25x over
+# (163 rows). Dollar impact is small at these volumes, but note the ranking is by RATIO and
+# the row counts run the other way. That staleness is its own concern, not this issue's.
+#
+# ``[1m]`` entries resolve the 1M-context variant string to its base id, which prices it at the
+# base tier (``_genai_source._base_rate`` discards context tiers for every model). The entries
+# for the ids #674 added are DEFENSIVE: no ``[1m]`` form of any model appears in the corpus
+# today. They are inert if never emitted, and the alternative -- omitting them -- is the exact
+# fail-closed-to-$0 shape this issue exists to remove.
 _ALIASES: dict[str, str] = {
     "opus": "claude-opus-4-8",
     "sonnet": "claude-sonnet-4-6",
     "haiku": "claude-haiku-4-5-20251001",
+    "fable": "claude-fable-5-1",
     "claude-haiku-4-5": "claude-haiku-4-5-20251001",
+    "claude-opus-5-5[1m]": "claude-opus-5-5",
     "claude-opus-5[1m]": "claude-opus-5",
     "claude-opus-4-8[1m]": "claude-opus-4-8",
     "claude-opus-4-7[1m]": "claude-opus-4-7",
     "claude-opus-4-6[1m]": "claude-opus-4-6",
+    "claude-sonnet-5-5[1m]": "claude-sonnet-5-5",
+    "claude-sonnet-5[1m]": "claude-sonnet-5",
     "claude-sonnet-4-6[1m]": "claude-sonnet-4-6",
+    "claude-haiku-5-5[1m]": "claude-haiku-5-5",
+    "claude-fable-5-2[1m]": "claude-fable-5-2",
+    "claude-fable-5-1[1m]": "claude-fable-5-1",
 }
 
 # Sentinel model names emitted by Claude Code for synthetic/internal messages.
@@ -185,7 +252,8 @@ def get_pricing(model: str, timestamp: datetime | None = None) -> ModelPricing |
 
     ``timestamp`` selects the base rate in effect on that date via genai-prices' dated
     constraints (#546); ``None``/omitted → the latest rate, preserving every existing
-    caller. Note (#546 falsifier finding, re-confirmed at genai-prices==0.1.4, #661): no model in
+    caller. Note (#546 falsifier finding, re-confirmed at genai-prices==0.1.4 in #661 and again
+    at 0.2.3 in #674, across all fifteen curated ids): no model in
     ``_KNOWN_MODELS`` currently carries a dated *base-rate* change -- the only dated
     Anthropic constraints move the >200K context tier, which the adapter discards (see
     ``_genai_source._base_rate``) -- so a timestamp is presently date-invariant at base-rate
