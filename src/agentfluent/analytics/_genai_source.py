@@ -52,6 +52,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Literal
 
 from genai_prices.data import (  # internal, non-``__all__`` surface -- see module docstring
     ModelPrice,
@@ -75,14 +76,16 @@ class UpstreamRates:
 
     **As of genai-prices 0.2.3 there IS an upstream 1h field** -- ``cache_write_1h_mtok``,
     populated on 25 of 27 Anthropic models (all but the legacy ``claude-2`` and ``claude-v1``),
-    which covers all fifteen curated ones. Not reading it is a deliberate deferral to #662 (which
+    which covers all seventeen curated ones (re-confirmed in #664 for the two ids curated there).
+    Not reading it is a deliberate deferral to #662 (which
     owns the switch from derived to upstream-sourced, and its price-neutrality proof), **not** an
     absence. Earlier revisions of this docstring said the field did not exist; that was true at
     the 0.0.71 pin and is false now, which is exactly why the non-collapse invariant stopped
     being vacuous and got a real guard (``test_cache_write_binds_5m_field_not_1h``).
 
     **#674 re-measured the ratio #662 turns on:** upstream ``cache_write_1h_mtok`` equals exactly
-    2.00x ``input_mtok`` on every curated id, old and new (15/15). The local derivation in
+    2.00x ``input_mtok`` on every curated id, old and new (17/17 as of #664, which re-measured it
+    for ``claude-fable-5`` and ``claude-mythos-5-2``). The local derivation in
     ``ModelPricing.__post_init__`` therefore already agrees with upstream, which makes #662 a
     cleanup rather than a correctness fix.
     """
@@ -208,3 +211,48 @@ def _resolve_rates(
         cache_write_5m=cache_write,
         cache_read=cache_read,
     )
+
+
+#: How an id resolves against the upstream catalog. ``exact`` -- upstream holds a record whose
+#: own id equals the one asked for. ``inexact`` -- upstream matched a *different* record (at the
+#: 0.2.3 pin the only such mode is date-suffix stripping: ``claude-sonnet-5-20991231`` ->
+#: ``claude-sonnet-5``). ``absent`` -- upstream cannot price it at all.
+#:
+#: The vocabulary is deliberately ``exact``/``inexact`` and NOT "family-prefix" (#664 architect
+#: review): at this pin a fabricated version bump (``claude-sonnet-5-9``, ``claude-sonnet-99``)
+#: resolves to *nothing*, so a message naming a family-prefix mechanism would describe behavior
+#: genai-prices no longer has. D063(2) records the refutation of the earlier claim.
+UpstreamMatch = Literal["exact", "inexact", "absent"]
+
+
+def classify_upstream_match(
+    model_ref: str, timestamp: datetime | None = None
+) -> tuple[UpstreamMatch, str | None]:
+    """Classify how ``model_ref`` resolves upstream, and name the record it matched.
+
+    Returns ``(kind, matched_id)``. ``matched_id`` is the upstream record's own id for
+    ``exact``/``inexact`` and ``None`` for ``absent``.
+
+    This is the **single definition** of the exact/inexact/absent distinction (#664 AC4, D063(4)).
+    ``pricing.get_pricing`` consumes it to decide a log level; #688 (per-run coverage disclosure)
+    and #669 (model-version watcher) are intended to call it **directly** rather than parsing log
+    text, which is not an API.
+
+    Priceability is part of the classification, not a separate question: an id upstream holds a
+    record for but cannot produce a full rate set from (partial coverage -- see ``_resolve_rates``)
+    is ``absent`` here, because the caller's only decision is whether a rate could be had.
+
+    Note on cost: on the ``absent``/``inexact`` paths this resolves the model twice -- once here
+    and once inside ``_resolve_rates``. Both are dict lookups over a static in-process snapshot,
+    and the whole function is reached only for ids outside the curated registry, so the duplicate
+    is deliberate: it keeps the required-key logic in exactly one place.
+    """
+    if _ANTHROPIC is None:  # pragma: no cover -- broken genai-prices install; see #687
+        return "absent", None
+    model = _ANTHROPIC.find_model(model_ref)
+    if model is None:
+        return "absent", None
+    if _resolve_rates(model_ref, timestamp) is None:
+        # Upstream knows the id but cannot yield a full rate set. Nothing to offer the caller.
+        return "absent", None
+    return ("exact" if model.id == model_ref else "inexact"), model.id

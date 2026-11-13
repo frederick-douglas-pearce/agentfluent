@@ -87,7 +87,12 @@ _TIER_ORDER: tuple[ComplexityTier, ...] = ("simple", "moderate", "complex")
 _TIER_BY_FAMILY: dict[ComplexityTier, tuple[str, ...]] = {
     "simple": ("claude-haiku",),
     "moderate": ("claude-sonnet",),
-    "complex": ("claude-opus", "claude-fable"),
+    # `claude-mythos` added by #664: `claude-mythos-5-2` prices at $8/$40, identical to
+    # `claude-fable-5-2`, so it classifies at the same tier on rate evidence rather than on
+    # a guess about the family. Curating it for pricing without teaching this map is the
+    # #674 Fable defect (a false offload recommendation); `pick_alternative_model` carries
+    # the matching branch, and #683 owns collapsing the two ladders into one.
+    "complex": ("claude-opus", "claude-fable", "claude-mythos"),
 }
 
 

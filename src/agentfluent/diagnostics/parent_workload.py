@@ -310,9 +310,17 @@ def pick_alternative_model(parent_model: str) -> str:
     lowered = parent_model.lower()
     if "opus" in lowered:
         return MODEL_SONNET
-    if "fable" in lowered:
+    if "fable" in lowered or "mythos" in lowered:
         # Fable prices above every curated Opus, so its next step down is Sonnet --
         # matching `faster_tier`, which classifies the family as `complex` (#674).
+        #
+        # Mythos joins the same branch (#664): `claude-mythos-5-2` prices at $8/$40, which
+        # is EXACTLY `claude-fable-5-2`'s rate, so it sits at the same tier on the same
+        # evidence. It was curated for pricing here, and a family curated for pricing but
+        # unknown to this ladder is the #674 Fable defect verbatim -- the guard
+        # `test_ladders_agree_for_every_curated_model` is what forced this edit rather than
+        # letting it ship as a nonsense recommendation. The family has zero corpus rows, so
+        # no live recommendation changes; this keeps the ladders honest for when it appears.
         return MODEL_SONNET
     if "sonnet" in lowered:
         return MODEL_HAIKU
