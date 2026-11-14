@@ -245,9 +245,9 @@ _ALIASES: dict[str, str] = {
     "claude-fable-5-2[1m]": "claude-fable-5-2",
     "claude-fable-5-1[1m]": "claude-fable-5-1",
     # #664: the two ids curated there get their `[1m]` forms too. Omitting them is the exact
-    # fail-closed-to-$0 shape this issue exists to remove -- and these two are worse than the
-    # others, because both records match only by equality/dated-regex, so a bare `[1m]` form is
-    # ABSENT upstream and takes the DEBUG path where the new WARNING cannot even see it.
+    # fail-closed-to-$0 shape this issue exists to remove. Like most `[1m]` keys here, these two
+    # are ABSENT upstream in `[1m]` form, so they take the DEBUG path where the uncurated-model
+    # WARNING cannot see them -- the alias is the only thing that makes them price.
     "claude-fable-5[1m]": "claude-fable-5",
     "claude-mythos-5-2[1m]": "claude-mythos-5-2",
 }

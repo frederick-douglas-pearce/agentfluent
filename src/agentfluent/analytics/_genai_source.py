@@ -218,19 +218,13 @@ def _resolve_rates(
 #: ``inexact`` -- upstream matched a *different* record. ``absent`` -- upstream cannot price it.
 #:
 #: The vocabulary is ``exact``/``inexact`` because that is the distinction the caller acts on, and
-#: because it is the correct **superset** of the two match modes genai-prices actually uses. Both
-#: are live at the 0.2.3 pin:
-#:   * **family prefix** -- most 3.x/4.x records carry a ``ClauseStartsWith``, so
-#:     ``claude-opus-4-19`` matches the ``claude-opus-4-1`` record and resolves to $15/$75 for a
-#:     model that does not exist;
-#:   * **dated regex** -- the 5.x records use ``ClauseEquals`` plus ``^...-\d{8}$``, so
-#:     ``claude-sonnet-5-20991231`` matches ``claude-sonnet-5`` while ``claude-sonnet-5-9`` is
-#:     absent.
+#: because it is the correct **superset** of however many match modes genai-prices uses.
 #:
-#: CORRECTED (#664 code review r1): an earlier revision of this comment claimed date-suffix
-#: stripping was the only inexact mode and that a family-prefix mechanism no longer existed. That
-#: was generalized from a probe of the 5.x records alone and is FALSE for 3.x/4.x. See D063(2),
-#: corrected pre-merge, and ``pricing.py``'s own FAMILY PREFIX note, which was right all along.
+#: **Which records accept a non-identical id is DERIVED, not described** -- see
+#: ``TestUpstreamMatchModes`` in tests/unit/test_genai_source.py, which enumerates the catalog and
+#: asserts the prefix-free set. #664 characterized this mechanism in prose twice and got it wrong
+#: both times, in opposite directions, each time from a sample of ids; the test replaces the
+#: description so the fact cannot drift from the catalog again. D063(2) points there too.
 UpstreamMatch = Literal["exact", "inexact", "absent"]
 
 
@@ -269,6 +263,13 @@ def classify_upstream_match(
         # Upstream knows the id but cannot yield a full rate set. Nothing to offer the caller.
         return "absent", None
     # Compare against the LOWERCASED ref: ``find_model`` lowercases its input and upstream ids
-    # are lowercase, so comparing to the raw ref reports a mere case variant as a *different*
-    # record -- telling the operator to curate an id that is already curated (#664 review r1).
+    # are lowercase, so comparing to the raw ref would report a mere case variant as a *different*
+    # record (#664 review r1).
+    #
+    # Scope of this fix, stated because an earlier version of this comment overclaimed it: it
+    # corrects the KIND reported here. It does NOT make a case variant price -- ``_ALIASES`` and
+    # the ``_KNOWN_MODELS`` membership test in ``get_pricing`` are both case-sensitive, so
+    # ``CLAUDE-SONNET-5`` still reads as uncurated and still warns, and ``_WARNED_UNCURATED`` is
+    # keyed per spelling. Normalizing case at the ``get_pricing`` entry would change which ids
+    # price, which is out of scope for a cost-neutral change (#683).
     return ("exact" if model.id == model_ref.lower() else "inexact"), model.id

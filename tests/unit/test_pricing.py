@@ -599,11 +599,15 @@ class TestCurrentFamilyRegression:
             "claude-haiku-5-5[1m]",
             "claude-fable-5-1[1m]",
             "claude-fable-5-2[1m]",
+            "claude-fable-5[1m]",
+            "claude-mythos-5-2[1m]",
         ],
     )
     def test_1m_variants_resolve_to_base(self, variant: str) -> None:
-        # All SIX `[1m]` aliases #674 added, not a subset: two were previously untested,
-        # so deleting either alias line left the suite green (#674 review).
+        # EVERY `[1m]` alias, never a subset: #674's six plus #664's two. Two of #674's were
+        # once untested and deleting either alias line left the suite green (#674 review) --
+        # #664 then added two more aliases and again did not extend this list, which round 2
+        # caught. If you add an alias, add it here.
         base = variant.removesuffix("[1m]")
         # `is not None` first -- `==` alone is satisfied by `None == None`, so a variant
         # and base that BOTH failed to resolve would read as agreement.
@@ -774,6 +778,23 @@ class TestForwardCompatGuard:
         )
 
 
+@pytest.fixture(autouse=True)
+def _reset_warn_dedup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isolate the process-global uncurated-warning dedup set for every test in this module.
+
+    The set is process-global, so a test running after something that already warned about the
+    same id would see no record and pass for the wrong reason. Monkeypatching the binding
+    (rather than exposing a reset API in ``src/``) keeps the tests order-independent with no
+    test-only surface in the package.
+
+    **Module-scoped deliberately** (#664 review r2): it was first written inside
+    ``TestUncuratedButPriceableWarning``, which left the sibling classes that also reach
+    ``get_pricing`` mutating the real global -- and falsified the production comment claiming
+    the fixture keeps every such test order-independent.
+    """
+    monkeypatch.setattr(pricing, "_WARNED_UNCURATED", set())
+
+
 class TestUncuratedButPriceableWarning:
     """#664 AC2': an id upstream CAN price but we have not curated must never be silently $0.
 
@@ -781,14 +802,6 @@ class TestUncuratedButPriceableWarning:
     D063(1)), so these tests assert the **signal**, never the number. That is what keeps the
     fix cost-neutral and outside #646/#674's cost-attribution window.
     """
-
-    @pytest.fixture(autouse=True)
-    def _reset_warn_dedup(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # The dedup set is process-global, so a test running after something that already
-        # warned about the same id would see no record and pass for the wrong reason.
-        # Monkeypatching the binding (rather than exposing a reset API in src/) keeps these
-        # order-independent with no test-only surface in the package.
-        monkeypatch.setattr(pricing, "_WARNED_UNCURATED", set())
 
     def test_exact_upstream_record_warns(self, caplog: pytest.LogCaptureFixture) -> None:
         # `claude-opus-4-1` is an exact upstream record, deliberately uncurated, and listed in
@@ -812,11 +825,11 @@ class TestUncuratedButPriceableWarning:
     def test_inexact_match_warns_and_names_the_matched_record(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        # A future-dated snapshot of a known family: the 5.x records match via
-        # `ClauseEquals` + `^...-\d{8}$`, so this resolves to `claude-sonnet-5` while
-        # `claude-sonnet-5-9` is absent. That dated-regex mode is specific to the 5.x
-        # records -- 3.x/4.x match by family prefix, where `claude-opus-4-19` DOES resolve
-        # (see the direct classifier test below).
+        # A future-dated snapshot of a known family: this resolves to the `claude-sonnet-5`
+        # record while `claude-sonnet-5-9` is absent. Do NOT generalize from that pair to a
+        # rule about which spellings resolve -- #664 did, twice, and was wrong both times.
+        # `TestUpstreamMatchModes` (tests/unit/test_genai_source.py) derives the real answer
+        # from the catalog; `claude-opus-4-19` and `claude-5-sonnet-9` both DO resolve.
         probe = "claude-sonnet-5-20991231"
         with caplog.at_level(logging.DEBUG, logger="agentfluent.analytics.pricing"):
             assert get_pricing(probe) is None
@@ -903,11 +916,12 @@ class TestClassifyUpstreamMatch:
     ``get_pricing``'s log output -- i.e. through the very surface the docstring says is not an
     API.
 
-    These cases also pin the **corrected** mechanism characterization (D063(2)). An earlier
-    revision of this PR claimed upstream fuzzy-matching strips date suffixes only; that was
-    generalized from a probe of the 5.x records alone and is false for 3.x/4.x, which carry
-    ``ClauseStartsWith``. ``claude-opus-4-19`` below is what makes the correction a tested
-    fact instead of a sentence.
+    **Which records accept a non-identical id is NOT characterized here** -- that fact is
+    derived from the catalog and asserted by ``TestUpstreamMatchModes`` in
+    tests/unit/test_genai_source.py. #664 described the mechanism in prose twice and got it
+    wrong both times, each time from a sample of ids, so the description was replaced by a
+    derivation. These cases pin the *classifier's* behavior on concrete ids; that class pins
+    the catalog-wide fact they are instances of.
     """
 
     @pytest.mark.parametrize(

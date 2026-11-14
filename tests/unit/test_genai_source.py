@@ -289,3 +289,114 @@ class TestLocalFirstContract:
         src = inspect.getsource(_genai_source)
         # "UpdatePrices" may appear in the docstring contract, but never as a call.
         assert "UpdatePrices(" not in src
+
+
+class TestUpstreamMatchModes:
+    """Which upstream records accept a NON-identical id, DERIVED from the catalog (#664).
+
+    This class exists because the same mistake was made twice in #664, in opposite directions:
+    first "upstream strips date suffixes only" (generalized from six 5.x canonical-dashed ids),
+    then "family prefix is 3.x/4.x, dated regex is 5.x alone" (generalized from canonical-dashed
+    spellings). Both were false, and a third prose attempt would most likely fail the same way.
+
+    So the fact is no longer *described* anywhere -- it is **derived from the pinned catalog and
+    asserted here**, and the decision log points at this class instead of restating it. If a pin
+    bump changes which records accept a prefix, this fails and names them, rather than leaving a
+    sentence somewhere to quietly go stale.
+    """
+
+    @staticmethod
+    def _clause_kinds(clause: object) -> set[str]:
+        """Flatten a match-clause tree to the set of leaf clause type names."""
+        name = type(clause).__name__
+        if name == "ClauseOr":
+            kinds: set[str] = set()
+            for sub in clause.or_:  # type: ignore[attr-defined]
+                kinds |= TestUpstreamMatchModes._clause_kinds(sub)
+            return kinds
+        if name == "ClauseAnd":
+            kinds = set()
+            for sub in clause.and_:  # type: ignore[attr-defined]
+                kinds |= TestUpstreamMatchModes._clause_kinds(sub)
+            return kinds
+        return {name}
+
+    #: The ONLY Anthropic records that accept no prefix spelling at the pinned version. Everything
+    #: else accepts at least one, so **no generation is prefix-free** -- which is the fact both
+    #: earlier prose characterizations got wrong.
+    PREFIX_FREE = frozenset(
+        {
+            "claude-fable-5",
+            "claude-fable-5-1",
+            "claude-fable-5-2",
+            "claude-mythos-5-2",
+            "claude-v1",
+        }
+    )
+
+    def test_prefix_free_records_are_exactly_the_documented_set(self) -> None:
+        assert _ANTHROPIC is not None
+        prefix_free = {
+            m.id
+            for m in _ANTHROPIC.models
+            if "ClauseStartsWith" not in self._clause_kinds(m.match)
+        }
+        assert prefix_free == set(self.PREFIX_FREE), (
+            "the set of Anthropic records accepting no prefix spelling has changed upstream.\n"
+            f"  now prefix-free: {sorted(prefix_free)}\n"
+            f"  expected:       {sorted(self.PREFIX_FREE)}\n"
+            "Update PREFIX_FREE *and* re-read D063(2): the pricing-gate decision (#664) turns on "
+            "whether a fabricated id can borrow a sibling's rate."
+        )
+
+    def test_no_generation_is_prefix_free(self) -> None:
+        # The specific shape both wrong characterizations asserted: that some whole generation
+        # matches only by equality/dated-regex and is therefore safe from fabricated bumps.
+        assert _ANTHROPIC is not None
+        for family in ("claude-3", "claude-opus-4", "claude-sonnet-4", "claude-opus-5",
+                       "claude-sonnet-5", "claude-haiku-5"):
+            records = [m.id for m in _ANTHROPIC.models if m.id.startswith(family)]
+            assert records, f"no records for {family} -- the catalog shape changed"
+            accepting = [r for r in records if r not in self.PREFIX_FREE]
+            assert accepting, (
+                f"{family} is now entirely prefix-free. Both of #664's wrong prose "
+                "characterizations claimed exactly this about some generation; if it has become "
+                "true, D063(2) needs re-deriving rather than editing."
+            )
+
+    @pytest.mark.parametrize(
+        ("fabricated", "borrows_from"),
+        [
+            # Canonical dashed form -- the 4.x shape that refuted attempt 1.
+            ("claude-opus-4-19", "claude-opus-4-1"),
+            ("claude-sonnet-4-69", "claude-sonnet-4-6"),
+            # 5.x in NON-canonical spellings -- the shape that refuted attempt 2. Attempt 2 said
+            # 5.x was dated-regex-only and so safe; these price.
+            ("claude-5-sonnet-9", "claude-sonnet-5"),
+            ("claude-haiku-5.5-9", "claude-haiku-5-5"),
+            ("claude-opus-5.0-77", "claude-opus-5"),
+        ],
+    )
+    def test_fabricated_ids_borrow_a_sibling_rate(
+        self, fabricated: str, borrows_from: str
+    ) -> None:
+        # The consequence that matters, asserted rather than described: upstream hands back a full,
+        # plausible rate set for an id that does not exist. This is why naive option (ii) --
+        # pricing anything upstream covers -- was rejected (D063(2)).
+        assert _ANTHROPIC is not None
+        matched = _ANTHROPIC.find_model(fabricated)
+        assert matched is not None and matched.id == borrows_from
+        rates = _resolve_rates(fabricated)
+        assert rates is not None
+        assert rates.input > 0 and rates.output > 0
+        # ...and the curation gate still refuses to price it. That is option (i) holding, and it
+        # is the reason none of this was ever a live mispricing.
+        assert pricing.get_pricing(fabricated) is None
+
+    def test_prefix_free_records_reject_a_fabricated_bump(self) -> None:
+        # The other half: the five prefix-free records really are safe, which is what makes the
+        # distinction worth drawing at all.
+        for fabricated in ("claude-fable-5-9", "claude-mythos-5-2-9"):
+            assert _ANTHROPIC is not None
+            assert _ANTHROPIC.find_model(fabricated) is None
+            assert _resolve_rates(fabricated) is None
