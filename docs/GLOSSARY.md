@@ -1248,8 +1248,8 @@ a family may share a tier with another:
 - **`moderate`** -- classifies the `claude-sonnet` family; recommended
   target `claude-sonnet-4-6`. The default tier when neither the simple
   nor the complex conditions are met.
-- **`complex`** -- classifies the `claude-opus` and `claude-fable`
-  families; recommended target `claude-opus-4-7`. Triggered when mean
+- **`complex`** -- classifies the `claude-opus`, `claude-fable` and
+  `claude-mythos` families; recommended target `claude-opus-4-7`. Triggered when mean
   tool calls > 10 OR mean tokens > 5,000 OR error rate > 0.20.
 
 Note the two halves of each bullet are different maps and do not have to

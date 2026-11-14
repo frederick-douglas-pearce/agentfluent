@@ -525,6 +525,24 @@ class TestHelpers:
         assert classify_model_tier("claude-fable-5-1") == "complex"
         assert classify_model_tier("claude-fable-5-2") == "complex"
 
+    def test_classify_model_tier_claims_the_mythos_family(self) -> None:
+        # #664 curated `claude-mythos-5-2` for pricing, which made it reachable here. Placed in
+        # `complex` on RATE PARITY: it prices at $8/$40, byte-identical to `claude-fable-5-2`,
+        # and above every curated Opus.
+        #
+        # Why this test exists (#664 review r1): `test_ladders_agree_for_every_curated_model`
+        # asserts the two ladders AGREE, not WHERE the family sits -- so a wrong placement
+        # ships green. Put `claude-mythos` in `simple` and drop the `pick_alternative_model`
+        # branch and the ladders still agree, because `faster_tier` returns None at tier index
+        # 0 and `pick_alternative_model` falls through to returning the parent unchanged. This
+        # mirrors the Fable pair above, which #674 added for the same reason.
+        assert classify_model_tier("claude-mythos-5-2") == "complex"
+
+    def test_faster_tier_steps_mythos_down_one_tier_not_two(self) -> None:
+        # Same contract as Fable: one step down, not two. On the `moderate` default a slow
+        # Mythos agent would be told to drop straight to Haiku.
+        assert faster_tier("claude-mythos-5-2") == "moderate"
+
     def test_faster_tier_steps_fable_down_one_tier_not_two(self) -> None:
         # The one consumer where the tier choice actually bites (#674 architect review):
         # DurationOutlier recommends `faster_tier(current_model)`. On the `moderate`

@@ -6,7 +6,9 @@ from datetime import UTC, datetime
 import pytest
 
 from agentfluent.analytics import pricing
+from agentfluent.analytics._genai_source import classify_upstream_match
 from agentfluent.analytics.pricing import (
+    LEGACY_MODEL_PREFIXES,
     SYNTHETIC_MODELS,
     ModelPricing,
     compute_cost,
@@ -350,9 +352,10 @@ class TestGetKnownModels:
 
 # Golden base rates (USD per 1M tokens): input, output, cache_creation_5m, cache_read.
 # The 4.x values are the pre-migration `_PRICING` values -- the regression lock for the
-# genai-prices swap (#545). COVERAGE PROBE (genai-prices==0.2.3, 2026-11-13, #674): all 15 ids
-# below are covered upstream with base-tier rates equal to these values; the local `_RESIDUAL`
-# is therefore still empty. These are **standard (base) tier** rates: where upstream prices a
+# genai-prices swap (#545). COVERAGE PROBE (genai-prices==0.2.3, 2026-11-13, #674 and #664):
+# all 17 ids below are covered upstream with base-tier rates equal to these values; the local
+# `_RESIDUAL` is therefore still empty. These are **standard (base) tier** rates: where upstream
+# prices a
 # model by prompt length the adapter discards the tiers, which is its documented contract --
 # see the CONTEXT TIERS note in `analytics/pricing.py` for the one case reachable today
 # (`claude-haiku-5-5`, 5x above 100K prompt tokens, #682). If a pin bump changes any value, this
@@ -379,6 +382,10 @@ _GOLDEN_RATES: dict[str, tuple[float, float, float, float]] = {
     "claude-haiku-4-5-20251001": (1.0, 5.0, 1.25, 0.10),
     "claude-fable-5-2": (8.0, 40.0, 10.00, 0.20),
     "claude-fable-5-1": (10.0, 50.0, 12.50, 0.25),
+    # Curated by #664 (D063(10)). Locked from a probe at the pin, NOT by analogy to a
+    # sibling: `claude-fable-5`'s cache_read is 1.0, where `claude-fable-5-1`'s is 0.25.
+    "claude-fable-5": (10.0, 50.0, 12.50, 1.0),
+    "claude-mythos-5-2": (8.0, 40.0, 10.00, 0.20),
 }
 
 
@@ -416,7 +423,7 @@ class TestCuratedRegistry:
         # every new family and broke outright on `claude-opus-5`; this denies the legacy
         # generations by prefix instead, so a new family needs no edit and a dated legacy id
         # (`claude-3-opus-20240229`, `claude-instant-1`) is still caught.
-        legacy_prefixes = ("claude-v1", "claude-2", "claude-instant", "claude-3-")
+        legacy_prefixes = LEGACY_MODEL_PREFIXES
         leaked = [m for m in get_known_models() if m.startswith(legacy_prefixes)]
         assert leaked == [], f"legacy generation(s) leaked into the curated registry: {leaked}"
 
@@ -447,17 +454,26 @@ class TestCuratedRegistry:
         # naming it here would misinform, and would turn red as a phantom "legacy leak" the
         # moment `_KNOWN_MODELS` normalizes to undated ids (as opus-4-6/4-7/4-8 already have).
         #
-        # Deliberately ABSENT from this list: `claude-sonnet-5` (CURATED as of #674) and
-        # `claude-fable-5` (still uncurated -- genai-prices prices it). Asserting either must
-        # stay out would lock in the silent-$0 defect tracked by the #661 architect review's
-        # Concern 2, not guard against it. This canary is for *legacy* ids only.
+        # Deliberately ABSENT from this list: `claude-sonnet-5`, `claude-fable-5` and
+        # `claude-mythos-5-2` -- all three are CURATED (sonnet-5 by #674, the other two by #664).
+        # Asserting any of them must stay out would lock in the silent-$0 defect this canary
+        # exists to guard against, not guard against it.
         #
-        # The criterion for curating an id is an EXACT upstream record plus a reason to expect
-        # it in real data -- NOT corpus presence alone. `claude-fable-5-2` has zero corpus rows
-        # and IS curated (it is the current Fable in the live lineup); `claude-fable-5` and
-        # `claude-mythos-5-2` have exact records and zero rows and are NOT, because nothing
-        # suggests they will be emitted. Stating it as "no corpus presence" would be a rule the
-        # registry sitting next to it already violates, and the next curator reads this.
+        # The criterion for curating an id is an EXACT upstream record -- `find_model(x).id == x`.
+        # SUPERSEDED (#664, D063(10)): this comment previously added "plus a reason to expect it
+        # in real data -- NOT corpus presence alone", and cited `claude-fable-5` and
+        # `claude-mythos-5-2` as deliberately uncurated under it. That second conjunct was dropped
+        # by maintainer ruling 2026-11-13, because it was applied unevenly: `claude-fable-5-2` has
+        # zero corpus rows and WAS curated, so the gap read as a rule rather than an accident.
+        # Both ids are now curated on exact-record grounds alone; neither has corpus rows, so
+        # nothing about the measured cost figures moved.
+        #
+        # The four ids that resolve by FAMILY PREFIX onto uncurated base records
+        # (`claude-opus-4-5-20251101` -> `claude-opus-4-5`, etc.) are still curated in their dated
+        # form deliberately -- see `_KNOWN_MODELS`. #683 owns whether the bare forms get aliased.
+        # (#664 review r1: an earlier revision of this comment said "DATE-SUFFIX stripping". That
+        # was wrong -- these match via `ClauseStartsWith` -- and it had replaced the correct
+        # FAMILY PREFIX wording that `pricing.py` still carries. Restored here.)
         assert legacy_id not in get_known_models()
 
     @pytest.mark.parametrize("canonical", ["claude-opus-4-7", "claude-sonnet-4-6",
@@ -583,16 +599,54 @@ class TestCurrentFamilyRegression:
             "claude-haiku-5-5[1m]",
             "claude-fable-5-1[1m]",
             "claude-fable-5-2[1m]",
+            "claude-fable-5[1m]",
+            "claude-mythos-5-2[1m]",
         ],
     )
     def test_1m_variants_resolve_to_base(self, variant: str) -> None:
-        # All SIX `[1m]` aliases #674 added, not a subset: two were previously untested,
-        # so deleting either alias line left the suite green (#674 review).
+        # EVERY `[1m]` alias, never a subset: #674's six plus #664's two. Two of #674's were
+        # once untested and deleting either alias line left the suite green (#674 review) --
+        # #664 then added two more aliases and again did not extend this list, which round 2
+        # caught. If you add an alias, add it here.
         base = variant.removesuffix("[1m]")
         # `is not None` first -- `==` alone is satisfied by `None == None`, so a variant
         # and base that BOTH failed to resolve would read as agreement.
         assert get_pricing(variant) is not None
         assert get_pricing(variant) == get_pricing(base)
+
+    def test_every_1m_alias_binds_to_its_own_base(self) -> None:
+        # MECHANISM, not outcome (#664 acceptance gate, Class B survivor).
+        #
+        # `test_1m_variants_resolve_to_base` asserts `get_pricing(variant) == get_pricing(base)`,
+        # which is an assertion about the resulting RATES. The mutation pass showed that is not
+        # sufficient: rebinding `claude-mythos-5-2[1m]` to `claude-fable-5-2` survived, because
+        # the two ids are locked at the IDENTICAL tuple (8.0, 40.0, 10.00, 0.20), so the wrong
+        # binding produces a byte-identical ModelPricing and the suite stays green. That guard
+        # passed by luck of the rate table rather than by construction -- and #674 hit the same
+        # shape, which is why `test_bare_fable_alias_resolves_to_the_pinned_generation` below
+        # observes WHICH target resolves.
+        #
+        # This observes the binding itself, so it is immune to two ids sharing a rate, and being
+        # derived over `_ALIASES` it covers a future alias without an edit.
+        #
+        # Know what it does NOT cover, because it is a structural invariant over the mechanism's
+        # data table rather than an observation of which code path runs (#664 acceptance-gate
+        # re-check): it proves the table is self-consistent, not that alias resolution consults
+        # the table. Gut `canonical = _ALIASES.get(model, model)` in `get_pricing` and this test
+        # still passes against a perfectly tidy table. That half is pinned by
+        # `test_1m_variants_resolve_to_base` and the other alias-resolution tests in
+        # `TestGetPricing` -- verified: gutting that lookup fails eight of them. So the mechanism
+        # is pinned by the PAIR, and neither half is redundant.
+        from agentfluent.analytics.pricing import _ALIASES
+
+        one_m = {k: v for k, v in _ALIASES.items() if k.endswith("[1m]")}
+        assert one_m, "no `[1m]` aliases found -- the registry shape changed"
+        mismatched = {k: v for k, v in one_m.items() if v != k.removesuffix("[1m]")}
+        assert mismatched == {}, (
+            f"`[1m]` alias(es) bound to the wrong base: {mismatched}. Each must map to its own "
+            "base id; a cross-binding is invisible to any rate comparison whenever the two ids "
+            "happen to share a rate."
+        )
 
     def test_bare_fable_alias_resolves_to_the_pinned_generation(self) -> None:
         # 7 corpus rows carry the bare `fable` id and priced at $0 before #674.
@@ -756,3 +810,233 @@ class TestForwardCompatGuard:
             "date-aware pricing (#546) is no longer inert. Write the historical-cost "
             "restatement note in docs/COST_MODEL.md and activate #543's diff caveat."
         )
+
+
+@pytest.fixture(autouse=True)
+def _reset_warn_dedup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isolate the process-global uncurated-warning dedup set for every test in this module.
+
+    The set is process-global, so a test running after something that already warned about the
+    same id would see no record and pass for the wrong reason. Monkeypatching the binding
+    (rather than exposing a reset API in ``src/``) keeps the tests order-independent with no
+    test-only surface in the package.
+
+    **Module-scoped deliberately** (#664 review r2): it was first written inside
+    ``TestUncuratedButPriceableWarning``, which left the sibling classes that also reach
+    ``get_pricing`` mutating the real global -- and falsified the production comment claiming
+    the fixture keeps every such test order-independent.
+    """
+    monkeypatch.setattr(pricing, "_WARNED_UNCURATED", set())
+
+
+class TestUncuratedButPriceableWarning:
+    """#664 AC2': an id upstream CAN price but we have not curated must never be silently $0.
+
+    Pricing behavior is unchanged -- ``get_pricing`` still returns ``None`` (option (i),
+    D063(1)), so these tests assert the **signal**, never the number. That is what keeps the
+    fix cost-neutral and outside #646/#674's cost-attribution window.
+    """
+
+    def test_exact_upstream_record_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        # `claude-opus-4-1` is an exact upstream record, deliberately uncurated, and listed in
+        # the deny-canary -- so it is stable regardless of how the fable-5/mythos-5-2 curation
+        # ruling went (#664 architect review's fixture note).
+        assert pricing._resolve_rates("claude-opus-4-1") is not None, (
+            "precondition: upstream must be able to price this id, or the test would pass "
+            "as an 'absent upstream' case instead of exercising the warning"
+        )
+        with caplog.at_level(logging.DEBUG, logger="agentfluent.analytics.pricing"):
+            assert get_pricing("claude-opus-4-1") is None  # pricing unchanged
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        message = warnings[0].getMessage()
+        assert "claude-opus-4-1" in message
+        assert "not curated" in message
+        # AC2'(a) requires the warning to say what to DO about it, not merely that it happened.
+        assert "_KNOWN_MODELS" in message
+        assert "alias it onto a curated id" in message
+
+    def test_inexact_match_warns_and_names_the_matched_record(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # A future-dated snapshot of a known family: this resolves to the `claude-sonnet-5`
+        # record while `claude-sonnet-5-9` is absent. Do NOT generalize from that pair to a
+        # rule about which spellings resolve -- #664 did, twice, and was wrong both times.
+        # `TestUpstreamMatchModes` (tests/unit/test_genai_source.py) derives the real answer
+        # from the catalog; `claude-opus-4-19` and `claude-5-sonnet-9` both DO resolve.
+        probe = "claude-sonnet-5-20991231"
+        with caplog.at_level(logging.DEBUG, logger="agentfluent.analytics.pricing"):
+            assert get_pricing(probe) is None
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        message = warnings[0].getMessage()
+        assert probe in message
+        assert "claude-sonnet-5" in message
+        assert "inexact" in message
+        assert "NOT priced" in message
+
+    def test_absent_upstream_stays_at_debug(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.DEBUG, logger="agentfluent.analytics.pricing"):
+            assert get_pricing("claude-nonsense-7") is None
+        assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
+        assert [r for r in caplog.records if r.levelno == logging.DEBUG] != []
+
+    def test_curated_model_does_not_warn(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.DEBUG, logger="agentfluent.analytics.pricing"):
+            assert get_pricing("claude-sonnet-5") is not None
+        assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
+
+    @pytest.mark.parametrize(
+        "legacy_id",
+        [
+            "claude-3-5-sonnet",
+            "claude-3-opus-latest",
+            "claude-3-haiku",
+            "claude-3-sonnet",
+        ],
+    )
+    def test_legacy_ids_stay_silent(
+        self, legacy_id: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # AC2'(c), ratified 2026-11-13. EVERY param here is priceable upstream, asserted as a
+        # precondition, so each case proves the carve-out silenced a *priceable* id rather than
+        # passing as an 'absent upstream' case after some future pin bump.
+        #
+        # `claude-v1` and `claude-2` were deliberately REMOVED from this list (#664 review r1):
+        # both carry only `input_mtok`/`output_mtok` upstream, so `_resolve_rates` returns None
+        # and they take the absent/DEBUG path with or without the carve-out -- they asserted
+        # nothing about AC2'(c). `test_no_curated_id_is_a_legacy_generation` still covers them
+        # for the registry-exclusion direction.
+        assert pricing._resolve_rates(legacy_id) is not None, (
+            f"precondition: {legacy_id} must be priceable upstream for this test to "
+            "prove the legacy carve-out is what silenced it"
+        )
+        with caplog.at_level(logging.DEBUG, logger="agentfluent.analytics.pricing"):
+            assert get_pricing(legacy_id) is None
+        assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
+
+    def test_legacy_check_precedes_the_upstream_lookup(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # MECHANISM, not outcome (#664 acceptance gate, Class B survivor).
+        #
+        # `_warn_if_priceable_but_uncurated`'s docstring claims the legacy check runs BEFORE the
+        # upstream call, "so a legacy id costs no lookup, and so the carve-out cannot be defeated
+        # by a future pin that starts pricing one". The mutation pass moved the check to AFTER
+        # the lookup and nothing went red: every return value and every log LEVEL is preserved by
+        # that reorder, so no outcome-based assertion can see it. The ordering claim was prose
+        # with no guard.
+        #
+        # Observing the call itself is what pins it. If the check is ever reordered, a legacy id
+        # reaches the classifier and this fails -- which is also what keeps the "costs no lookup"
+        # half honest.
+        calls: list[str] = []
+
+        def _spy(model_ref: str, timestamp: object = None) -> tuple[str, str | None]:
+            calls.append(model_ref)
+            return "absent", None
+
+        monkeypatch.setattr(pricing, "classify_upstream_match", _spy)
+
+        assert get_pricing("claude-3-5-sonnet") is None
+        assert calls == [], (
+            "a legacy id reached classify_upstream_match -- the AC2'(c) carve-out no longer "
+            f"short-circuits before the upstream lookup (saw: {calls})"
+        )
+
+        # Control: a NON-legacy uncurated id must still reach it, or the assertion above would
+        # pass just as well against a function that never calls the classifier at all.
+        assert get_pricing("claude-opus-4-1") is None
+        assert calls == ["claude-opus-4-1"]
+
+    def test_warns_once_per_id_but_not_globally(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.DEBUG, logger="agentfluent.analytics.pricing"):
+            get_pricing("claude-opus-4-1")
+            get_pricing("claude-opus-4-1")
+            get_pricing("claude-opus-4-0")
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        # Two calls for one id produce ONE record (dedup), and a second distinct id still
+        # warns -- which is what proves the dedup is per-id and not a global latch.
+        assert len(warnings) == 2
+        assert {"claude-opus-4-1", "claude-opus-4-0"} == {
+            w.getMessage().split("'")[1] for w in warnings
+        }
+
+    def test_newly_curated_ids_are_priced_not_warned(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # AC1': both were uncurated-but-priceable before #664 and are now curated
+        # (D063(10)). They must price, and must NOT take the warning path.
+        with caplog.at_level(logging.DEBUG, logger="agentfluent.analytics.pricing"):
+            for model_id in ("claude-fable-5", "claude-mythos-5-2"):
+                assert get_pricing(model_id) is not None
+        assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
+
+
+class TestClassifyUpstreamMatch:
+    """#664: direct tests for the exact/inexact/absent classifier.
+
+    Added by code review r1, which found the classifier had **zero** direct tests despite its
+    docstring calling it "the single definition" that #688 and #669 are meant to call rather
+    than parsing log text. Every prior assertion about it was indirect, through
+    ``get_pricing``'s log output -- i.e. through the very surface the docstring says is not an
+    API.
+
+    **Which records accept a non-identical id is NOT characterized here** -- that fact is
+    derived from the catalog and asserted by ``TestUpstreamMatchModes`` in
+    tests/unit/test_genai_source.py. #664 described the mechanism in prose twice and got it
+    wrong both times, each time from a sample of ids, so the description was replaced by a
+    derivation. These cases pin the *classifier's* behavior on concrete ids; that class pins
+    the catalog-wide fact they are instances of.
+    """
+
+    @pytest.mark.parametrize(
+        ("model_ref", "expected_kind", "expected_match"),
+        [
+            # Exact upstream record, deliberately uncurated.
+            ("claude-opus-4-1", "exact", "claude-opus-4-1"),
+            # FAMILY-PREFIX inexact: no such model, yet upstream resolves it to the 4-1 record
+            # at $15/$75. This is the "prices a model that does not exist" hazard that D063(2)
+            # once recorded as refuted; it is live, and this case is the guard against the
+            # claim regressing into the prose again.
+            ("claude-opus-4-19", "inexact", "claude-opus-4-1"),
+            # Same hazard, landing on a CURATED record: `claude-sonnet-4-6` is in
+            # `_KNOWN_MODELS`, so a fabricated `-69` bump borrows a rate we vouch for while
+            # itself staying unpriced. Worth a case of its own -- the opus one above resolves
+            # onto an *uncurated* record, and only the gate keeps either from pricing.
+            ("claude-sonnet-4-69", "inexact", "claude-sonnet-4-6"),
+            # DATED-REGEX inexact: the 5.x records' own mode.
+            ("claude-sonnet-5-20991231", "inexact", "claude-sonnet-5"),
+            # A fabricated 5.x version bump really is absent -- the observation that was
+            # over-generalized. Keeping it pins the boundary between the two modes.
+            ("claude-sonnet-5-9", "absent", None),
+            ("claude-nonsense-7", "absent", None),
+            # Case variance must NOT read as a different record (review r1 defect B).
+            ("CLAUDE-OPUS-4-5", "exact", "claude-opus-4-5"),
+            ("Claude-Sonnet-5", "exact", "claude-sonnet-5"),
+            # Partial upstream coverage: `claude-2` holds an exact record but carries only
+            # input/output rates, so no full rate set can be built. This is the one branch
+            # unreachable through `get_pricing` (the legacy carve-out short-circuits first),
+            # so without this case deleting it would be undetectable.
+            ("claude-2", "absent", None),
+        ],
+    )
+    def test_classification(
+        self, model_ref: str, expected_kind: str, expected_match: str | None
+    ) -> None:
+        kind, matched = classify_upstream_match(model_ref)
+        assert kind == expected_kind
+        assert matched == expected_match
+
+    def test_inexact_family_prefix_really_would_have_priced_a_nonexistent_model(self) -> None:
+        # The teeth behind the `claude-opus-4-19` case above: assert not merely that the match
+        # is inexact, but that upstream would hand back a full, plausible rate set for an id
+        # that does not exist. That is what makes naive option (ii) unsafe (D063(2) corrected),
+        # and asserting only the `inexact` label would not establish it.
+        rates = pricing._resolve_rates("claude-opus-4-19")
+        assert rates is not None
+        assert (rates.input, rates.output) == (15.0, 75.0)
+        # ...and the gate still refuses to price it, which is option (i) holding.
+        assert get_pricing("claude-opus-4-19") is None

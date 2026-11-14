@@ -43,7 +43,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from agentfluent.analytics._genai_source import _resolve_rates
+from agentfluent.analytics._genai_source import _resolve_rates, classify_upstream_match
 
 logger = logging.getLogger(__name__)
 
@@ -145,9 +145,11 @@ class ModelPricing:
 # regress coverage. Prefix matching is #664's structural business, not this list's.
 #
 # NOTE (#661 architect review, Concern 2): this frozenset is consulted BEFORE upstream, so an id
-# missing here fails closed to None -> $0 at DEBUG even when genai-prices can price it. #674
-# cleared today's instances by curation; the structural defect itself is tracked in #664 -- do
-# not read the curation here as evidence that an absent id is unpriceable.
+# missing here still fails closed to None -> $0 even when genai-prices can price it. #664 made
+# that miss LOUD rather than silent -- see ``_warn_if_priceable_but_uncurated``, which logs it at
+# WARNING (DEBUG only for a legacy id or one upstream cannot price). The $0 itself is unchanged,
+# deliberately (option (i), D063(1)). #674 cleared the then-live instances by curation -- do not
+# read the curation here as evidence that an absent id is unpriceable.
 _KNOWN_MODELS: frozenset[str] = frozenset(
     {
         "claude-opus-5-5",
@@ -165,8 +167,38 @@ _KNOWN_MODELS: frozenset[str] = frozenset(
         "claude-haiku-4-5-20251001",
         "claude-fable-5-2",
         "claude-fable-5-1",
+        # Curated by #664 under the EXACT-RECORD-ONLY criterion (D063(10), maintainer ruling
+        # 2026-11-13). Both hold exact upstream records and have zero corpus rows. The earlier
+        # criterion also required "a reason to expect it in real data" and named these two as
+        # deliberately uncurated; that second conjunct was dropped because it applied D061(3)
+        # unevenly -- `claude-fable-5-2` has zero rows and was curated, so the gap read as a rule.
+        "claude-fable-5",
+        "claude-mythos-5-2",
     }
 )
+
+#: Legacy generations held SILENT on the uncurated-but-priceable path (#664 AC2'(c), ratified
+#: 2026-11-13). Upstream can still price several of these, so without the carve-out they would
+#: each emit a WARNING -- noise on archived sessions rather than a signal about today's lineup.
+#:
+#: ``test_no_curated_id_is_a_legacy_generation`` (tests/unit/test_pricing.py) imports this
+#: constant, so the registry prohibition and this carve-out cannot drift apart. Note that is a
+#: DIFFERENT test from the deny-canary ``test_upstream_catalog_not_leaked``, which keeps its own
+#: hard-coded id list on purpose and does not read this constant (#664 review r1 corrected an
+#: earlier version of this comment, which named the wrong test).
+#: It carries ``claude-instant`` as well, which the ratified AC2'(c) wording does not name: that
+#: prefix is inert at the current pin (``claude-instant-1`` resolves to no rates, so it takes the
+#: absent/DEBUG path regardless) and is listed to keep one definition rather than two. If a future
+#: pin starts pricing it, this constant -- not a second list -- is where that is decided.
+LEGACY_MODEL_PREFIXES: tuple[str, ...] = ("claude-v1", "claude-2", "claude-instant", "claude-3-")
+
+#: Canonical ids already warned about on the uncurated-but-priceable path, so the WARNING fires
+#: once per distinct id per process (#664 AC2'). Deliberately a plain set with no lock and no
+#: production reset API: nothing in ``src/`` uses threads, and a check-then-add race would only
+#: duplicate a log line. Tests isolate it by monkeypatching this binding -- see the autouse
+#: fixture in tests/unit/test_pricing.py -- which keeps them order-independent without adding a
+#: test-only surface to the package.
+_WARNED_UNCURATED: set[str] = set()
 
 # Documented local residual: model id -> ModelPricing for any model genai-prices lacks.
 # Empty as of genai-prices==0.2.3 (see _KNOWN_MODELS above): upstream holds an exact record for
@@ -212,6 +244,12 @@ _ALIASES: dict[str, str] = {
     "claude-haiku-5-5[1m]": "claude-haiku-5-5",
     "claude-fable-5-2[1m]": "claude-fable-5-2",
     "claude-fable-5-1[1m]": "claude-fable-5-1",
+    # #664: the two ids curated there get their `[1m]` forms too. Omitting them is the exact
+    # fail-closed-to-$0 shape this issue exists to remove. Like most `[1m]` keys here, these two
+    # are ABSENT upstream in `[1m]` form, so they take the DEBUG path where the uncurated-model
+    # WARNING cannot see them -- the alias is the only thing that makes them price.
+    "claude-fable-5[1m]": "claude-fable-5",
+    "claude-mythos-5-2[1m]": "claude-mythos-5-2",
 }
 
 # Sentinel model names emitted by Claude Code for synthetic/internal messages.
@@ -234,13 +272,65 @@ MODEL_SONNET = "claude-sonnet-4-6"
 MODEL_OPUS = "claude-opus-4-7"
 
 
+def _warn_if_priceable_but_uncurated(canonical: str, timestamp: datetime | None) -> None:
+    """Log the uncurated-model miss at the right level (#664).
+
+    ``_KNOWN_MODELS`` is consulted BEFORE upstream, so an id upstream *can* price still returns
+    ``None`` -> ``$0``. That is left unchanged deliberately -- option (i) in #664, D063(1): this
+    function changes only the **signal**, never the number, which is what keeps the fix
+    cost-neutral and out of #646/#674's cost-attribution window (D062(8), D057(10)).
+
+    Three outcomes, by ascending severity:
+
+    * **legacy id** -> DEBUG. Ratified carve-out (AC2'(c)); see ``LEGACY_MODEL_PREFIXES``.
+    * **upstream cannot price it** -> DEBUG. An id we never claimed to support and nobody can
+      price is not a defect in this registry. Disclosing the run-level consequence is #688's job.
+    * **upstream CAN price it** -> WARNING, once per id. This is the #664 defect: the allow-list
+      is the only thing zeroing a model whose rate was available all along.
+
+    Checked before the upstream call so a legacy id costs no lookup, and so the carve-out cannot
+    be defeated by a future pin that starts pricing one.
+    """
+    if canonical.startswith(LEGACY_MODEL_PREFIXES):
+        logger.debug("Legacy model '%s' -- deliberately not curated, no pricing", canonical)
+        return
+
+    kind, matched = classify_upstream_match(canonical, timestamp)
+    if kind == "absent":
+        logger.debug("Unknown model '%s' -- no pricing available", canonical)
+        return
+
+    if canonical in _WARNED_UNCURATED:
+        return
+    _WARNED_UNCURATED.add(canonical)
+
+    if kind == "exact":
+        logger.warning(
+            "Model '%s' is priceable upstream but is not curated -- it will contribute $0 to "
+            "every cost figure. Add it to _KNOWN_MODELS, or alias it onto a curated id.",
+            canonical,
+        )
+    else:
+        logger.warning(
+            "Model '%s' is not curated and is NOT priced: upstream matched a different record "
+            "('%s'), so the match is inexact and its rates are not assumed to apply. Curate "
+            "'%s' explicitly if that rate is correct for it.",
+            canonical,
+            matched,
+            canonical,
+        )
+
+
 def get_pricing(model: str, timestamp: datetime | None = None) -> ModelPricing | None:
     """Look up pricing for a model name.
 
     Resolves aliases first (short names, ``[1m]`` suffixes), then sources the rate
     upstream-first from genai-prices, falling back to the documented local residual.
-    Returns None and logs at DEBUG level if the model is unknown. The caller is expected
-    to skip synthetic sentinel values (see ``SYNTHETIC_MODELS``) before invoking this.
+    Returns None for an unknown model. **The log level depends on why it is unknown**
+    (#664, see ``_warn_if_priceable_but_uncurated``): WARNING when genai-prices *could* have
+    priced it and only our curation is missing, DEBUG for a legacy id or one upstream cannot
+    price either. The caller is expected to skip synthetic sentinel values (see
+    ``SYNTHETIC_MODELS``) before invoking this.
 
     **Raises** ``AttributeError`` if genai-prices has *deregistered* one of the required price
     keys, which breaks the rate binding for every model at once (see
@@ -253,7 +343,8 @@ def get_pricing(model: str, timestamp: datetime | None = None) -> ModelPricing |
     ``timestamp`` selects the base rate in effect on that date via genai-prices' dated
     constraints (#546); ``None``/omitted → the latest rate, preserving every existing
     caller. Note (#546 falsifier finding, re-confirmed at genai-prices==0.1.4 in #661 and again
-    at 0.2.3 in #674, across all fifteen curated ids): no model in
+    at 0.2.3 in #674, and again in #664 for the two ids curated there -- across all seventeen
+    curated ids): no model in
     ``_KNOWN_MODELS`` currently carries a dated *base-rate* change -- the only dated
     Anthropic constraints move the >200K context tier, which the adapter discards (see
     ``_genai_source._base_rate``) -- so a timestamp is presently date-invariant at base-rate
@@ -262,7 +353,7 @@ def get_pricing(model: str, timestamp: datetime | None = None) -> ModelPricing |
     """
     canonical = _ALIASES.get(model, model)
     if canonical not in _KNOWN_MODELS:
-        logger.debug("Unknown model '%s' -- no pricing available", model)
+        _warn_if_priceable_but_uncurated(canonical, timestamp)
         return None
 
     rates = _resolve_rates(canonical, timestamp)
@@ -287,8 +378,9 @@ def get_pricing(model: str, timestamp: datetime | None = None) -> ModelPricing |
     # stays at DEBUG -- an id we never claimed to support is not a defect.
     #
     # Note the limit of this signal: it would NOT have caught #661 itself. `claude-opus-5` was
-    # missing from `_KNOWN_MODELS`, so it exited at that DEBUG branch and never reached here.
-    # Curated-but-unpriceable is the case this covers; uncurated-but-priceable is #664.
+    # missing from `_KNOWN_MODELS`, so it exited at the uncurated branch and never reached here.
+    # Curated-but-unpriceable is the case this covers; uncurated-but-priceable is handled by
+    # `_warn_if_priceable_but_uncurated` (#664), which now warns rather than staying silent.
     logger.warning(
         "Known model '%s' has neither upstream nor residual pricing -- it will contribute $0 "
         "to every cost figure. Upstream coverage may have changed; check _KNOWN_MODELS and "
