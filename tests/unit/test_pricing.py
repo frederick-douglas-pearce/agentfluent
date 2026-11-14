@@ -614,6 +614,31 @@ class TestCurrentFamilyRegression:
         assert get_pricing(variant) is not None
         assert get_pricing(variant) == get_pricing(base)
 
+    def test_every_1m_alias_binds_to_its_own_base(self) -> None:
+        # MECHANISM, not outcome (#664 acceptance gate, Class B survivor).
+        #
+        # `test_1m_variants_resolve_to_base` asserts `get_pricing(variant) == get_pricing(base)`,
+        # which is an assertion about the resulting RATES. The mutation pass showed that is not
+        # sufficient: rebinding `claude-mythos-5-2[1m]` to `claude-fable-5-2` survived, because
+        # the two ids are locked at the IDENTICAL tuple (8.0, 40.0, 10.00, 0.20), so the wrong
+        # binding produces a byte-identical ModelPricing and the suite stays green. That guard
+        # passed by luck of the rate table rather than by construction -- and #674 hit the same
+        # shape, which is why `test_bare_fable_alias_resolves_to_the_pinned_generation` below
+        # observes WHICH target resolves.
+        #
+        # This observes the binding itself, so it is immune to two ids sharing a rate. Derived
+        # over `_ALIASES` rather than hand-listed, so a future alias is covered without an edit.
+        from agentfluent.analytics.pricing import _ALIASES
+
+        one_m = {k: v for k, v in _ALIASES.items() if k.endswith("[1m]")}
+        assert one_m, "no `[1m]` aliases found -- the registry shape changed"
+        mismatched = {k: v for k, v in one_m.items() if v != k.removesuffix("[1m]")}
+        assert mismatched == {}, (
+            f"`[1m]` alias(es) bound to the wrong base: {mismatched}. Each must map to its own "
+            "base id; a cross-binding is invisible to any rate comparison whenever the two ids "
+            "happen to share a rate."
+        )
+
     def test_bare_fable_alias_resolves_to_the_pinned_generation(self) -> None:
         # 7 corpus rows carry the bare `fable` id and priced at $0 before #674.
         #
@@ -880,6 +905,40 @@ class TestUncuratedButPriceableWarning:
         with caplog.at_level(logging.DEBUG, logger="agentfluent.analytics.pricing"):
             assert get_pricing(legacy_id) is None
         assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
+
+    def test_legacy_check_precedes_the_upstream_lookup(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # MECHANISM, not outcome (#664 acceptance gate, Class B survivor).
+        #
+        # `_warn_if_priceable_but_uncurated`'s docstring claims the legacy check runs BEFORE the
+        # upstream call, "so a legacy id costs no lookup, and so the carve-out cannot be defeated
+        # by a future pin that starts pricing one". The mutation pass moved the check to AFTER
+        # the lookup and nothing went red: every return value and every log LEVEL is preserved by
+        # that reorder, so no outcome-based assertion can see it. The ordering claim was prose
+        # with no guard.
+        #
+        # Observing the call itself is what pins it. If the check is ever reordered, a legacy id
+        # reaches the classifier and this fails -- which is also what keeps the "costs no lookup"
+        # half honest.
+        calls: list[str] = []
+
+        def _spy(model_ref: str, timestamp: object = None) -> tuple[str, str | None]:
+            calls.append(model_ref)
+            return "absent", None
+
+        monkeypatch.setattr(pricing, "classify_upstream_match", _spy)
+
+        assert get_pricing("claude-3-5-sonnet") is None
+        assert calls == [], (
+            "a legacy id reached classify_upstream_match -- the AC2'(c) carve-out no longer "
+            f"short-circuits before the upstream lookup (saw: {calls})"
+        )
+
+        # Control: a NON-legacy uncurated id must still reach it, or the assertion above would
+        # pass just as well against a function that never calls the classifier at all.
+        assert get_pricing("claude-opus-4-1") is None
+        assert calls == ["claude-opus-4-1"]
 
     def test_warns_once_per_id_but_not_globally(
         self, caplog: pytest.LogCaptureFixture
