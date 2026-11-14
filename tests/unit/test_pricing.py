@@ -626,8 +626,17 @@ class TestCurrentFamilyRegression:
         # shape, which is why `test_bare_fable_alias_resolves_to_the_pinned_generation` below
         # observes WHICH target resolves.
         #
-        # This observes the binding itself, so it is immune to two ids sharing a rate. Derived
-        # over `_ALIASES` rather than hand-listed, so a future alias is covered without an edit.
+        # This observes the binding itself, so it is immune to two ids sharing a rate, and being
+        # derived over `_ALIASES` it covers a future alias without an edit.
+        #
+        # Know what it does NOT cover, because it is a structural invariant over the mechanism's
+        # data table rather than an observation of which code path runs (#664 acceptance-gate
+        # re-check): it proves the table is self-consistent, not that alias resolution consults
+        # the table. Gut `canonical = _ALIASES.get(model, model)` in `get_pricing` and this test
+        # still passes against a perfectly tidy table. That half is pinned by
+        # `test_1m_variants_resolve_to_base` and the other alias-resolution tests in
+        # `TestGetPricing` -- verified: gutting that lookup fails eight of them. So the mechanism
+        # is pinned by the PAIR, and neither half is redundant.
         from agentfluent.analytics.pricing import _ALIASES
 
         one_m = {k: v for k, v in _ALIASES.items() if k.endswith("[1m]")}
