@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from rich.console import Console
 
 from agentfluent.agents.models import AgentInvocation
@@ -20,7 +21,12 @@ HAIKU = "claude-haiku-4-5-20251001"
 
 
 def _inv(
-    agent_type: str, description: str, *, rollup: int | None, spend: int | None,
+    agent_type: str,
+    description: str,
+    *,
+    rollup: int | None,
+    spend: int | None,
+    model: str | None = HAIKU,
 ) -> AgentInvocation:
     """``rollup`` is the proxy ``total_tokens``; ``spend`` the linked trace's usage
     (``None`` = no trace)."""
@@ -35,7 +41,7 @@ def _inv(
         inv.trace = SubagentTrace(
             agent_id=description,
             delegation_prompt="x",
-            model=HAIKU,
+            model=model,
             model_turns=4,
             usage=Usage(input_tokens=spend),
         )
@@ -109,3 +115,22 @@ def test_verbose_per_invocation_tokens_are_trace_spend() -> None:
     # Trace-missing invocation: tokens cell is "-".
     pm_c = [c.strip() for c in rows["pm-c"].split("│")]
     assert pm_c[3] == "-"
+
+
+@pytest.mark.parametrize("model", ["<synthetic>", None])
+def test_verbose_non_spend_trace_renders_unknown_not_its_usage(model: str | None) -> None:
+    # A linked trace that does not count as spend (``trace_counts_as_spend`` is
+    # False: model None, or a ``<synthetic>`` first assistant message) is excluded
+    # from agent spend, so its row must not show the trace's usage either -- the
+    # per-invocation column must agree with the agent table above it.
+    invocations = [
+        _inv("pm", "pm-a", rollup=5_111, spend=300_000),
+        _inv("pm", "ghost-a", rollup=6_444, spend=654_321, model=model),
+    ]
+    lines = _render(invocations, verbose=True)
+    ghost = next(line for line in lines if "ghost-a" in line)
+    assert "654,321" not in ghost
+    assert "6,444" not in ghost
+    assert [c.strip() for c in ghost.split("│")][3] == "-"
+    # And the agent table counts only the spend-covered invocation.
+    assert _cells(lines, "pm")[3] == "300,000"
