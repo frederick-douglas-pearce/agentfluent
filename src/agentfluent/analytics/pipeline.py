@@ -17,6 +17,7 @@ from agentfluent.analytics.agent_metrics import (
     AgentMetrics,
     AgentTypeMetrics,
     _recompute_turn_ratios,
+    agent_token_percentage,
     compute_agent_metrics,
 )
 from agentfluent.analytics.pricing import SYNTHETIC_MODELS
@@ -291,10 +292,12 @@ def analyze_session(
     subagent_rows = compute_subagent_token_metrics(subagent_traces, timestamp=price_date)
     token_metrics = fold_subagent_metrics_in(token_metrics, subagent_rows)
 
+    # Same `price_date` as the session fold above, so Σ per-agent cost reconciles
+    # with the subagent-origin `by_model` rows (#646 AC2/AC8).
     agent_metrics = compute_agent_metrics(
         invocations,
         session_total_tokens=token_metrics.total_tokens,
-        session_total_cost=token_metrics.total_cost,
+        timestamp=price_date,
     )
 
     # Selected once, then classified: both published fields (#592) come from
@@ -463,6 +466,10 @@ def _merge_agent_metrics(
                     total_active_duration_ms=m.total_active_duration_ms,
                     total_wallclock_ms_trace_linked=m.total_wallclock_ms_trace_linked,
                     active_duration_invocation_count=m.active_duration_invocation_count,
+                    spend_tokens=m.spend_tokens,
+                    spend_invocation_count=m.spend_invocation_count,
+                    priced_invocation_count=m.priced_invocation_count,
+                    priced_model_turns=m.priced_model_turns,
                 )
             else:
                 existing.invocation_count += m.invocation_count
@@ -477,9 +484,13 @@ def _merge_agent_metrics(
                 existing.active_duration_invocation_count += (
                     m.active_duration_invocation_count
                 )
+                existing.spend_tokens += m.spend_tokens
+                existing.spend_invocation_count += m.spend_invocation_count
+                existing.priced_invocation_count += m.priced_invocation_count
+                existing.priced_model_turns += m.priced_model_turns
 
-    # estimated_total_cost_usd is summed at each session's blended rate
-    # so the per-invocation average property reads correctly. Tool-use
+    # estimated_total_cost_usd and the spend/priced counts are plain sums: each
+    # session priced its own traces at its own price date (#646). Tool-use
     # and turn ratios have to be recomputed because the per-unit ratio
     # changes when invocations from different sessions merge.
     for m in merged.values():
@@ -492,21 +503,19 @@ def _merge_agent_metrics(
 
     total_invocations = sum(m.invocation_count for m in merged.values())
     total_agent_tokens = sum(m.total_tokens for m in merged.values())
+    total_agent_spend_tokens = sum(m.spend_tokens for m in merged.values())
     total_agent_duration = sum(m.total_duration_ms for m in merged.values())
     total_turns = sum(m.total_model_turns for m in merged.values())
     builtin_count = sum(m.invocation_count for m in merged.values() if m.is_builtin)
     custom_count = sum(m.invocation_count for m in merged.values() if not m.is_builtin)
 
-    agent_token_pct = (
-        round(total_agent_tokens / session_total_tokens * 100, 1)
-        if session_total_tokens > 0 and total_agent_tokens > 0
-        else 0.0
-    )
+    agent_token_pct = agent_token_percentage(total_agent_spend_tokens, session_total_tokens)
 
     return AgentMetrics(
         by_agent_type=merged,
         total_invocations=total_invocations,
         total_agent_tokens=total_agent_tokens,
+        total_agent_spend_tokens=total_agent_spend_tokens,
         total_agent_duration_ms=total_agent_duration,
         builtin_invocations=builtin_count,
         custom_invocations=custom_count,

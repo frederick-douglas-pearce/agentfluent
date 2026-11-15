@@ -1,10 +1,51 @@
 """Tests for per-agent execution metrics."""
 
+from datetime import UTC, datetime
+from typing import Any
+
 import pytest
 
 from agentfluent.agents.models import AgentInvocation
+from agentfluent.analytics import agent_metrics as agent_metrics_module
 from agentfluent.analytics.agent_metrics import compute_agent_metrics
+from agentfluent.analytics.pricing import SYNTHETIC_MODELS
+from agentfluent.core.session import Usage
 from agentfluent.traces.models import SubagentTrace
+
+HAIKU = "claude-haiku-4-5-20251001"  # $1 in / $5 out / $0.10 cache-read per MTok
+OPUS = "claude-opus-4-6"  # $5 in / $25 out / $0.50 cache-read per MTok
+UNPRICED = "claude-nonexistent-9"  # get_pricing -> None
+
+
+def _traced(
+    agent_type: str = "pm",
+    model: str | None = HAIKU,
+    *,
+    input_tokens: int = 100_000,
+    output_tokens: int = 20_000,
+    cache_read: int = 1_000_000,
+    model_turns: int = 5,
+    total_tokens: int | None = None,
+) -> AgentInvocation:
+    """An invocation with a linked trace carrying real per-turn usage (#646).
+
+    With the defaults: haiku -> $0.30, opus -> $1.50; spend 1,120,000 tokens.
+    ``total_tokens`` is the rollup proxy and defaults to absent, as on most
+    current invocations (D062(4)).
+    """
+    inv = _invocation(agent_type=agent_type, total_tokens=total_tokens)
+    inv.trace = SubagentTrace(
+        agent_id="a",
+        delegation_prompt="x",
+        model=model,
+        model_turns=model_turns,
+        usage=Usage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_input_tokens=cache_read,
+        ),
+    )
+    return inv
 
 
 def _invocation(
@@ -221,14 +262,24 @@ class TestActiveDuration:
 
 
 class TestAgentTokenPercentage:
-    def test_percentage_of_session(self) -> None:
+    """#646 AC5: the numerator is trace spend, never the rollup proxy."""
+
+    def test_percentage_from_trace_spend(self) -> None:
+        invocations = [_traced(total_tokens=5_000)]
+        metrics = compute_agent_metrics(invocations, session_total_tokens=2_240_000)
+        assert metrics.total_agent_spend_tokens == 1_120_000
+        assert metrics.total_agent_tokens == 5_000  # proxy unchanged
+        assert metrics.agent_token_percentage == 50.0
+
+    def test_rollup_without_trace_contributes_nothing(self) -> None:
         invocations = [_invocation(total_tokens=30000)]
         metrics = compute_agent_metrics(invocations, session_total_tokens=100000)
-        assert metrics.agent_token_percentage == 30.0
+        assert metrics.total_agent_tokens == 30000
+        assert metrics.total_agent_spend_tokens == 0
+        assert metrics.agent_token_percentage == 0.0
 
     def test_zero_session_tokens(self) -> None:
-        invocations = [_invocation(total_tokens=30000)]
-        metrics = compute_agent_metrics(invocations, session_total_tokens=0)
+        metrics = compute_agent_metrics([_traced()], session_total_tokens=0)
         assert metrics.agent_token_percentage == 0.0
 
     def test_no_agent_tokens(self) -> None:
@@ -267,71 +318,84 @@ class TestBuiltinVsCustom:
 
 
 class TestPerAgentCost:
-    """Cost is estimated via session-level blended per-token rate (#200)."""
+    """#646: cost prices each linked trace at its own model's rate (no blended rate)."""
 
-    def test_zero_cost_when_session_cost_zero(self) -> None:
+    def test_trace_missing_adds_no_spend_and_no_cost(self) -> None:
         invocations = [_invocation(total_tokens=10000)]
-        metrics = compute_agent_metrics(invocations, session_total_tokens=10000)
-        pm = metrics.by_agent_type["pm"]
+        pm = compute_agent_metrics(invocations, session_total_tokens=10000).by_agent_type["pm"]
         assert pm.estimated_total_cost_usd == 0.0
+        assert pm.spend_tokens == 0
+        assert pm.spend_invocation_count == 0
+        assert pm.priced_invocation_count == 0
         assert pm.estimated_avg_cost_per_invocation_usd is None
+        assert pm.avg_spend_tokens_per_invocation is None
 
-    def test_blended_rate_proportional(self) -> None:
-        # Session: 100k tokens, $1.00 → blended rate $0.00001/token.
-        # Agent gets 30k tokens → $0.30; 1 invocation → avg $0.30/inv.
-        invocations = [_invocation(total_tokens=30000)]
-        metrics = compute_agent_metrics(
-            invocations,
-            session_total_tokens=100000,
-            session_total_cost=1.0,
-        )
-        pm = metrics.by_agent_type["pm"]
-        assert pm.estimated_total_cost_usd == pytest.approx(0.30)
+    def test_each_agent_priced_at_its_trace_model_rate(self) -> None:
+        # The blended-rate defect: a haiku agent in an opus-heavy session was
+        # priced at the session's average rate. Now each trace prices itself.
+        invocations = [
+            _traced(agent_type="summarizer", model=HAIKU),
+            _traced(agent_type="architect", model=OPUS),
+        ]
+        metrics = compute_agent_metrics(invocations, session_total_tokens=10_000_000)
+        assert metrics.by_agent_type["summarizer"].estimated_total_cost_usd == pytest.approx(0.30)
+        assert metrics.by_agent_type["architect"].estimated_total_cost_usd == pytest.approx(1.50)
+
+    def test_timestamp_forwarded_to_price_trace(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        seen: list[Any] = []
+
+        def fake_price_trace(trace: SubagentTrace, *, timestamp: Any = None) -> float:
+            seen.append(timestamp)
+            return 1.0
+
+        monkeypatch.setattr(agent_metrics_module, "price_trace", fake_price_trace)
+        when = datetime(2026, 1, 2, tzinfo=UTC)
+        compute_agent_metrics([_traced()], timestamp=when)
+        assert seen == [when]
+
+    def test_cost_averages_divide_by_priced_coverage_only(self) -> None:
+        # Two priced haiku traces ($0.30 each), one unpriced-model trace, one
+        # trace-missing invocation: the unpriced trace counts as spend (tokens)
+        # but must not dilute the cost averages (#646 AC6).
+        invocations = [
+            _traced(model=HAIKU, model_turns=5),
+            _traced(model=HAIKU, model_turns=5),
+            _traced(model=UNPRICED, model_turns=10),
+            _invocation(total_tokens=10000),
+        ]
+        pm = compute_agent_metrics(invocations).by_agent_type["pm"]
+        assert pm.invocation_count == 4
+        assert pm.spend_invocation_count == 3
+        assert pm.priced_invocation_count == 2
+        assert pm.priced_model_turns == 10
+        assert pm.spend_tokens == 3 * 1_120_000
+        assert pm.estimated_total_cost_usd == pytest.approx(0.60)
         assert pm.estimated_avg_cost_per_invocation_usd == pytest.approx(0.30)
+        assert pm.estimated_avg_cost_per_turn_usd == pytest.approx(0.06)
+        assert pm.avg_spend_tokens_per_invocation == pytest.approx(1_120_000)
 
-    def test_avg_cost_per_invocation(self) -> None:
-        # Two invocations, total 50k tokens of session's 100k @ $1.00.
-        invocations = [
-            _invocation(total_tokens=20000),
-            _invocation(total_tokens=30000),
-        ]
-        metrics = compute_agent_metrics(
-            invocations,
-            session_total_tokens=100000,
-            session_total_cost=1.0,
-        )
-        pm = metrics.by_agent_type["pm"]
-        assert pm.estimated_total_cost_usd == pytest.approx(0.50)
-        assert pm.estimated_avg_cost_per_invocation_usd == pytest.approx(0.25)
-
-    def test_zero_tokens_no_cost(self) -> None:
-        invocations = [_invocation(total_tokens=None)]
-        metrics = compute_agent_metrics(
-            invocations,
-            session_total_tokens=100000,
-            session_total_cost=1.0,
-        )
-        pm = metrics.by_agent_type["pm"]
+    @pytest.mark.parametrize("model", [None, next(iter(SYNTHETIC_MODELS))])
+    def test_non_spend_trace_excluded(self, model: str | None) -> None:
+        pm = compute_agent_metrics([_traced(model=model)]).by_agent_type["pm"]
+        assert pm.spend_tokens == 0
+        assert pm.spend_invocation_count == 0
         assert pm.estimated_total_cost_usd == 0.0
-        assert pm.estimated_avg_cost_per_invocation_usd is None
 
-    def test_proportional_split_across_agent_types(self) -> None:
-        # pm has 30k of 100k tokens, Explore has 70k → cost split 30/70.
-        invocations = [
-            _invocation(agent_type="pm", total_tokens=30000),
-            _invocation(agent_type="Explore", total_tokens=70000),
-        ]
-        metrics = compute_agent_metrics(
-            invocations,
-            session_total_tokens=100000,
-            session_total_cost=1.0,
-        )
-        pm = metrics.by_agent_type["pm"]
-        explore = metrics.by_agent_type["explore"]
-        assert pm.estimated_total_cost_usd == pytest.approx(0.30)
-        assert explore.estimated_total_cost_usd == pytest.approx(0.70)
-        # Cost preserves the input/output dollar total.
-        assert pm.estimated_total_cost_usd + explore.estimated_total_cost_usd == pytest.approx(1.0)
+    def test_total_tokens_unchanged_by_trace(self) -> None:
+        # AC3: the rollup proxy stays byte-identical when a trace is linked.
+        pm = compute_agent_metrics([_traced(total_tokens=78_006)]).by_agent_type["pm"]
+        assert pm.total_tokens == 78_006
+        assert pm.spend_tokens == 1_120_000
+
+    def test_no_blended_rate_remains(self) -> None:
+        import inspect
+
+        source = inspect.getsource(agent_metrics_module)
+        assert "blended_rate" not in source
+        assert "get_pricing" not in source
+        assert "compute_cost" not in source
 
 
 class TestModelTurnRollup:
@@ -368,14 +432,12 @@ class TestModelTurnRollup:
         assert pm.avg_tool_calls_per_turn == 4.0
 
     def test_tokens_and_cost_per_turn(self) -> None:
-        # 10k tokens / 5 turns -> 2000 tokens/turn. Session 10k @ $1.00
-        # blended -> agent cost $1.00 / 5 turns -> $0.20/turn.
-        invocations = [_invocation(total_tokens=10000, tool_uses=5, model_turns=5)]
-        pm = compute_agent_metrics(
-            invocations, session_total_tokens=10000, session_total_cost=1.0,
-        ).by_agent_type["pm"]
-        assert pm.avg_tokens_per_turn == 2000.0
-        assert pm.estimated_avg_cost_per_turn_usd == pytest.approx(0.20)
+        # Spend 1,120,000 tokens / 5 turns -> 224,000 tokens/turn; haiku trace
+        # $0.30 / 5 turns -> $0.06/turn. Both over the trace (#646 AC6).
+        invocations = [_traced(model_turns=5, total_tokens=10000)]
+        pm = compute_agent_metrics(invocations).by_agent_type["pm"]
+        assert pm.avg_tokens_per_turn == 224_000.0
+        assert pm.estimated_avg_cost_per_turn_usd == pytest.approx(0.06)
 
     def test_zero_turn_trace_guards_per_turn_ratios(self) -> None:
         # Trace exists but has 0 assistant messages: invocations_with_turns

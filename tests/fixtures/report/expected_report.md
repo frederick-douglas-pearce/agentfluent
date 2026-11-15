@@ -22,9 +22,9 @@
 
 | Agent Type | Count | Tokens | Avg Tokens/Call | Avg Duration/Call |
 | :--- | ---: | ---: | ---: | ---: |
-| Explore (builtin) | 8 | 42,000 | 5,250 | ~40.0s* |
-| pm | 6 | 78,000 | 13,000 | **15.0s (85.0s wall)** |
-| tester | 3 | 24,000 | 8,000 | 46.7s |
+| Explore (builtin) | 8 | 0 | — | ~40.0s* |
+| pm | 6 | 1,560,000 | 260,000 | **15.0s (85.0s wall)** |
+| tester | 3 | 480,000 | 160,000 | 46.7s |
 | **Total** | **17** |  |  |  |
 
 \* Duration estimated from wall-clock; no subagent trace available (may include user-wait time).

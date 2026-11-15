@@ -61,6 +61,8 @@ def _data(**overrides: Any) -> dict[str, Any]:
                     "is_builtin": False,
                     "invocation_count": 4,
                     "total_tokens": 12000,
+                    "spend_tokens": 48_000,
+                    "spend_invocation_count": 4,
                     "total_tool_uses": 20,
                     "total_duration_ms": 60_000,
                     # All 4 trace-linked, heavily idle-inflated: 2.0s
@@ -78,6 +80,7 @@ def _data(**overrides: Any) -> dict[str, Any]:
                     "total_tool_uses": 8,
                     "total_duration_ms": 15_000,
                     # No active fields -> wall-only fallback (unreliable).
+                    # No spend fields -> an envelope predating #646.
                 },
             },
             "total_invocations": 6,
@@ -174,7 +177,8 @@ class TestRenderAgentMetrics:
         assert "## Agent Metrics" in out
         assert "pm" in out
         assert "Explore (builtin)" in out
-        assert "12,000" in out
+        # Tokens / Avg Tokens/Call are trace spend (#646 AC11): 48,000 over 4.
+        assert "| pm | 4 | 48,000 | 12,000 |" in out
         # Per-call active (wall) duration, bolded because the wall/active
         # ratio (7.5x) crosses the interactive-pattern highlight (#480).
         assert "**2.0s (15.0s wall)**" in out
@@ -183,6 +187,19 @@ class TestRenderAgentMetrics:
         assert "no subagent trace available" in out
         # Footer line with agent token share.
         assert "42.5%" in out
+
+    def test_tokens_columns_are_spend_not_rollup_proxy(self) -> None:
+        # #646 AC11: the rollup ``total_tokens`` (12,000 for pm) never renders;
+        # an envelope without ``spend_tokens`` (explore here) shows "—" in both
+        # token columns rather than falling back to the proxy.
+        out = render_agent_metrics(_data())
+        pm_row = next(line for line in out.splitlines() if line.startswith("| pm |"))
+        explore_row = next(
+            line for line in out.splitlines() if line.startswith("| Explore (builtin) |")
+        )
+        assert "| 48,000 | 12,000 |" in pm_row
+        assert explore_row.startswith("| Explore (builtin) | 2 | — | — |")
+        assert "5,000" not in out
 
     def test_partial_coverage_marks_cell_and_footnote(self) -> None:
         d = _data()

@@ -64,26 +64,25 @@ class AgentInvocation(BaseModel):
 
     # From tool_result metadata (may be None if no metadata or agent was interrupted)
     total_tokens: int | None = None
-    """Raw ``toolUseResult.totalTokens`` for this invocation. **Two facts a
-    consumer must know before aggregating (#595, D056):**
+    """Raw ``toolUseResult.totalTokens`` for this invocation -- **a context-size
+    proxy, not spend.** Three facts a consumer must know before aggregating:
 
-    1. **It excludes child agents.** A delegating agent's ``totalTokens`` does
-       not contain the tokens of agents it spawned, so summing an invocation
-       alongside its descendants does not double-count.
-    2. **It is not cumulative spend.** It equals the agent's *final assistant
-       turn* usage (``input + output + cache_creation + cache_read``), not the
-       sum over its turns. Measured across 683 rollups: 575 (84%) match the
-       final turn exactly, **0 match the sum of turns**, and the remainder sit
-       within ~1-3% of the final turn while running 10-40x below the sum.
-       It is a *final-turn context-size proxy* -- neither tokens billed nor
-       tokens processed -- because every turn re-reports the whole context it
-       was given, so summing turns counts the same prefix repeatedly.
+    1. **The rule (D057(1)).** It equals the sum of the four components
+       (``input + output + cache_creation + cache_read``) of the sibling
+       ``toolUseResult.usage`` object -- deterministic, exact on every measured
+       rollup. That ``usage`` is a single-turn snapshot (usually the final turn),
+       so this is a *context-size* figure: neither tokens billed nor tokens
+       processed, because every turn re-reports the whole context it was given.
+       (D056(B)'s "84% match the final turn" was a consequence of this rule, not
+       the rule.)
+    2. **It excludes child agents** (#595): a delegating agent's ``totalTokens``
+       does not contain the tokens of agents it spawned.
+    3. **It is increasingly absent.** The rollup block is missing on most current
+       invocations (D062(4)); ``None`` then.
 
-    Fact 2 means summing this field across invocations does not yield token
-    spend, which is a pre-existing defect in several aggregates rather than
-    anything #595 introduced; see D056 and the issue it points to. The name is
-    retained under D029 (it has shipped) -- prefer a subagent trace's per-turn
-    ``usage`` when you need actual spend."""
+    Retained unchanged under D029 (it has shipped). For spend use the linked
+    trace's deduplicated per-turn ``trace.usage`` -- what per-agent spend and cost
+    are built from (#646, ``AgentTypeMetrics.spend_tokens``)."""
 
     tool_uses: int | None = None
     duration_ms: int | None = None

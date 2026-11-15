@@ -228,11 +228,10 @@ def format_analysis_table(
                 if m.avg_turns_per_invocation is not None
                 else "-"
             )
-            avg_tok = (
-                format_tokens(int(m.avg_tokens_per_invocation))
-                if m.avg_tokens_per_invocation
-                else "-"
-            )
+            # Tokens/Avg are trace spend (#646 AC11), matching the
+            # spend-based "Agent token %" row below.
+            avg_spend = m.avg_spend_tokens_per_invocation
+            avg_tok = format_tokens(int(avg_spend)) if avg_spend is not None else "-"
             cell = format_agent_duration_cell(
                 total_duration_ms=m.total_duration_ms,
                 invocation_count=m.invocation_count,
@@ -247,7 +246,7 @@ def format_analysis_table(
                 label.strip(),
                 str(m.invocation_count),
                 avg_turns,
-                format_tokens(m.total_tokens),
+                format_tokens(m.spend_tokens),
                 avg_tok,
                 duration,
             )

@@ -8,8 +8,8 @@ Offload -> Footer.
 
 Renderers receive a dict, not a hydrated model — so ``@property``
 accessors (``TokenMetrics.total_tokens``,
-``AgentTypeMetrics.avg_tokens_per_invocation``) aren't in ``data``;
-the ``_total_tokens`` / ``_avg_tokens_per_invocation`` helpers derive
+``AgentTypeMetrics.avg_spend_tokens_per_invocation``) aren't in ``data``;
+the ``_total_tokens`` / ``_avg_spend_tokens_per_invocation`` helpers derive
 them.
 """
 
@@ -50,14 +50,15 @@ def _total_tokens(row: dict[str, Any]) -> int:
     )
 
 
-def _avg_tokens_per_invocation(row: dict[str, Any]) -> float | None:
-    """Mirror ``AgentTypeMetrics.avg_tokens_per_invocation`` (a property
-    not serialized by ``model_dump``)."""
-    count = row.get("invocation_count", 0)
-    tokens = row.get("total_tokens", 0)
-    if count > 0 and tokens > 0:
-        return float(tokens) / float(count)
-    return None
+def _avg_spend_tokens_per_invocation(row: dict[str, Any]) -> float | None:
+    """Mirror ``AgentTypeMetrics.avg_spend_tokens_per_invocation`` (a property
+    not serialized by ``model_dump``). ``None`` when no invocation contributed
+    trace spend, or when the envelope predates ``spend_tokens`` (#646)."""
+    count = row.get("spend_invocation_count", 0)
+    tokens = row.get("spend_tokens")
+    if tokens is None or count <= 0:
+        return None
+    return float(tokens) / float(count)
 
 
 def _md_table(
@@ -188,7 +189,10 @@ def render_agent_metrics(data: dict[str, Any]) -> str:
         agent_type = m.get("agent_type", "")
         if m.get("is_builtin"):
             agent_type = f"{agent_type} (builtin)"
-        avg = _avg_tokens_per_invocation(m)
+        # Tokens/Avg are trace spend (#646 AC11), matching the spend-based
+        # "Agent token share" below. An envelope without ``spend_tokens`` shows
+        # "—", never the ``total_tokens`` rollup proxy.
+        avg = _avg_spend_tokens_per_invocation(m)
         avg_label = format_tokens(int(avg)) if avg is not None else "—"
         cell = format_agent_duration_cell(
             total_duration_ms=m.get("total_duration_ms", 0),
@@ -205,7 +209,7 @@ def render_agent_metrics(data: dict[str, Any]) -> str:
         rows.append([
             agent_type,
             str(m.get("invocation_count", 0)),
-            format_tokens(m.get("total_tokens", 0)),
+            format_tokens(m["spend_tokens"]) if "spend_tokens" in m else "—",
             avg_label,
             dur,
         ])
