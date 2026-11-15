@@ -15,6 +15,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
+from agentfluent.analytics.tokens import trace_counts_as_spend
 from agentfluent.cli.formatters.helpers import (
     CONFIDENCE_COLORS,
     GLOBAL_AGENT_LABEL,
@@ -246,7 +247,8 @@ def format_analysis_table(
                 label.strip(),
                 str(m.invocation_count),
                 avg_turns,
-                format_tokens(m.spend_tokens),
+                # No spend coverage renders "-" (unknown), not a measured 0.
+                format_tokens(m.spend_tokens) if m.spend_invocation_count > 0 else "-",
                 avg_tok,
                 duration,
             )
@@ -310,7 +312,14 @@ def format_analysis_table(
         any_unreliable = False
         for s in result.sessions:
             for inv in s.invocations:
-                tokens = format_tokens(inv.total_tokens) if inv.total_tokens else "-"
+                # Trace spend, matching the agent table above (#646 AC11);
+                # "-" when no trace counts as spend (never the rollup proxy).
+                trace = inv.trace
+                tokens = (
+                    format_tokens(trace.usage.total_tokens)
+                    if trace is not None and trace_counts_as_spend(trace)
+                    else "-"
+                )
                 # None (no trace) and 0 turns both render "-": a linked
                 # trace always has >= 1 assistant message, so 0 only
                 # occurs for empty/degenerate traces where "-" is apt.

@@ -60,9 +60,10 @@ def _data(**overrides: Any) -> dict[str, Any]:
                     "agent_type": "pm",
                     "is_builtin": False,
                     "invocation_count": 4,
-                    "total_tokens": 12000,
+                    "total_tokens": 7_777,
                     "spend_tokens": 48_000,
-                    "spend_invocation_count": 4,
+                    # 3 of 4 spend-covered: Avg = 48,000 / 3, not / 4.
+                    "spend_invocation_count": 3,
                     "total_tool_uses": 20,
                     "total_duration_ms": 60_000,
                     # All 4 trace-linked, heavily idle-inflated: 2.0s
@@ -177,8 +178,9 @@ class TestRenderAgentMetrics:
         assert "## Agent Metrics" in out
         assert "pm" in out
         assert "Explore (builtin)" in out
-        # Tokens / Avg Tokens/Call are trace spend (#646 AC11): 48,000 over 4.
-        assert "| pm | 4 | 48,000 | 12,000 |" in out
+        # Tokens / Avg Tokens/Call are trace spend (#646 AC11): 48,000 over the
+        # 3 spend-covered invocations.
+        assert "| pm | 4 | 48,000 | 16,000 |" in out
         # Per-call active (wall) duration, bolded because the wall/active
         # ratio (7.5x) crosses the interactive-pattern highlight (#480).
         assert "**2.0s (15.0s wall)**" in out
@@ -189,17 +191,30 @@ class TestRenderAgentMetrics:
         assert "42.5%" in out
 
     def test_tokens_columns_are_spend_not_rollup_proxy(self) -> None:
-        # #646 AC11: the rollup ``total_tokens`` (12,000 for pm) never renders;
-        # an envelope without ``spend_tokens`` (explore here) shows "—" in both
-        # token columns rather than falling back to the proxy.
+        # #646 AC11: the rollup ``total_tokens`` (7,777 for pm, 5,000 for explore)
+        # never renders; an envelope without ``spend_tokens`` (explore here) shows
+        # "—" in both token columns rather than falling back to the proxy.
         out = render_agent_metrics(_data())
         pm_row = next(line for line in out.splitlines() if line.startswith("| pm |"))
         explore_row = next(
             line for line in out.splitlines() if line.startswith("| Explore (builtin) |")
         )
-        assert "| 48,000 | 12,000 |" in pm_row
+        assert "| 48,000 | 16,000 |" in pm_row
         assert explore_row.startswith("| Explore (builtin) | 2 | — | — |")
+        assert "7,777" not in out
         assert "5,000" not in out
+
+    def test_zero_spend_coverage_renders_unknown_not_zero(self) -> None:
+        # Spend fields present but no invocation covered: "—", not a measured 0.
+        d = _data()
+        d["agent_metrics"]["by_agent_type"]["explore"].update(
+            {"spend_tokens": 0, "spend_invocation_count": 0},
+        )
+        out = render_agent_metrics(d)
+        explore_row = next(
+            line for line in out.splitlines() if line.startswith("| Explore (builtin) |")
+        )
+        assert explore_row.startswith("| Explore (builtin) | 2 | — | — |")
 
     def test_partial_coverage_marks_cell_and_footnote(self) -> None:
         d = _data()

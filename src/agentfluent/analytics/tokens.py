@@ -122,11 +122,13 @@ def _cost_of(
     **Linearity assumption.** Pricing is linear in tokens today (base tier only -- the
     upstream adapter discards context tiers -- and no caller passes request multipliers
     or surcharges), so pricing an aggregate equals summing per-trace prices up to float
-    rounding. Subagent rows are nonetheless priced per trace and summed
+    rounding. Subagent rows are priced per trace and summed
     (``compute_subagent_token_metrics``), so per-agent cost reconciles with the session
-    fold *by construction*. The tripwire for any change that breaks linearity -- tiered
-    context pricing (#682), per-request multipliers or surcharges (#537-#539) -- is
-    ``tests/unit/test_pipeline.py::TestAgentSpendReconciliation``.
+    fold *by construction*; ``tests/unit/test_pipeline.py::TestAgentSpendReconciliation``
+    pins that the two share this one path. **No test guards linearity itself**: a
+    non-linear change here moves both sides identically. Per-request levers -- context
+    tiers (#682), multipliers or surcharges (#537-#539) -- also need *per-request*
+    usage, which a trace's aggregated ``usage`` does not carry; #682 owns that.
     """
     pricing = get_pricing(breakdown.model, timestamp)
     if pricing is None:

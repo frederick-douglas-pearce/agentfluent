@@ -189,9 +189,12 @@ def render_agent_metrics(data: dict[str, Any]) -> str:
         agent_type = m.get("agent_type", "")
         if m.get("is_builtin"):
             agent_type = f"{agent_type} (builtin)"
-        # Tokens/Avg are trace spend (#646 AC11), matching the spend-based
-        # "Agent token share" below. An envelope without ``spend_tokens`` shows
-        # "—", never the ``total_tokens`` rollup proxy.
+        # Tokens/Avg are trace spend (#646 AC11). For an envelope written after
+        # #646 they match the spend-based "Agent token share" below; an older
+        # saved envelope's share is still the rollup-proxy figure. No spend
+        # coverage (or no ``spend_tokens`` key) renders "—" -- unknown, never
+        # a measured 0 and never the ``total_tokens`` proxy.
+        has_spend = m.get("spend_invocation_count", 0) > 0 and "spend_tokens" in m
         avg = _avg_spend_tokens_per_invocation(m)
         avg_label = format_tokens(int(avg)) if avg is not None else "—"
         cell = format_agent_duration_cell(
@@ -209,7 +212,7 @@ def render_agent_metrics(data: dict[str, Any]) -> str:
         rows.append([
             agent_type,
             str(m.get("invocation_count", 0)),
-            format_tokens(m["spend_tokens"]) if "spend_tokens" in m else "—",
+            format_tokens(m["spend_tokens"]) if has_spend else "—",
             avg_label,
             dur,
         ])

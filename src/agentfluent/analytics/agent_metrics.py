@@ -35,11 +35,13 @@ def _recompute_turn_ratios(metrics: AgentTypeMetrics) -> None:
     the per-turn ratios are guarded on ``total_model_turns`` (0 turns ->
     None, division-by-zero guard).
 
-    Coverage-matched denominators (#646 AC6): ``avg_tokens_per_turn`` divides
-    trace spend by trace turns (both over trace-linked invocations; the only
-    difference is a model-less trace, which has no assistant turns), and the
-    per-turn cost divides priced cost by ``priced_model_turns`` so an unpriced
-    model never dilutes it.
+    Denominators (#646 AC6): the per-turn cost divides priced cost by
+    ``priced_model_turns``, so an unpriced model never dilutes it.
+    ``avg_tokens_per_turn`` divides trace spend by ``total_model_turns``, which
+    is **not** fully coverage-matched: a trace excluded from spend (model
+    ``None``, or a ``<synthetic>`` first assistant message) still contributes
+    its real turns to ``total_model_turns``, diluting the ratio. That is a
+    parser defect, tracked in #692 (latent: no local trace has the shape).
     """
     if metrics.invocations_with_turns > 0:
         metrics.avg_turns_per_invocation = (
@@ -73,9 +75,13 @@ class AgentTypeMetrics:
     total_duration_ms: int = 0
     estimated_total_cost_usd: float = 0.0
     """Σ ``price_trace`` over this type's priced trace-linked invocations, each at
-    its trace model's rate and the session price date (#646). An estimate only in
-    the sense every client-side cost is (D059)."""
+    its trace model's rate and the session price date (#646). Not reconciled
+    against the Usage & Cost Admin API; validated by internal cross-checks only
+    (D059)."""
     avg_tokens_per_tool_use: float | None = None
+    """``total_tokens / total_tool_uses`` -- built on the rollup context-size
+    proxy, **not** spend (D057(1)); see ``total_tokens``. Its units differ from
+    the spend-based ``avg_tokens_per_turn``."""
     avg_duration_per_tool_use: float | None = None
 
     # Active-duration aggregates (#480). ``total_duration_ms`` above is
@@ -146,7 +152,7 @@ class AgentTypeMetrics:
     # is a stdlib dataclass nested in a Pydantic envelope, and Pydantic
     # serializes dataclass *fields* but not their properties. Computed in
     # compute_agent_metrics() / recomputed in _merge_agent_metrics(),
-    # mirroring avg_tokens_per_tool_use above.
+    # the same stored-field pattern as avg_tokens_per_tool_use above.
     avg_turns_per_invocation: float | None = None
     avg_tool_calls_per_turn: float | None = None
     avg_tokens_per_turn: float | None = None
@@ -154,6 +160,9 @@ class AgentTypeMetrics:
 
     @property
     def avg_tokens_per_invocation(self) -> float | None:
+        """``total_tokens / invocation_count`` -- the rollup context-size proxy,
+        **not** spend (D057(1)), averaged over all invocations including those
+        with no rollup. For spend use ``avg_spend_tokens_per_invocation``."""
         if self.invocation_count > 0 and self.total_tokens > 0:
             return self.total_tokens / self.invocation_count
         return None

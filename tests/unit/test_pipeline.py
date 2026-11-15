@@ -336,9 +336,11 @@ def _per_agent(am: AgentMetrics) -> tuple[float, int]:
 class TestAgentSpendReconciliation:
     """#646 AC8: Σ per-agent cost/spend == the subagent-origin rows of the session fold.
 
-    This is the internal stand-in for the blocked Admin-API reconciliation (D059), and
-    the tripwire for anything that breaks pricing linearity (#682 tiers, #537-#539
-    per-request levers -- see ``analytics.tokens._cost_of``).
+    This is the internal stand-in for the blocked Admin-API reconciliation (D059). It
+    pins that per-agent attribution and the session fold use the same inclusion
+    predicate and the same pricing path (``price_trace``). It is **not** a linearity
+    guard: a non-linear change inside that shared path moves both sides identically
+    (see ``analytics.tokens._cost_of``; #682).
 
     **Scope: the depth-1 fold set.** Both sides cover only the depth-1 traces that
     ``analyze_session``'s non-folding gate admits. **#648 AC2** (folding depth->=2 spend
@@ -397,18 +399,49 @@ class TestAgentSpendReconciliation:
         fold_cost, fold_tokens = _subagent_origin(result.token_metrics)
         agent_cost, agent_tokens = _per_agent(result.agent_metrics)
         assert fold_tokens > 0
+        assert fold_cost > 0  # not a vacuous 0 == 0 (fixture model is priced)
         assert agent_cost == pytest.approx(fold_cost)
         assert agent_tokens == fold_tokens
 
-    @pytest.mark.parametrize("agent_filter", ["worker", "no-such-agent"])
-    def test_agent_filter_reconciles(self, agent_filter: str) -> None:
+    # "worker" is the nested fixture's only agent (no-op filter); "no-such-agent" is
+    # the discriminating case.
+    @pytest.mark.parametrize(
+        ("agent_filter", "expect_spend"), [("worker", True), ("no-such-agent", False)],
+    )
+    def test_agent_filter_reconciles(self, agent_filter: str, expect_spend: bool) -> None:
         # ``--agent`` filters invocations before linking and folding, so both sides
         # see the same filtered set.
         result = analyze_session(_NESTED_MAIN, agent_filter=agent_filter)
         fold_cost, fold_tokens = _subagent_origin(result.token_metrics)
         agent_cost, agent_tokens = _per_agent(result.agent_metrics)
+        assert (fold_cost > 0) is expect_spend
         assert agent_cost == pytest.approx(fold_cost)
         assert agent_tokens == fold_tokens
+
+    def test_session_price_date_threaded_into_agent_metrics(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # AC2 mechanism: ``analyze_session`` hands ``compute_agent_metrics`` the same
+        # price date it priced the session fold at. Base rates are date-invariant
+        # today, so no total could observe a dropped ``timestamp=`` -- only the call can.
+        from agentfluent.analytics import pipeline as pipeline_mod
+        from agentfluent.analytics.tokens import session_price_timestamp
+        from agentfluent.core.parser import parse_session
+
+        captured: list[dict[str, Any]] = []
+        real = pipeline_mod.compute_agent_metrics
+
+        def spy(invocations, *args, **kwargs):  # type: ignore[no-untyped-def]
+            captured.append(kwargs)
+            return real(invocations, *args, **kwargs)
+
+        monkeypatch.setattr(pipeline_mod, "compute_agent_metrics", spy)
+        analyze_session(_SDK_MAIN)
+
+        expected = session_price_timestamp(parse_session(_SDK_MAIN))
+        assert expected is not None
+        assert captured and captured[0].get("timestamp") == expected
+        assert "session_total_cost" not in captured[0]
 
     def test_agent_token_percentage_is_spend_share(self) -> None:
         result = analyze_session(_SDK_MAIN)
@@ -422,6 +455,7 @@ class TestAgentSpendReconciliation:
         result = analyze_sessions([_NESTED_MAIN, _SDK_MAIN])
         fold_cost, fold_tokens = _subagent_origin(result.token_metrics)
         agent_cost, agent_tokens = _per_agent(result.agent_metrics)
+        assert fold_cost > 0
         assert agent_cost == pytest.approx(fold_cost)
         assert agent_tokens == fold_tokens
 

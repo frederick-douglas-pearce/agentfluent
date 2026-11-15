@@ -105,7 +105,7 @@ def _analyze_envelope_data() -> dict[str, Any]:
             "agent_token_percentage": 38.5,
             "by_agent_type": {
                 # Explore: no trace -> wall-only fallback (unreliable, #480),
-                # and no trace spend (#646): Tokens 0, Avg "—".
+                # and no trace spend (#646): Tokens "—", Avg "—" (unknown).
                 "Explore": {
                     "agent_type": "Explore",
                     "is_builtin": True,
