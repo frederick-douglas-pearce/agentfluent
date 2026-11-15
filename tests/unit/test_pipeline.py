@@ -337,10 +337,13 @@ class TestAgentSpendReconciliation:
     """#646 AC8: Σ per-agent cost/spend == the subagent-origin rows of the session fold.
 
     This is the internal stand-in for the blocked Admin-API reconciliation (D059). It
-    pins that per-agent attribution and the session fold use the same inclusion
-    predicate and the same pricing path (``price_trace``). It is **not** a linearity
-    guard: a non-linear change inside that shared path moves both sides identically
-    (see ``analytics.tokens._cost_of``; #682).
+    pins that Σ per-agent spend/cost equals the fold's subagent-origin rows across
+    mixed, unpriced and model-None traces. It does not pin that both sides price
+    through ``price_trace`` (an aggregate-then-price fold passes while pricing is
+    linear) or ``<synthetic>`` exclusion parity (no case here carries it). It is
+    **not** a linearity guard: while both sides price through ``price_trace``, a
+    non-linear change inside it moves both identically (see
+    ``analytics.tokens._cost_of``; #682).
 
     **Scope: the depth-1 fold set.** Both sides cover only the depth-1 traces that
     ``analyze_session``'s non-folding gate admits. **#648 AC2** (folding depth->=2 spend

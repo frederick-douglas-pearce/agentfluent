@@ -124,9 +124,12 @@ def _cost_of(
     or surcharges), so pricing an aggregate equals summing per-trace prices up to float
     rounding. Subagent rows are priced per trace and summed
     (``compute_subagent_token_metrics``), so per-agent cost reconciles with the session
-    fold *by construction*; ``tests/unit/test_pipeline.py::TestAgentSpendReconciliation``
-    pins that the two share this one path. **No test guards linearity itself**: a
-    non-linear change here moves both sides identically. Per-request levers -- context
+    fold *by construction*. ``tests/unit/test_pipeline.py::TestAgentSpendReconciliation``
+    pins only that the totals agree (tokens exactly, cost to float tolerance) on its
+    cases; it does not detect an aggregate-then-price fold or ``<synthetic>``-inclusion
+    drift (per-trace granularity test deferred to #682). **No test guards linearity
+    itself**: a non-linear change here moves both sides identically. Per-request
+    levers -- context
     tiers (#682), multipliers or surcharges (#537-#539) -- also need *per-request*
     usage, which a trace's aggregated ``usage`` does not carry; #682 owns that.
     """
