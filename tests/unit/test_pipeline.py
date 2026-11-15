@@ -4,6 +4,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from agentfluent.analytics.agent_metrics import AgentMetrics, AgentTypeMetrics
 from agentfluent.analytics.pipeline import (
     AnalysisResult,
@@ -312,3 +314,198 @@ class TestMergeAgentMetricsActiveDuration:
         assert pm.total_active_duration_ms == 4000
         assert pm.total_wallclock_ms_trace_linked == 60000
         assert pm.active_duration_invocation_count == 1
+
+
+_FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
+_NESTED_MAIN = _FIXTURES / "nested_session" / "nested-session-1.jsonl"
+_SDK_MAIN = _FIXTURES / "sdk_session" / "sdk-main-1.jsonl"
+
+
+def _subagent_origin(tm: TokenMetrics) -> tuple[float, int]:
+    rows = [r for r in tm.by_model if r.origin == "subagent"]
+    return sum(r.cost for r in rows), sum(r.total_tokens for r in rows)
+
+
+def _per_agent(am: AgentMetrics) -> tuple[float, int]:
+    return (
+        sum(m.estimated_total_cost_usd for m in am.by_agent_type.values()),
+        sum(m.spend_tokens for m in am.by_agent_type.values()),
+    )
+
+
+class TestAgentSpendReconciliation:
+    """#646 AC8: Σ per-agent cost/spend == the subagent-origin rows of the session fold.
+
+    This is the internal stand-in for the blocked Admin-API reconciliation (D059). It
+    pins that Σ per-agent spend/cost equals the fold's subagent-origin rows across
+    mixed, unpriced and model-None traces. It does not pin that both sides price
+    through ``price_trace`` (an aggregate-then-price fold passes while pricing is
+    linear) or ``<synthetic>`` exclusion parity (no case here carries it). It is
+    **not** a linearity guard: while both sides price through ``price_trace``, a
+    non-linear change inside it moves both identically (see
+    ``analytics.tokens._cost_of``; #682).
+
+    **Scope: the depth-1 fold set.** Both sides cover only the depth-1 traces that
+    ``analyze_session``'s non-folding gate admits. **#648 AC2** (folding depth->=2 spend
+    into ``token_metrics``) is the change that must update this test deliberately --
+    either by attributing that spend to an ancestor agent type or by narrowing the
+    right-hand side to depth-1 rows.
+    """
+
+    def test_mixed_models_reconcile_by_construction(self) -> None:
+        from agentfluent.agents.models import AgentInvocation
+        from agentfluent.analytics.agent_metrics import compute_agent_metrics
+        from agentfluent.analytics.tokens import compute_subagent_token_metrics
+        from agentfluent.core.session import Usage
+        from agentfluent.traces.models import SubagentTrace
+
+        def inv(agent_type: str, model: str | None, n: int) -> AgentInvocation:
+            i = AgentInvocation(
+                agent_type=agent_type, description="d", prompt="p", tool_use_id=f"t{n}",
+            )
+            i.trace = SubagentTrace(
+                agent_id=f"a{n}",
+                delegation_prompt="p",
+                model=model,
+                model_turns=3,
+                usage=Usage(
+                    input_tokens=1000 * n,
+                    output_tokens=300 * n,
+                    cache_creation_input_tokens=500 * n,
+                    cache_read_input_tokens=20_000 * n,
+                ),
+            )
+            return i
+
+        invocations = [
+            inv("pm", "claude-opus-4-6", 1),
+            inv("pm", "claude-haiku-4-5-20251001", 2),
+            inv("explore", "claude-haiku-4-5-20251001", 3),
+            inv("explore", "claude-sonnet-4-6", 4),
+            inv("ghost", "claude-nonexistent-9", 5),  # unpriced: tokens, no cost
+            inv("ghost", None, 6),  # excluded from both sides
+        ]
+        traces = [i.trace for i in invocations if i.trace is not None]
+        rows = compute_subagent_token_metrics(traces)
+        metrics = compute_agent_metrics(invocations)
+
+        fold_cost = sum(r.cost for r in rows)
+        fold_tokens = sum(r.total_tokens for r in rows)
+        agent_cost, agent_tokens = _per_agent(metrics)
+        assert fold_cost > 0
+        assert agent_cost == pytest.approx(fold_cost)
+        assert agent_tokens == fold_tokens
+
+    @pytest.mark.parametrize("path", [_NESTED_MAIN, _SDK_MAIN], ids=["nested", "sdk"])
+    def test_fixture_session_reconciles(self, path: Path) -> None:
+        result = analyze_session(path)
+        fold_cost, fold_tokens = _subagent_origin(result.token_metrics)
+        agent_cost, agent_tokens = _per_agent(result.agent_metrics)
+        assert fold_tokens > 0
+        assert fold_cost > 0  # not a vacuous 0 == 0 (fixture model is priced)
+        assert agent_cost == pytest.approx(fold_cost)
+        assert agent_tokens == fold_tokens
+
+    # "worker" is the nested fixture's only agent (no-op filter); "no-such-agent" is
+    # the discriminating case.
+    @pytest.mark.parametrize(
+        ("agent_filter", "expect_spend"), [("worker", True), ("no-such-agent", False)],
+    )
+    def test_agent_filter_reconciles(self, agent_filter: str, expect_spend: bool) -> None:
+        # ``--agent`` filters invocations before linking and folding, so both sides
+        # see the same filtered set.
+        result = analyze_session(_NESTED_MAIN, agent_filter=agent_filter)
+        fold_cost, fold_tokens = _subagent_origin(result.token_metrics)
+        agent_cost, agent_tokens = _per_agent(result.agent_metrics)
+        assert (fold_cost > 0) is expect_spend
+        assert agent_cost == pytest.approx(fold_cost)
+        assert agent_tokens == fold_tokens
+
+    def test_session_price_date_threaded_into_agent_metrics(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # AC2 mechanism: ``analyze_session`` hands ``compute_agent_metrics`` the same
+        # price date it priced the session fold at. Base rates are date-invariant
+        # today, so no total could observe a dropped ``timestamp=`` -- only the call can.
+        from agentfluent.analytics import pipeline as pipeline_mod
+        from agentfluent.analytics.tokens import session_price_timestamp
+        from agentfluent.core.parser import parse_session
+
+        captured: list[dict[str, Any]] = []
+        real = pipeline_mod.compute_agent_metrics
+
+        def spy(invocations, *args, **kwargs):  # type: ignore[no-untyped-def]
+            captured.append(kwargs)
+            return real(invocations, *args, **kwargs)
+
+        monkeypatch.setattr(pipeline_mod, "compute_agent_metrics", spy)
+        analyze_session(_SDK_MAIN)
+
+        expected = session_price_timestamp(parse_session(_SDK_MAIN))
+        assert expected is not None
+        assert captured and captured[0].get("timestamp") == expected
+        assert "session_total_cost" not in captured[0]
+
+    def test_agent_token_percentage_is_spend_share(self) -> None:
+        result = analyze_session(_SDK_MAIN)
+        am = result.agent_metrics
+        expected = round(am.total_agent_spend_tokens / result.token_metrics.total_tokens * 100, 1)
+        assert am.total_agent_spend_tokens > 0
+        assert am.agent_token_percentage == expected
+        assert 0 < am.agent_token_percentage <= 100
+
+    def test_multi_session_merge_reconciles(self) -> None:
+        result = analyze_sessions([_NESTED_MAIN, _SDK_MAIN])
+        fold_cost, fold_tokens = _subagent_origin(result.token_metrics)
+        agent_cost, agent_tokens = _per_agent(result.agent_metrics)
+        assert fold_cost > 0
+        assert agent_cost == pytest.approx(fold_cost)
+        assert agent_tokens == fold_tokens
+
+
+class TestMergeAgentMetricsSpend:
+    """#646 AC7: spend and priced-coverage fields sum across sessions; the
+    percentage and cost averages are recomputed from merged totals."""
+
+    @staticmethod
+    def _metrics(spend: int, spend_n: int, priced_n: int, turns: int, cost: float) -> AgentMetrics:
+        t = AgentTypeMetrics(
+            agent_type="pm",
+            is_builtin=False,
+            invocation_count=spend_n + 1,
+            spend_tokens=spend,
+            spend_invocation_count=spend_n,
+            priced_invocation_count=priced_n,
+            priced_model_turns=turns,
+            total_model_turns=turns,
+            estimated_total_cost_usd=cost,
+        )
+        return AgentMetrics(by_agent_type={"pm": t}, total_invocations=spend_n + 1)
+
+    def test_spend_fields_summed_and_ratios_recomputed(self) -> None:
+        merged = _merge_agent_metrics(
+            [self._metrics(1000, 2, 2, 10, 0.4), self._metrics(3000, 3, 1, 5, 0.2)],
+            session_total_tokens=8000,
+        )
+        pm = merged.by_agent_type["pm"]
+        assert pm.spend_tokens == 4000
+        assert pm.spend_invocation_count == 5
+        assert pm.priced_invocation_count == 3
+        assert pm.priced_model_turns == 15
+        assert merged.total_agent_spend_tokens == 4000
+        assert merged.agent_token_percentage == 50.0
+        assert pm.estimated_avg_cost_per_invocation_usd == pytest.approx(0.6 / 3)
+        assert pm.estimated_avg_cost_per_turn_usd == pytest.approx(0.6 / 15)
+        assert pm.avg_tokens_per_turn == pytest.approx(4000 / 15)
+
+    def test_first_seen_branch_preserves_spend_fields(self) -> None:
+        pm = _merge_agent_metrics([self._metrics(1000, 2, 1, 10, 0.4)]).by_agent_type["pm"]
+        assert (pm.spend_tokens, pm.spend_invocation_count) == (1000, 2)
+        assert (pm.priced_invocation_count, pm.priced_model_turns) == (1, 10)
+
+    def test_percentage_ignores_rollup_proxy(self) -> None:
+        m = self._metrics(0, 0, 0, 0, 0.0)
+        m.by_agent_type["pm"].total_tokens = 5000
+        merged = _merge_agent_metrics([m], session_total_tokens=10000)
+        assert merged.total_agent_tokens == 5000
+        assert merged.agent_token_percentage == 0.0

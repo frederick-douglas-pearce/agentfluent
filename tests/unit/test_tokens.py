@@ -11,7 +11,9 @@ from agentfluent.analytics.tokens import (
     compute_subagent_token_metrics,
     compute_token_metrics,
     fold_subagent_metrics_in,
+    price_trace,
     session_price_timestamp,
+    trace_counts_as_spend,
 )
 from agentfluent.core.session import ContentBlock, SessionMessage, Usage
 from agentfluent.traces.models import SubagentTrace
@@ -504,3 +506,60 @@ class TestCostTimestampThreading:
         metrics = compute_token_metrics([_assistant(input_tokens=100, output_tokens=50)])
         assert seen == [None]
         assert metrics.total_cost > 0  # still priced, at latest
+
+
+class TestPriceTrace:
+    """#646 AC1: the per-trace pricing primitive shared with per-agent attribution."""
+
+    @staticmethod
+    def _trace(model: str | None, agent_id: str = "a1", n: int = 1) -> SubagentTrace:
+        return SubagentTrace(
+            agent_id=agent_id,
+            delegation_prompt="p",
+            model=model,
+            usage=Usage(
+                input_tokens=100_000 * n,
+                output_tokens=20_000 * n,
+                cache_creation_input_tokens=40_000 * n,
+                cache_creation_1h_input_tokens=10_000 * n,
+                cache_read_input_tokens=1_000_000 * n,
+            ),
+        )
+
+    def test_matches_hand_computation(self) -> None:
+        # haiku-4-5: in $1, out $5, 5m write $1.25, 1h write $2, read $0.10 per MTok.
+        # 5m bucket = 40k total - 10k 1h = 30k.
+        expected = (
+            100_000 * 1.0 + 20_000 * 5.0 + 30_000 * 1.25 + 10_000 * 2.0 + 1_000_000 * 0.1
+        ) / 1_000_000
+        cost = price_trace(self._trace("claude-haiku-4-5-20251001"))
+        assert cost == pytest.approx(expected)
+
+    def test_unpriced_model_returns_none(self) -> None:
+        assert price_trace(self._trace("claude-nonexistent-9")) is None
+
+    @pytest.mark.parametrize("model", [None, "<synthetic>"])
+    def test_non_spend_trace_is_a_precondition_violation(self, model: str | None) -> None:
+        trace = self._trace(model)
+        assert not trace_counts_as_spend(trace)
+        with pytest.raises(ValueError, match="does not count as spend"):
+            price_trace(trace)
+
+    def test_subagent_row_cost_is_sum_of_per_trace_prices(self) -> None:
+        traces = [
+            self._trace("claude-haiku-4-5-20251001", "a1", 1),
+            self._trace("claude-haiku-4-5-20251001", "a2", 3),
+            self._trace("claude-opus-4-6", "a3", 2),
+            self._trace(None, "a4", 5),
+        ]
+        rows = compute_subagent_token_metrics(traces)
+        expected = {
+            m: sum(
+                price_trace(t) or 0.0
+                for t in traces
+                if trace_counts_as_spend(t) and t.model == m
+            )
+            for m in ("claude-haiku-4-5-20251001", "claude-opus-4-6")
+        }
+        assert {r.model: r.cost for r in rows} == pytest.approx(expected)
+        assert {r.model for r in rows} == set(expected)

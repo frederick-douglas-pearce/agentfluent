@@ -110,6 +110,38 @@ def _accumulate_usage(breakdown: ModelTokenBreakdown, usage: Usage) -> None:
     breakdown.cache_creation_1h_tokens += usage.cache_creation_1h_input_tokens
 
 
+def _cost_of(
+    breakdown: ModelTokenBreakdown, timestamp: datetime | None = None,
+) -> float | None:
+    """Price one breakdown row at its model's rate; ``None`` iff the model is unpriced.
+
+    The single call site of ``get_pricing`` / ``compute_cost`` in this module (#646 AC1):
+    parent rows, subagent rows and per-agent spend (``price_trace``) all price here, so
+    the ``Usage`` -> rate mapping (the 5m/1h cache-write split) lives on one path.
+
+    **Linearity assumption.** Pricing is linear in tokens today (base tier only -- the
+    upstream adapter discards context tiers -- and no caller passes request multipliers
+    or surcharges), so pricing an aggregate equals summing per-trace prices up to float
+    rounding. Subagent rows are priced per trace and summed
+    (``compute_subagent_token_metrics``), so per-agent cost reconciles with the session
+    fold by construction. **No test guards linearity**: a non-linear change here moves
+    the session fold and per-agent attribution identically. Per-request levers --
+    context tiers (#682), multipliers or surcharges (#537-#539) -- need per-request
+    usage, which a trace's aggregated ``usage`` does not carry; #682 owns that guard.
+    """
+    pricing = get_pricing(breakdown.model, timestamp)
+    if pricing is None:
+        return None
+    return compute_cost(
+        pricing,
+        breakdown.input_tokens,
+        breakdown.output_tokens,
+        breakdown.cache_creation_5m_tokens,
+        breakdown.cache_read_input_tokens,
+        cache_creation_1h_tokens=breakdown.cache_creation_1h_tokens,
+    )
+
+
 def _populate_costs(
     by_model: dict[tuple[str, str], ModelTokenBreakdown],
     timestamp: datetime | None = None,
@@ -123,18 +155,44 @@ def _populate_costs(
     """
     total = 0.0
     for breakdown in by_model.values():
-        pricing = get_pricing(breakdown.model, timestamp)
-        if pricing:
-            breakdown.cost = compute_cost(
-                pricing,
-                breakdown.input_tokens,
-                breakdown.output_tokens,
-                breakdown.cache_creation_5m_tokens,
-                breakdown.cache_read_input_tokens,
-                cache_creation_1h_tokens=breakdown.cache_creation_1h_tokens,
-            )
-            total += breakdown.cost
+        cost = _cost_of(breakdown, timestamp)
+        if cost is not None:
+            breakdown.cost = cost
+            total += cost
     return total
+
+
+def trace_counts_as_spend(trace: SubagentTrace) -> bool:
+    """Whether a subagent trace contributes to subagent spend (#646).
+
+    The single inclusion predicate shared by the session fold
+    (``compute_subagent_token_metrics``) and per-agent attribution
+    (``analytics.agent_metrics``), so the two cannot drift on *which* traces count:
+    the trace must carry a model, and not the ``<synthetic>`` sentinel (no real API
+    call). It does not test depth -- which traces reach the fold is the caller's
+    non-folding gate (``analyze_session``), not this predicate's.
+    """
+    return trace.model is not None and trace.model not in SYNTHETIC_MODELS
+
+
+def price_trace(
+    trace: SubagentTrace, *, timestamp: datetime | None = None,
+) -> float | None:
+    """Price one subagent trace's deduplicated per-turn usage at its model's rate.
+
+    Returns ``None`` only when the trace's model is unpriced. **Precondition:**
+    ``trace_counts_as_spend(trace)`` -- a trace that does not count as spend raises
+    ``ValueError`` rather than being priced as $0, so "unpriced" and "excluded" never
+    share a return value. ``timestamp`` is the session price date (#546).
+    """
+    if not trace_counts_as_spend(trace) or trace.model is None:
+        raise ValueError(
+            f"price_trace: trace {trace.agent_id!r} does not count as spend "
+            f"(model={trace.model!r}); check trace_counts_as_spend first"
+        )
+    breakdown = ModelTokenBreakdown(model=trace.model, origin="subagent")
+    _accumulate_usage(breakdown, trace.usage)
+    return _cost_of(breakdown, timestamp)
 
 
 def _aggregate_totals(
@@ -260,6 +318,9 @@ def compute_subagent_token_metrics(
     ``timestamp`` (#546) is the parent session's price date, applied to subagent rows
     too so the whole session prices at one consistent date; ``None`` → latest rate.
 
+    Inclusion is ``trace_counts_as_spend`` (shared with per-agent attribution, #646).
+    Each row's cost is the sum of its traces' ``price_trace`` costs.
+
     Returns one ``ModelTokenBreakdown`` per distinct subagent model,
     each carrying ``origin="subagent"``. Costs are populated. The
     caller is responsible for merging these rows into a parent
@@ -267,7 +328,7 @@ def compute_subagent_token_metrics(
     """
     by_model: dict[tuple[str, str], ModelTokenBreakdown] = {}
     for trace in traces:
-        if trace.model is None or trace.model in SYNTHETIC_MODELS:
+        if not trace_counts_as_spend(trace) or trace.model is None:
             continue
         usage = trace.usage
         if usage is None:
@@ -278,8 +339,12 @@ def compute_subagent_token_metrics(
             breakdown = ModelTokenBreakdown(model=trace.model, origin="subagent")
             by_model[key] = breakdown
         _accumulate_usage(breakdown, usage)
+        # Priced per trace and summed (not aggregate-then-price), so per-agent cost
+        # reconciles with this row by construction (#646 AC8; see ``_cost_of``).
+        cost = price_trace(trace, timestamp=timestamp)
+        if cost is not None:
+            breakdown.cost += cost
 
-    _populate_costs(by_model, timestamp)
     return list(by_model.values())
 
 

@@ -104,12 +104,15 @@ def _analyze_envelope_data() -> dict[str, Any]:
             "total_invocations": 17,
             "agent_token_percentage": 38.5,
             "by_agent_type": {
-                # Explore: no trace -> wall-only fallback (unreliable, #480).
+                # Explore: no trace -> wall-only fallback (unreliable, #480),
+                # and no trace spend (#646): Tokens "—", Avg "—" (unknown).
                 "Explore": {
                     "agent_type": "Explore",
                     "is_builtin": True,
                     "invocation_count": 8,
                     "total_tokens": 42_000,
+                    "spend_tokens": 0,
+                    "spend_invocation_count": 0,
                     "total_tool_uses": 56,
                     "total_duration_ms": 320_000,
                 },
@@ -120,6 +123,8 @@ def _analyze_envelope_data() -> dict[str, Any]:
                     "is_builtin": False,
                     "invocation_count": 6,
                     "total_tokens": 78_000,
+                    "spend_tokens": 1_560_000,
+                    "spend_invocation_count": 6,
                     "total_tool_uses": 42,
                     "total_duration_ms": 510_000,
                     "total_active_duration_ms": 90_000,
@@ -132,6 +137,8 @@ def _analyze_envelope_data() -> dict[str, Any]:
                     "is_builtin": False,
                     "invocation_count": 3,
                     "total_tokens": 24_000,
+                    "spend_tokens": 480_000,
+                    "spend_invocation_count": 3,
                     "total_tool_uses": 18,
                     "total_duration_ms": 145_000,
                     "total_active_duration_ms": 140_000,
