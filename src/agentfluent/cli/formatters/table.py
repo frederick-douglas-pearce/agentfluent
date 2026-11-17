@@ -324,11 +324,11 @@ def format_analysis_table(
                 # trace always has >= 1 assistant message, so 0 only
                 # occurs for empty/degenerate traces where "-" is apt.
                 turns = str(inv.model_turns) if inv.model_turns else "-"
-                tools = str(inv.tool_uses) if inv.tool_uses else "-"
-                # Gate on idle_gap_ms, not (active vs duration) diff:
-                # the two come from different sources (JSONL timestamps
-                # vs parent toolUseResult) and disagree by ~ms even when
-                # no idle was detected.
+                # 0 is a measured value (a trace-linked invocation with no
+                # tool calls, #690); only a missing count renders "-".
+                tools = str(inv.tool_uses) if inv.tool_uses is not None else "-"
+                # Gate on idle_gap_ms, not an (active vs duration) diff: show
+                # the "(wall)" form only when idle time was actually detected.
                 if inv.duration_ms is None:
                     duration = "-"
                 elif not inv.duration_reliable:

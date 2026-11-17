@@ -177,14 +177,14 @@ def truncate(text: str, max_len: int) -> str:
 # Wall/active ratio at or above which an agent type's duration cell is
 # flagged as interactive-pattern (#480). The ``pm`` dogfood case sat
 # around 6x (2,918s wall vs ~470s active per call); 3x cleanly separates
-# genuinely interactive agents from the ms-level jitter between the
-# parent-side wall clock and trace-derived active duration.
+# genuinely interactive agents from small timing jitter. Since #690 wall
+# and active for a trace-linked invocation are both trace-derived, so the
+# ratio measures idle subtraction alone.
 DURATION_RATIO_HIGHLIGHT = 3.0
 
 # Minimum wall-over-active gap before the cell shows the combined
 # "active (wall)" form rather than a bare active figure. Below this the
-# two are effectively equal (the ~ms disagreement noted in table.py's
-# verbose path) and a second number would be noise.
+# two are effectively equal and a second number would be noise.
 _DURATION_DIVERGENCE = 1.05
 
 

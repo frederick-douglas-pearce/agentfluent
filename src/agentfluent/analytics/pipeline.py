@@ -16,7 +16,7 @@ from agentfluent.agents.models import AgentInvocation
 from agentfluent.analytics.agent_metrics import (
     AgentMetrics,
     AgentTypeMetrics,
-    _recompute_turn_ratios,
+    _recompute_ratios,
     agent_token_percentage,
     compute_agent_metrics,
 )
@@ -460,6 +460,11 @@ def _merge_agent_metrics(
                     total_tokens=m.total_tokens,
                     total_tool_uses=m.total_tool_uses,
                     total_duration_ms=m.total_duration_ms,
+                    total_tool_uses_with_turns=m.total_tool_uses_with_turns,
+                    total_tokens_with_tool_uses=m.total_tokens_with_tool_uses,
+                    total_tool_uses_with_tokens=m.total_tool_uses_with_tokens,
+                    total_duration_ms_with_tool_uses=m.total_duration_ms_with_tool_uses,
+                    total_tool_uses_with_duration=m.total_tool_uses_with_duration,
                     estimated_total_cost_usd=m.estimated_total_cost_usd,
                     total_model_turns=m.total_model_turns,
                     invocations_with_turns=m.invocations_with_turns,
@@ -476,6 +481,13 @@ def _merge_agent_metrics(
                 existing.total_tokens += m.total_tokens
                 existing.total_tool_uses += m.total_tool_uses
                 existing.total_duration_ms += m.total_duration_ms
+                existing.total_tool_uses_with_turns += m.total_tool_uses_with_turns
+                existing.total_tokens_with_tool_uses += m.total_tokens_with_tool_uses
+                existing.total_tool_uses_with_tokens += m.total_tool_uses_with_tokens
+                existing.total_duration_ms_with_tool_uses += (
+                    m.total_duration_ms_with_tool_uses
+                )
+                existing.total_tool_uses_with_duration += m.total_tool_uses_with_duration
                 existing.estimated_total_cost_usd += m.estimated_total_cost_usd
                 existing.total_model_turns += m.total_model_turns
                 existing.invocations_with_turns += m.invocations_with_turns
@@ -494,12 +506,7 @@ def _merge_agent_metrics(
     # and turn ratios have to be recomputed because the per-unit ratio
     # changes when invocations from different sessions merge.
     for m in merged.values():
-        if m.total_tool_uses > 0:
-            if m.total_tokens > 0:
-                m.avg_tokens_per_tool_use = m.total_tokens / m.total_tool_uses
-            if m.total_duration_ms > 0:
-                m.avg_duration_per_tool_use = m.total_duration_ms / m.total_tool_uses
-        _recompute_turn_ratios(m)
+        _recompute_ratios(m)
 
     total_invocations = sum(m.invocation_count for m in merged.values())
     total_agent_tokens = sum(m.total_tokens for m in merged.values())

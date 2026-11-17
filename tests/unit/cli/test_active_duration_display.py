@@ -1,9 +1,8 @@
 """Active vs wall duration rendering in the verbose Per-Invocation table.
 
-Display gates on ``idle_gap_ms`` (authoritative), not on a cross-source
-comparison of ``active_duration_ms`` vs ``duration_ms`` — the two come
-from different sources (JSONL timestamps vs parent toolUseResult) and
-disagree by ~ms even when no idle was detected.
+Display gates on ``idle_gap_ms`` (authoritative), not on a comparison of
+``active_duration_ms`` vs ``duration_ms``: the "(wall)" form appears only
+when idle time was actually detected.
 """
 
 from __future__ import annotations

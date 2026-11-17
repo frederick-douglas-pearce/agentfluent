@@ -178,12 +178,16 @@ def classify_complexity(stats: AgentStats) -> ComplexityTier:
     ):
         return "complex"
     # The "simple" branch requires evidence of light work, not absence
-    # of data. A cluster with no observed tool calls AND no token data
-    # falls through to "moderate" so the recommendation reflects
-    # uncertainty rather than asserting the work is small.
-    has_observed_data = stats.mean_tool_calls > 0 or stats.mean_tokens > 0
+    # of data, and that evidence must include token data. ``mean_tokens``
+    # is 0.0 when no invocation carries the rollup ``total_tokens``; since
+    # #690 such an agent type can still have trace-sourced tool calls, and
+    # reading its 0.0 as "below the token threshold" would call it simple
+    # (and steer it toward Haiku) with no token evidence at all. A group
+    # without token data falls through to "moderate" so the recommendation
+    # reflects uncertainty rather than asserting the work is small.
+    has_token_evidence = stats.mean_tokens > 0
     if (
-        has_observed_data
+        has_token_evidence
         and stats.mean_tool_calls < _SIMPLE_MAX_TOOL_CALLS
         and stats.mean_tokens < _SIMPLE_MAX_TOKENS
     ):
