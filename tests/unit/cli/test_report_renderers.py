@@ -186,7 +186,7 @@ class TestRenderAgentMetrics:
         assert "**2.0s (15.0s wall)**" in out
         # Explore had no trace -> wall-only fallback + unreliable footnote.
         assert "~7.5s*" in out
-        assert "no subagent trace available" in out
+        assert "no subagent trace with a measurable span available" in out
         # Footer line with agent token share.
         assert "42.5%" in out
 
@@ -228,7 +228,7 @@ class TestRenderAgentMetrics:
         ] = 45_000
         out = render_agent_metrics(d)
         assert "†" in out
-        assert "trace-linked invocations" in out
+        assert "invocations with a measurable trace span" in out
 
     def test_zero_invocations_emits_fallback(self) -> None:
         out = render_agent_metrics(

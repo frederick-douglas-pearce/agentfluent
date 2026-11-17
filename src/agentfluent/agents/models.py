@@ -89,8 +89,12 @@ class AgentInvocation(BaseModel):
     when a subagent trace is linked, ``attach_trace`` sets it to
     ``len(trace.tool_calls)``; otherwise it is the parent
     ``toolUseResult.totalToolUseCount`` rollup, or ``None`` when the rollup is
-    absent. Either way it **excludes child agents' tool calls**: depth-2 agents
-    hang off ``trace.children`` and are not counted here (#595)."""
+    absent. The trace-sourced count **excludes child agents' tool calls**:
+    depth-2 agents hang off ``trace.children`` and are not counted here (#595).
+    The rollup is not known to include them -- it equals the trace count on
+    99.5% / 98.4% / 100% / 93.7% of invocations carrying both across four
+    corpora, every mismatch having the trace larger (#690 AC7,
+    ``scripts/trace_sourcing_corpus_check.py``; residual tracked in #698)."""
 
     duration_ms: int | None = None
     """Wall-clock duration in ms, from the same source as ``tool_uses`` (#690):
@@ -169,8 +173,8 @@ class AgentInvocation(BaseModel):
         Divides the rollup ``total_tokens`` (a context-size proxy) by
         ``tool_uses``, which is trace-sourced when a trace is linked (#690), so
         on a trace-linked invocation the two halves come from different
-        sources. They count the same calls (the rollup's tool count matches the
-        trace's on >98% of invocations that carry both)."""
+        sources. They count nearly the same calls: see the #690 AC7 parity
+        figures on ``tool_uses``."""
         if self.total_tokens is not None and self.tool_uses and self.tool_uses > 0:
             return self.total_tokens / self.tool_uses
         return None

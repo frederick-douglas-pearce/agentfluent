@@ -195,9 +195,11 @@ class DurationCell(NamedTuple):
     ``text`` is plain (no Rich markup) so both the analyze table and the
     Markdown report share it. ``highlight`` is set when the wall/active
     ratio crosses :data:`DURATION_RATIO_HIGHLIGHT`. ``unreliable`` marks
-    the wall-only fallback (no invocation of this type had a linked
-    trace). ``partial`` marks partial trace coverage (the active/wall
-    averages reflect only the trace-linked subset)."""
+    the wall-only fallback (no invocation of this type had a linked trace
+    with a measurable span). ``partial`` marks partial coverage: the
+    active/wall averages reflect only the invocations with a measurable
+    trace span, so it also fires for a linked trace whose span is unknown
+    (fewer than two timestamped messages)."""
 
     text: str
     highlight: bool
@@ -219,11 +221,12 @@ def format_agent_duration_cell(
     an interactive agent (whose wall-clock includes user-wait time) does
     not read as a duration problem -- the misread #480 exists to fix.
 
-    Both per-call averages are taken over the *same* trace-linked subset
-    (denominator ``active_duration_invocation_count``) so the wall/active
-    ratio measures only idle subtraction, not trace-coverage skew. When no
-    invocation of this type had a trace, falls back to a bare wall-only
-    average over all invocations, marked unreliable.
+    Both per-call averages are taken over the *same* subset -- invocations
+    with a measurable trace span (denominator
+    ``active_duration_invocation_count``) -- so the wall/active ratio
+    measures only idle subtraction, not trace-coverage skew. When no
+    invocation of this type has one, falls back to a bare wall-only average
+    over all invocations, marked unreliable.
     """
     if total_duration_ms <= 0 or invocation_count <= 0:
         return DurationCell("-", highlight=False, unreliable=False, partial=False)

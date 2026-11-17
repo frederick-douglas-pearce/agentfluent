@@ -185,6 +185,13 @@ def classify_complexity(stats: AgentStats) -> ComplexityTier:
     # (and steer it toward Haiku) with no token evidence at all. A group
     # without token data falls through to "moderate" so the recommendation
     # reflects uncertainty rather than asserting the work is small.
+    #
+    # Known coverage mismatch, deferred to #675: ``mean_tool_calls`` averages
+    # every invocation carrying ``tool_uses`` (trace-linked or rollup), while
+    # ``mean_tokens`` averages rollup carriers only. Thin token evidence --
+    # one rollup invocation among many rollup-less traces -- can therefore
+    # still reach "simple". #675 re-sources ``mean_tokens`` from trace spend,
+    # which puts both means on the same invocations.
     has_token_evidence = stats.mean_tokens > 0
     if (
         has_token_evidence

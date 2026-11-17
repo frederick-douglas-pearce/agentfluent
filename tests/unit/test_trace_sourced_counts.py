@@ -172,9 +172,13 @@ class TestCoverageMatchedRatios:
     def test_avg_tokens_per_tool_use_only_over_invocations_with_both(self) -> None:
         """AC4: rollup-less trace-linked tool calls must not dilute a
         rollup-only token numerator."""
-        invocations = [*_rollupless_linked(), *_mixed()]
+        # A partial rollup: tokens without a tool count. It must reach the
+        # all-invocation token sum but not the per-tool-use numerator.
+        tokens_only = _invocation("t", total_tokens=5_000)
+        invocations = [*_rollupless_linked(), *_mixed(), tokens_only]
         pm = compute_agent_metrics(invocations).by_agent_type["pm"]
         assert pm.total_tool_uses == 15
+        assert pm.total_tokens == 15_000
         assert pm.total_tokens_with_tool_uses == 10_000
         assert pm.total_tool_uses_with_tokens == 7
         assert pm.avg_tokens_per_tool_use == 10_000 / 7
@@ -188,8 +192,11 @@ class TestCoverageMatchedRatios:
                     _trace("b", tool_calls=6, duration_ms=None),
                 ],
             ),
+            # A partial rollup: duration without a tool count.
+            _invocation("d", duration_ms=50_000),
         ]
         pm = compute_agent_metrics(invocations).by_agent_type["pm"]
+        assert pm.total_duration_ms == 90_000
         assert pm.total_tool_uses == 10
         assert pm.total_tool_uses_with_duration == 4
         assert pm.total_duration_ms_with_tool_uses == 40_000
@@ -222,15 +229,33 @@ class TestMergeEquivalence:
     """merge(compute(A), compute(B)) == compute(A + B) for every field the
     merge has to carry (#690 I3)."""
 
+    @staticmethod
+    def _uneven() -> list[AgentInvocation]:
+        """Every coverage pair takes a distinct value here, so a merge that
+        adds one field into another cannot match the single compute."""
+        tokens_no_duration = _link(
+            [_invocation("u", total_tokens=2_000)],
+            [_trace("u", tool_calls=5, duration_ms=None)],
+        )
+        return [*_mixed(), *tokens_no_duration]
+
+    def test_uneven_fixture_separates_the_pairs(self) -> None:
+        pm = compute_agent_metrics(self._uneven()).by_agent_type["pm"]
+        assert pm.total_tool_uses_with_tokens == 12
+        assert pm.total_tool_uses_with_duration == 7
+        assert pm.total_tokens_with_tool_uses == 12_000
+        assert pm.total_duration_ms_with_tool_uses == 70_000
+
     def test_merge_matches_single_compute(self) -> None:
         part_a = _rollupless_linked()
-        part_b = _mixed()
-        merged = _merge_agent_metrics(
-            [compute_agent_metrics(part_a), compute_agent_metrics(part_b)],
-        ).by_agent_type["pm"]
-        whole = compute_agent_metrics([*part_a, *part_b]).by_agent_type["pm"]
-        for name in (*_COVERAGE_FIELDS, *_RATIO_FIELDS):
-            assert getattr(merged, name) == getattr(whole, name), name
+        part_b = self._uneven()
+        for parts in ([part_a, part_b], [part_b, part_a], [part_b, part_b]):
+            merged = _merge_agent_metrics(
+                [compute_agent_metrics(p) for p in parts],
+            ).by_agent_type["pm"]
+            whole = compute_agent_metrics([i for p in parts for i in p]).by_agent_type["pm"]
+            for name in (*_COVERAGE_FIELDS, *_RATIO_FIELDS):
+                assert getattr(merged, name) == getattr(whole, name), name
 
     def test_first_seen_branch_carries_new_fields(self) -> None:
         single = compute_agent_metrics(_mixed())
@@ -253,6 +278,8 @@ class TestComplexityNeedsTokenEvidence:
     def test_cluster_with_tools_but_no_tokens_is_moderate(self) -> None:
         invocations = _link([_invocation("a")], [_trace("a", tool_calls=2, duration_ms=1_000)])
         stats = aggregate_cluster_stats(invocations)
+        assert stats.mean_tool_calls == 2
+        assert stats.mean_tokens == 0.0
         assert classify_complexity(stats) == "moderate"
 
     def test_light_work_with_token_evidence_is_still_simple(self) -> None:
@@ -325,6 +352,21 @@ class TestCliRendering:
         _, partial_mixed = _duration_cell(_mixed())
         assert partial_all_linked is False
         assert partial_mixed is True
+
+    def test_dagger_when_a_linked_trace_has_no_measurable_span(self) -> None:
+        """AC5 as amended: "†" marks invocations without a measurable trace
+        span, which includes a linked trace whose span is unknown."""
+        invocations = _link(
+            [_invocation("a"), _invocation("b")],
+            [
+                _trace("a", tool_calls=2, duration_ms=10_000),
+                _trace("b", tool_calls=1, duration_ms=None),
+            ],
+        )
+        text, partial = _duration_cell(invocations)
+        assert partial is True
+        assert text.endswith("†")
+        assert "measurable trace span" in _render(invocations)
 
     def test_traceless_invocation_keeps_unreliable_marker(self) -> None:
         output = _render([_invocation("z", total_tokens=6_000, tool_uses=3, duration_ms=30_000)])

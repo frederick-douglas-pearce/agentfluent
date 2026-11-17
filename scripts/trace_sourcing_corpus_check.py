@@ -180,7 +180,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="corpus to check (repeatable); defaults to the #690 four",
     )
     parser.add_argument("--json", type=Path, help="write results to this file")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    for corpus in args.corpus:
+        name, sep, rel_dir = corpus.partition("=")
+        if not (sep and name and rel_dir):
+            parser.error(f"--corpus expects NAME=DIR, got {corpus!r}")
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:

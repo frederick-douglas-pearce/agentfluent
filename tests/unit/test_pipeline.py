@@ -253,9 +253,10 @@ class TestMergeAgentMetricsTurns:
             agent_type="pm",
             is_builtin=False,
             invocation_count=with_turns,
-            total_tool_uses=tool_uses,
-            # Every invocation here has turns, so the coverage-matched
-            # numerator (#690) equals the all-invocation tool sum.
+            # 5 extra tool calls from a traceless (turnless) invocation, so
+            # the per-turn ratio must read the coverage-matched numerator
+            # (#690), not the all-invocation tool sum.
+            total_tool_uses=tool_uses + 5,
             total_tool_uses_with_turns=tool_uses,
             total_model_turns=total_turns,
             invocations_with_turns=with_turns,

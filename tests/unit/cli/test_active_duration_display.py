@@ -185,7 +185,7 @@ def test_summary_table_traceless_shows_unreliable_footnote() -> None:
     output = _summary_render([inv])
     # Wall-only avg per call, marked unreliable.
     assert "~120.0s*" in output
-    assert "no subagent trace available" in output
+    assert "no subagent trace with a measurable span available" in output
 
 
 def test_summary_table_partial_coverage_footnote() -> None:

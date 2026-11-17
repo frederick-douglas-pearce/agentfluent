@@ -269,14 +269,14 @@ def format_analysis_table(
         # (#480). Footnotes mirror the verbose Per-Invocation table.
         if any_dur_partial:
             console.print(
-                "† Active duration covers only the trace-linked invocations; "
-                "the average and active/wall split use that subset.",
+                "† Active duration covers only invocations with a measurable trace "
+                "span; the average and active/wall split use that subset.",
                 style="dim",
             )
         if any_dur_unreliable:
             console.print(
-                "* Duration estimated from wall-clock; no subagent trace available "
-                "(may include user-wait time).",
+                "* Duration estimated from wall-clock; no subagent trace with a "
+                "measurable span available (may include user-wait time).",
                 style="dim",
             )
 
@@ -324,8 +324,9 @@ def format_analysis_table(
                 # trace always has >= 1 assistant message, so 0 only
                 # occurs for empty/degenerate traces where "-" is apt.
                 turns = str(inv.model_turns) if inv.model_turns else "-"
-                # 0 is a measured value (a trace-linked invocation with no
-                # tool calls, #690); only a missing count renders "-".
+                # 0 is a measured value from either source -- a trace with no
+                # tool calls, or a rollup reporting 0 (#690) -- so it renders
+                # "0"; only a missing count renders "-".
                 tools = str(inv.tool_uses) if inv.tool_uses is not None else "-"
                 # Gate on idle_gap_ms, not an (active vs duration) diff: show
                 # the "(wall)" form only when idle time was actually detected.

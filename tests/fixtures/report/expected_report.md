@@ -27,7 +27,7 @@
 | tester | 3 | 480,000 | 160,000 | 46.7s |
 | **Total** | **17** |  |  |  |
 
-\* Duration estimated from wall-clock; no subagent trace available (may include user-wait time).
+\* Duration estimated from wall-clock; no subagent trace with a measurable span available (may include user-wait time).
 
 Agent token share of session total: **38.5%**
 
