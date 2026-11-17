@@ -167,3 +167,11 @@ def subagent_large_path() -> Path:
 def subagent_streaming_dupes_path() -> Path:
     """Trace with duplicate streaming-snapshot assistant messages (same message_id)."""
     return SUBAGENT_FIXTURES_DIR / "agent-streaming-dupes.jsonl"
+
+
+@pytest.fixture()
+def subagent_parallel_tool_use_path() -> Path:
+    """Trace whose one assistant message is written block-per-line (thinking,
+    text, three parallel tool_use) with increasing output_tokens and
+    interleaved tool_result lines -- the current Claude Code shape (#694)."""
+    return SUBAGENT_FIXTURES_DIR / "agent-parallel-tool-use.jsonl"
