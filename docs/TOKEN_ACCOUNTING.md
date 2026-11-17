@@ -225,17 +225,17 @@ keep the record with the **greatest `output_tokens`** (the most complete
 snapshot) and take *all four* usage fields from that same record. Do not take a
 per-field max across records — that mixes snapshots.
 
+Both AgentFluent (`core/parser.py`, via `traces/parser.py`) and CodeFluent
+(`extract_prompts.py:700-716`) already take usage this way in production. Verified:
+the dedup method above matches AgentFluent's production parser on **80/80**
+sampled traces, and the corpus total (584,837,592) independently matches
+CodeFluent's measured 584,090,232 to within 0.13%.
+
 That rule is for **usage only**. Current Claude Code writes one content block per
 line, so the lines of one `message.id` carry *different* blocks (thinking, text,
 several parallel `tool_use` calls). Keeping only the max-`output_tokens` line's
 content drops the others: take usage from that line, but union the content blocks
 across the group (#694).
-
-Both AgentFluent (`core/parser.py`, via `traces/parser.py`) and CodeFluent
-(`extract_prompts.py:700-716`) already do this correctly in production. Verified:
-the dedup method above matches AgentFluent's production parser on **80/80**
-sampled traces, and the corpus total (584,837,592) independently matches
-CodeFluent's measured 584,090,232 to within 0.13%.
 
 ---
 

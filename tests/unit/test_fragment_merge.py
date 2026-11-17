@@ -8,6 +8,7 @@ variance, and only collapse a group to its final line when the lines are
 true cumulative snapshots (each a positional prefix-superset of the last).
 """
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 from agentfluent.core.parser import merge_assistant_fragments, parse_session
@@ -67,14 +68,28 @@ class TestParallelToolUseFixture:
     ) -> None:
         messages = parse_session(subagent_parallel_tool_use_path)
         first = next(m for m in messages if m.type == "assistant")
-        # All four fields come from the toolu_par_C line (output_tokens=96),
-        # not a per-field max and not a sum across the five lines.
+        # All four fields come from the toolu_par_C line (output_tokens=96).
+        # The toolu_par_A line carries a larger cache_read_input_tokens
+        # (5000), so a per-field max would report 5000 here, and a sum
+        # would inflate every field.
         assert first.usage == Usage(
             input_tokens=1500,
             output_tokens=96,
             cache_creation_input_tokens=200,
             cache_read_input_tokens=3000,
         )
+
+    def test_merged_message_carries_first_line_timestamp(
+        self, subagent_parallel_tool_use_path: Path,
+    ) -> None:
+        # Every line of msg_par01 has a distinct timestamp; the merged
+        # message (and so every parallel call paired from it) takes the
+        # first line's.
+        messages = parse_session(subagent_parallel_tool_use_path)
+        first = next(m for m in messages if m.type == "assistant")
+        assert first.timestamp == datetime(2026, 11, 1, 10, 0, 1, tzinfo=UTC)
+        trace = parse_subagent_trace(subagent_parallel_tool_use_path)
+        assert {c.timestamp for c in trace.tool_calls} == {first.timestamp}
 
     def test_message_count_and_order_unchanged(
         self, subagent_parallel_tool_use_path: Path,
@@ -115,6 +130,37 @@ class TestShapeDetectionIgnoresTokenVariance:
         assert [(b.type, b.text, b.id) for b in merged.content_blocks] == [
             ("text", "Hi there!", None),
             ("tool_use", None, "t1"),
+        ]
+
+    def test_parallel_tool_use_only_message_unions(self) -> None:
+        # The #694 shape with no thinking/text preamble: distinct ids never
+        # match positionally, so every call survives.
+        merged = _merge_one([
+            _frag([_tool("t1")], 10),
+            _frag([_tool("t2")], 20),
+            _frag([_tool("t3")], 30),
+        ])
+        assert [b.id for b in merged.content_blocks] == ["t1", "t2", "t3"]
+
+    def test_idless_tool_use_lines_union(self) -> None:
+        merged = _merge_one([
+            _frag([ContentBlock(type="tool_use", name="Read")], 10),
+            _frag([ContentBlock(type="tool_use", name="Read")], 20),
+        ])
+        assert len(merged.content_blocks) == 2
+
+    def test_later_line_with_fewer_blocks_unions(self) -> None:
+        # The earlier line's text is a prefix of the later one's, but the
+        # later line is shorter, so it cannot be a cumulative snapshot;
+        # t1 must survive.
+        merged = _merge_one([
+            _frag([_text("Hi"), _tool("t1")], 5),
+            _frag([_text("Hi there")], 9),
+        ])
+        assert [(b.type, b.text, b.id) for b in merged.content_blocks] == [
+            ("text", "Hi", None),
+            ("tool_use", None, "t1"),
+            ("text", "Hi there", None),
         ]
 
     def test_partial_prefix_falls_back_to_union(self) -> None:
@@ -177,17 +223,46 @@ class TestLegacyCumulativeResult:
         assert len(merged.content_blocks) == 1
         assert merged.content_blocks[0].input == {"file_path": "/project/src/a.py"}
 
-    def test_union_keeps_first_tool_use_for_a_repeated_id(self) -> None:
-        # A repeated id inside a non-cumulative group is deduped; the
-        # first occurrence wins.
+    def test_union_keeps_latest_tool_use_at_first_position(self) -> None:
+        # A repeated id inside a non-cumulative group is deduped: it keeps
+        # the first occurrence's position and the latest occurrence's block.
         merged = _merge_one([
             _frag([_thinking()], 2),
             _frag([_tool("t1", file_path="/first")], 8),
-            _frag([_tool("t1", file_path="/second")], 9),
+            _frag([_tool("t2", file_path="/other")], 9),
+            _frag([_tool("t1", file_path="/second")], 10),
         ])
+        assert [(b.type, b.id) for b in merged.content_blocks] == [
+            ("thinking", None), ("tool_use", "t1"), ("tool_use", "t2"),
+        ]
+        assert merged.content_blocks[1].input == {"file_path": "/second"}
+
+
+class TestAcceptedAmbiguities:
+    """Scope ruling on #696 review (D1, D2): two documented consequences of
+    the detection rule, pinned so a change to them is deliberate."""
+
+    def test_legacy_chain_with_thinking_unions_with_final_tool_input(self) -> None:
+        merged = _merge_one([
+            _frag([_thinking(), _text("Let")], 5),
+            _frag([_thinking(), _text("Let me"), _tool("a")], 9),
+            _frag([_thinking(), _text("Let me look"), _tool("a", p="/x")], 20),
+        ])
+        types = [b.type for b in merged.content_blocks]
+        assert types.count("thinking") == 3
+        assert [b.text for b in merged.content_blocks if b.type == "text"] == [
+            "Let", "Let me", "Let me look",
+        ]
         tools = [b for b in merged.content_blocks if b.type == "tool_use"]
         assert len(tools) == 1
-        assert tools[0].input == {"file_path": "/first"}
+        assert tools[0].input == {"p": "/x"}
+
+    def test_prefix_text_lines_collapse_losslessly(self) -> None:
+        merged = _merge_one([
+            _frag([_text("Checking")], 5),
+            _frag([_text("Checking the config now")], 5),
+        ])
+        assert [b.text for b in merged.content_blocks] == ["Checking the config now"]
 
 
 class TestUsageWinnerIsMaxNotLast:
@@ -202,6 +277,20 @@ class TestUsageWinnerIsMaxNotLast:
         ])
         assert merged.usage == Usage(input_tokens=700, output_tokens=90)
         assert len(merged.content_blocks) == 3
+
+    def test_whole_record_not_per_field_max(self) -> None:
+        # The first line has the larger cache_read; the winner's whole record
+        # (cache_read 10) must come through, not a per-field max (900).
+        frags = [
+            _frag([_text("a")], 10),
+            _frag([_tool("t1")], 90, input_tokens=700),
+        ]
+        frags[0].usage = Usage(input_tokens=1, output_tokens=10, cache_read_input_tokens=900)
+        frags[1].usage = Usage(input_tokens=700, output_tokens=90, cache_read_input_tokens=10)
+        merged = _merge_one(frags)
+        assert merged.usage == Usage(
+            input_tokens=700, output_tokens=90, cache_read_input_tokens=10,
+        )
 
     def test_cumulative_path(self) -> None:
         merged = _merge_one([

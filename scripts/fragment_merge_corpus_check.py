@@ -16,9 +16,20 @@ Run it once on the code before a merge change and once after, then compare:
 The first output line names the ``agentfluent`` package actually imported, so
 a before/after pair can be checked for which code produced it.
 
+Diagnostics are run with the inputs ``agentfluent analyze --diagnostics``
+passes (parent messages, parent MCP calls, session count, sessions), except
+the project's source directory, which is not resolved here -- so the
+config-scan audits read only the user-level Claude config.
+
+``cumulative_path_groups`` counts multi-line message groups the merge reads
+as legacy cumulative snapshots (``None`` on code that predates that rule).
+A nonzero value means the two accepted ambiguities documented on
+``core.parser._merge_fragment_group`` may be live in that corpus.
+
 Corpora default to the four used in #694; pass ``--corpus NAME=DIR`` (DIR
-relative to ``~/.claude/projects``) to choose others. ``--json PATH`` writes
-the results for diffing.
+relative to ``~/.claude/projects``, or absolute) to choose others.
+``--json PATH`` writes the results for diffing. A corpus or file that cannot
+be read is reported on stderr and skipped.
 """
 
 from __future__ import annotations
@@ -32,8 +43,10 @@ from typing import Any
 
 import agentfluent
 from agentfluent.analytics.pipeline import analyze_sessions
+from agentfluent.core import parser as core_parser
 from agentfluent.core.discovery import discover_sessions
 from agentfluent.core.parser import parse_session
+from agentfluent.core.session import SessionMessage
 from agentfluent.diagnostics.pipeline import run_diagnostics
 from agentfluent.traces.models import SubagentTrace
 
@@ -86,13 +99,33 @@ def _parsed_tool_use_ids(path: Path) -> set[str]:
     }
 
 
-def _id_counts(corpus_dir: Path) -> dict[str, int]:
+def _cumulative_path_groups(path: Path) -> int | None:
+    """Multi-line message groups the merge would read as cumulative snapshots."""
+    is_cumulative = getattr(core_parser, "_is_cumulative_snapshot_group", None)
+    if is_cumulative is None:
+        return None
+    groups: dict[str, list[SessionMessage]] = {}
+    for message in parse_session(path, deduplicate=False):
+        if message.type == "assistant" and message.message_id:
+            groups.setdefault(message.message_id, []).append(message)
+    return sum(1 for g in groups.values() if len(g) > 1 and is_cumulative(g))
+
+
+def _id_counts(corpus_dir: Path) -> dict[str, int | None]:
     counts = Counter[str]()
+    cumulative: int | None = 0
     for path in sorted(corpus_dir.rglob("*.jsonl")):
-        kind = "sub" if "subagents" in path.parts else "main"
+        kind = "sub" if "subagents" in path.relative_to(corpus_dir).parts else "main"
+        try:
+            parsed = _parsed_tool_use_ids(path)
+            groups = _cumulative_path_groups(path)
+        except (OSError, UnicodeDecodeError) as exc:
+            print(f"warning: skipping {path}: {exc}", file=sys.stderr)
+            continue
         counts[f"{kind}_raw_tool_use_ids"] += len(_raw_tool_use_ids(path))
-        counts[f"{kind}_parsed_tool_use_ids"] += len(_parsed_tool_use_ids(path))
-    return dict(counts)
+        counts[f"{kind}_parsed_tool_use_ids"] += len(parsed)
+        cumulative = None if groups is None or cumulative is None else cumulative + groups
+    return {**counts, "cumulative_path_groups": cumulative}
 
 
 def _same_turn_retry_sequences(trace: SubagentTrace) -> int:
@@ -118,7 +151,13 @@ def check_corpus(corpus_dir: Path) -> dict[str, Any]:
     invocations = [inv for s in result.sessions for inv in s.invocations]
     traces = [inv.trace for inv in invocations if inv.trace is not None]
 
-    diagnostics = run_diagnostics(invocations, sessions=result.sessions)
+    diagnostics = run_diagnostics(
+        invocations,
+        mcp_tool_calls=[c for s in result.sessions for c in s.mcp_tool_calls],
+        parent_messages=[m for s in result.sessions for m in s.messages],
+        session_count=result.session_count,
+        sessions=result.sessions,
+    )
     signals = Counter(str(sig.signal_type) for sig in diagnostics.signals)
 
     tokens = result.token_metrics
@@ -173,7 +212,11 @@ def main(argv: list[str] | None = None) -> int:
         if not corpus_dir.is_dir():
             print(f"skip {name}: {corpus_dir} not found", file=sys.stderr)
             continue
-        results[name] = check_corpus(corpus_dir)
+        try:
+            results[name] = check_corpus(corpus_dir)
+        except (OSError, UnicodeDecodeError) as exc:
+            print(f"error: skipping corpus {name}: {exc}", file=sys.stderr)
+            continue
         print(f"== {name}")
         for key, value in results[name].items():
             print(f"   {key}: {value}")
