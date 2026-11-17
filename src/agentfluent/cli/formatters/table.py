@@ -266,7 +266,8 @@ def format_analysis_table(
         # Duration column shows active (idle-subtracted) wall-clock per
         # call; the parenthetical raw wall-clock and yellow highlight mark
         # interactive agents whose wall-clock would otherwise mislead
-        # (#480). Footnotes mirror the verbose Per-Invocation table.
+        # (#480). Footnotes parallel the verbose Per-Invocation table's; the
+        # summary "*" also covers linked traces without a measurable span.
         if any_dur_partial:
             console.print(
                 "† Active duration covers only invocations with a measurable trace "

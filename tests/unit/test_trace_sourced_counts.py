@@ -26,6 +26,7 @@ from agentfluent.traces.models import SubagentToolCall, SubagentTrace
 
 _COVERAGE_FIELDS = (
     "total_tool_uses",
+    "invocations_with_turns",
     "total_duration_ms",
     "total_tool_uses_with_turns",
     "total_tokens_with_tool_uses",
@@ -231,13 +232,21 @@ class TestMergeEquivalence:
 
     @staticmethod
     def _uneven() -> list[AgentInvocation]:
-        """Every coverage pair takes a distinct value here, so a merge that
+        """Every merged count/sum field takes a distinct value here
+        (``test_uneven_fixture_separates_the_pairs`` pins it), so a merge that
         adds one field into another cannot match the single compute."""
-        tokens_no_duration = _link(
-            [_invocation("u", total_tokens=2_000)],
-            [_trace("u", tool_calls=5, duration_ms=None)],
+        linked = _link(
+            [_invocation("u", total_tokens=2_000), _invocation("v")],
+            [
+                _trace("u", tool_calls=5, duration_ms=None),
+                _trace("v", tool_calls=1, duration_ms=None, model_turns=6),
+            ],
         )
-        return [*_mixed(), *tokens_no_duration]
+        partial_rollups = [
+            _invocation("w", duration_ms=50_000),
+            _invocation("t", total_tokens=1_000),
+        ]
+        return [*_mixed(), *linked, *partial_rollups]
 
     def test_uneven_fixture_separates_the_pairs(self) -> None:
         pm = compute_agent_metrics(self._uneven()).by_agent_type["pm"]
@@ -245,6 +254,10 @@ class TestMergeEquivalence:
         assert pm.total_tool_uses_with_duration == 7
         assert pm.total_tokens_with_tool_uses == 12_000
         assert pm.total_duration_ms_with_tool_uses == 70_000
+        values = [getattr(pm, name) for name in (*_COVERAGE_FIELDS, "total_tokens")]
+        assert len(set(values)) == len(values), dict(
+            zip((*_COVERAGE_FIELDS, "total_tokens"), values, strict=True)
+        )
 
     def test_merge_matches_single_compute(self) -> None:
         part_a = _rollupless_linked()

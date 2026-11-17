@@ -186,9 +186,14 @@ def classify_complexity(stats: AgentStats) -> ComplexityTier:
     # without token data falls through to "moderate" so the recommendation
     # reflects uncertainty rather than asserting the work is small.
     #
-    # Known coverage mismatch, deferred to #675: ``mean_tool_calls`` averages
-    # every invocation carrying ``tool_uses`` (trace-linked or rollup), while
-    # ``mean_tokens`` averages rollup carriers only. Thin token evidence --
+    # Known coverage mismatch, deferred to #675: for subagent stats
+    # (``model_routing.aggregate_agent_stats`` and
+    # ``aggregate_cluster_stats``), ``mean_tool_calls`` averages every
+    # invocation carrying ``tool_uses`` (trace-linked or rollup), while
+    # ``mean_tokens`` averages rollup ``total_tokens`` carriers only.
+    # Parent-session stats (``parent_workload`` bursts, SDK-main turns)
+    # compute both means over the same bursts or turns (``tool_use`` blocks
+    # and ``usage``), so they are unaffected. Thin token evidence --
     # one rollup invocation among many rollup-less traces -- can therefore
     # still reach "simple". #675 re-sources ``mean_tokens`` from trace spend,
     # which puts both means on the same invocations.
