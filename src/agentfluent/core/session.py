@@ -174,8 +174,8 @@ class SessionMessage(BaseModel):
     """Normalized content: text, tool_use, and tool_result blocks."""
 
     message_id: str | None = None
-    """Anthropic message ID (e.g., 'msg_...'). Used to deduplicate streaming snapshots.
-    All snapshots for the same API call share the same message_id."""
+    """Anthropic message ID (e.g., 'msg_...'). Used to merge the fragments of one response.
+    All fragments of the same API call share the same message_id."""
 
     model: str | None = None
     """Model name (e.g., 'claude-opus-4-6'). Only on assistant messages."""

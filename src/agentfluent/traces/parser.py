@@ -2,7 +2,7 @@
 
 Consumes one file at ``<project>/<session-uuid>/subagents/agent-<agentId>.jsonl``
 by delegating to ``core.parser.parse_session`` for line reading, SKIP_TYPES
-filtering, per-message parsing, and streaming-snapshot deduplication. This
+filtering, per-message parsing, and assistant-fragment merging. This
 module's job is the subagent-specific shape on top of that: pairing
 ``tool_use``/``tool_result`` blocks, truncating summaries, detecting errors,
 aggregating ``Usage``, and deriving the trace's scalar fields.

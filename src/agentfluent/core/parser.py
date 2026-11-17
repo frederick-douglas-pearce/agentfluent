@@ -261,8 +261,8 @@ def _pick_max_tokens_fragment(fragments: list[SessionMessage]) -> SessionMessage
     """Return the fragment with the highest ``usage.output_tokens``.
 
     Treats missing usage as 0 tokens. Ties resolve to the first
-    fragment with that value. Used by ``_merge_fragment_group`` for
-    both the streaming-path block selection and usage-metadata lift.
+    fragment with that value. ``_merge_fragment_group`` takes the merged
+    message's ``usage`` from this fragment on both merge paths.
     """
     return max(
         fragments,
@@ -270,62 +270,113 @@ def _pick_max_tokens_fragment(fragments: list[SessionMessage]) -> SessionMessage
     )
 
 
+def _block_extends(earlier: ContentBlock, later: ContentBlock) -> bool:
+    """Whether ``later`` is a later snapshot of the same block as ``earlier``.
+
+    Only two block types can match: ``text`` whose earlier text is non-empty
+    and a prefix of the later text (a snapshot only grows), and ``tool_use``
+    with the same non-null id. Every other type -- ``thinking`` (the parser
+    stores no text for it), redacted thinking, unknown types -- never
+    matches, so a group containing one at a compared position is unioned.
+    """
+    if earlier.type != later.type:
+        return False
+    if earlier.type == "text":
+        return bool(earlier.text) and (later.text or "").startswith(
+            earlier.text or "",
+        )
+    if earlier.type == "tool_use":
+        return earlier.id is not None and earlier.id == later.id
+    return False
+
+
+def _is_cumulative_snapshot_group(fragments: list[SessionMessage]) -> bool:
+    """Whether every fragment is a positional prefix-superset of the one before.
+
+    True only for legacy streaming snapshots, where each line repeats the
+    whole response so far. ``output_tokens`` plays no part: current
+    block-per-line output also varies it from line to line (#694).
+    """
+    for earlier, later in zip(fragments, fragments[1:], strict=False):
+        if len(later.content_blocks) < len(earlier.content_blocks):
+            return False
+        for earlier_block, later_block in zip(
+            earlier.content_blocks, later.content_blocks, strict=False,
+        ):
+            if not _block_extends(earlier_block, later_block):
+                return False
+    return True
+
+
+def _union_content_blocks(fragments: list[SessionMessage]) -> list[ContentBlock]:
+    """Every block of every fragment in JSONL order; ``tool_use`` deduped by id.
+
+    A repeated ``tool_use`` id keeps its first position but takes the latest
+    block, so a later, more complete ``input`` wins -- the same "final input
+    wins" outcome as the cumulative path. Text and thinking blocks are all
+    kept (they are distinct blocks in the block-per-line shape).
+    """
+    blocks: list[ContentBlock] = []
+    position_by_tool_id: dict[str, int] = {}
+    for fragment in fragments:
+        for block in fragment.content_blocks:
+            if block.type == "tool_use" and block.id:
+                if block.id in position_by_tool_id:
+                    blocks[position_by_tool_id[block.id]] = block
+                    continue
+                position_by_tool_id[block.id] = len(blocks)
+            blocks.append(block)
+    return blocks
+
+
 def _merge_fragment_group(fragments: list[SessionMessage]) -> SessionMessage:
     """Merge a list of assistant-message fragments that share a `message_id`.
 
-    Two JSONL shapes appear in real data under the same message_id:
+    Two JSONL shapes appear under one message_id:
 
-    **Block-per-line** (the current Claude Code shape — ~100% of our
-    observed data). Each fragment carries one content block (text,
-    thinking, or tool_use). All fragments share the same ``output_tokens``
-    because it reports the full message's total, not a per-block count.
-    Merge: union every content block across fragments so nothing is
-    dropped.
+    **Block-per-line** (the current Claude Code shape; every multi-line
+    message in the four corpora surveyed for #694). Each line carries one
+    content block (thinking, text, or tool_use) and a running ``usage``
+    snapshot, so ``output_tokens`` may be equal across the lines or may
+    grow from line to line. Merge: union every content block in JSONL
+    order, deduplicating ``tool_use`` by id (first position, latest block).
+    Several parallel ``tool_use`` blocks commonly share one message.
 
-    **Classical streaming snapshots** (legacy; no longer observed but
-    covered for robustness). Each fragment is a cumulative snapshot of
-    the growing response. ``output_tokens`` increases monotonically from
-    partial → final. Merge: keep the max-``output_tokens`` fragment's
-    blocks intact; earlier snapshots are strict prefixes of the final.
+    **Cumulative streaming snapshots** (legacy; not observed in current
+    data, kept for robustness). Each line repeats the response so far.
+    Detected by content shape, never by ``output_tokens``: every line must
+    be a positional prefix-superset of the one before (see
+    ``_block_extends``). Merge: keep the last line's blocks, the final
+    snapshot, so a growing ``tool_use`` input keeps its final value.
 
-    Detection uses a single invariant: all fragments sharing the same
-    ``output_tokens`` → block-per-line; varying tokens → streaming.
-    Both paths dedup ``tool_use`` blocks by ``tool_use_id`` so
-    re-observations can't double-emit a tool call. Fragments with
-    missing ``usage`` metadata collapse the distinct-token set toward
-    empty and route through the block-per-line path; this is the
-    conservative choice (union is safer than drop).
+    Anything that is not a clean cumulative chain is unioned -- dropping a
+    block loses data, while a rare duplicate does not. Two accepted
+    consequences of that rule (neither seen in the #694 corpus survey):
+
+    - A legacy cumulative chain with a ``thinking`` block at a compared
+      position is unioned, so its text and thinking blocks repeat once per
+      snapshot. Its ``tool_use`` blocks still come out once each, with
+      their final input.
+    - Block-per-line ``text`` lines where each line's text is a prefix of
+      the next look exactly like a legacy text snapshot, so only the last
+      line's block is kept. Every dropped text is a prefix of the kept
+      text, so no distinct wording is lost, but the repeated prefix text
+      and the block boundary are.
+
+    ``usage`` is taken whole from the max-``output_tokens`` fragment on
+    both paths (all four fields from one record), so the merge cannot
+    move a token or cost total. Timestamp, model and entrypoint come from
+    the first fragment, so every merged block -- including parallel tool
+    calls written on later lines -- carries the first line's timestamp.
     """
     if len(fragments) == 1:
         return fragments[0]
 
-    output_tokens = {
-        f.usage.output_tokens for f in fragments if f.usage is not None
-    }
-    is_block_per_line = len(output_tokens) <= 1
-    winner = _pick_max_tokens_fragment(fragments)
-
-    if is_block_per_line:
-        # Union content blocks. Dedup tool_use by `ContentBlock.id` (the
-        # field carries the tool_use_id for tool_use blocks); keep all
-        # text/thinking blocks (they're disjoint in this shape).
-        blocks: list[ContentBlock] = []
-        seen_tool_ids: set[str] = set()
-        for f in fragments:
-            for b in f.content_blocks:
-                if b.type == "tool_use" and b.id:
-                    if b.id in seen_tool_ids:
-                        continue
-                    seen_tool_ids.add(b.id)
-                blocks.append(b)
+    if _is_cumulative_snapshot_group(fragments):
+        blocks = list(fragments[-1].content_blocks)
     else:
-        # Streaming: the max-tokens fragment is the final cumulative
-        # snapshot. Use its blocks as-is.
-        blocks = list(winner.content_blocks)
+        blocks = _union_content_blocks(fragments)
 
-    # Timestamp: first fragment's (matches JSONL insertion order; for
-    # block-per-line all fragments are adjacent lines, so there's no
-    # meaningful earlier/later distinction).
     return SessionMessage(
         type="assistant",
         timestamp=fragments[0].timestamp,
@@ -333,7 +384,7 @@ def _merge_fragment_group(fragments: list[SessionMessage]) -> SessionMessage:
         model=fragments[0].model,
         content_blocks=blocks,
         entrypoint=fragments[0].entrypoint,
-        usage=winner.usage,
+        usage=_pick_max_tokens_fragment(fragments).usage,
     )
 
 
@@ -343,12 +394,13 @@ def merge_assistant_fragments(
     """Merge assistant-message fragments sharing a `message_id`.
 
     Claude Code emits a single assistant response as multiple JSONL lines
-    — one per content block — all sharing the message's id. Legacy
-    Claude Code versions emitted streaming snapshots (same shape, but
-    each fragment is a cumulative snapshot with increasing
-    ``output_tokens``). This function detects which shape a group
-    follows and merges accordingly; see ``_merge_fragment_group`` for
-    the shape-specific rules.
+    — one per content block — all sharing the message's id, with a
+    running ``usage`` snapshot on each line. Legacy Claude Code versions
+    emitted cumulative streaming snapshots instead, each line repeating
+    the response so far. This function detects which shape a group
+    follows from its content (never from ``output_tokens``) and merges
+    accordingly; see ``_merge_fragment_group`` for the shape-specific
+    rules.
 
     Non-assistant messages and assistant messages without a
     ``message_id`` pass through unchanged.
@@ -391,13 +443,16 @@ def parse_session(path: Path, *, deduplicate: bool = True) -> list[SessionMessag
     malformed lines (with a warning log). Returns an empty list for
     empty files or files that contain no analytical messages.
 
-    Streaming snapshot deduplication is applied by default: assistant
-    messages sharing the same message.id are collapsed, keeping the
-    entry with the highest output_tokens.
+    Fragment merging is applied by default: assistant lines sharing the
+    same message.id are merged into one message. Its content is the union
+    of the lines' blocks for block-per-line output, or the final snapshot's
+    blocks for legacy cumulative snapshots; its usage is the record of the
+    line with the highest output_tokens (see ``merge_assistant_fragments``).
 
     Args:
         path: Path to the .jsonl session file.
-        deduplicate: Whether to deduplicate streaming snapshots. Default True.
+        deduplicate: Whether to merge assistant fragments sharing a
+            message.id. Default True. False returns one message per line.
 
     Returns:
         List of parsed SessionMessage objects in file order.
