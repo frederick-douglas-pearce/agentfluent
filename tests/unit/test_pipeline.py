@@ -253,7 +253,11 @@ class TestMergeAgentMetricsTurns:
             agent_type="pm",
             is_builtin=False,
             invocation_count=with_turns,
-            total_tool_uses=tool_uses,
+            # 5 extra tool calls from a traceless (turnless) invocation, so
+            # the per-turn ratio must read the coverage-matched numerator
+            # (#690), not the all-invocation tool sum.
+            total_tool_uses=tool_uses + 5,
+            total_tool_uses_with_turns=tool_uses,
             total_model_turns=total_turns,
             invocations_with_turns=with_turns,
         )
@@ -271,6 +275,7 @@ class TestMergeAgentMetricsTurns:
         assert merged.total_model_turns == 10
         # Ratios recomputed from merged totals, not averaged.
         assert pm.avg_turns_per_invocation == 10 / 3
+        assert pm.total_tool_uses_with_turns == 20
         assert pm.avg_tool_calls_per_turn == 20 / 10
 
     def test_first_seen_branch_preserves_turn_fields(self) -> None:

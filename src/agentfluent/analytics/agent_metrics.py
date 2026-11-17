@@ -23,12 +23,20 @@ from agentfluent.agents.models import AgentInvocation
 from agentfluent.analytics.tokens import price_trace, trace_counts_as_spend
 
 
-def _recompute_turn_ratios(metrics: AgentTypeMetrics) -> None:
-    """Set the four turn-based ratio fields from the stored totals.
+def _recompute_ratios(metrics: AgentTypeMetrics) -> None:
+    """Set the stored ratio fields from the stored totals.
 
     Shared by ``compute_agent_metrics`` (single session) and
     ``_merge_agent_metrics`` (multi-session) so the guard logic lives in
-    one place. ``estimated_avg_cost_per_turn_usd`` divides
+    one place.
+
+    Every ratio divides a coverage-matched pair (#690): numerator and
+    denominator are summed over the same invocations, so an invocation that
+    carries only one of the two values never dilutes or inflates the ratio.
+    ``avg_tool_calls_per_turn`` divides ``total_tool_uses_with_turns`` (not the
+    all-invocation ``total_tool_uses``) by ``total_model_turns``;
+    ``avg_tokens_per_tool_use`` and ``avg_duration_per_tool_use`` divide their
+    own ``*_with_*`` pairs. ``estimated_avg_cost_per_turn_usd`` divides
     ``estimated_total_cost_usd``, so the caller must set cost before
     calling this. ``avg_turns_per_invocation`` is guarded on
     ``invocations_with_turns`` (so a 0-turn trace yields 0.0, not None);
@@ -47,9 +55,20 @@ def _recompute_turn_ratios(metrics: AgentTypeMetrics) -> None:
         metrics.avg_turns_per_invocation = (
             metrics.total_model_turns / metrics.invocations_with_turns
         )
+    if metrics.total_tool_uses_with_tokens > 0 and metrics.total_tokens_with_tool_uses > 0:
+        metrics.avg_tokens_per_tool_use = (
+            metrics.total_tokens_with_tool_uses / metrics.total_tool_uses_with_tokens
+        )
+    if (
+        metrics.total_tool_uses_with_duration > 0
+        and metrics.total_duration_ms_with_tool_uses > 0
+    ):
+        metrics.avg_duration_per_tool_use = (
+            metrics.total_duration_ms_with_tool_uses / metrics.total_tool_uses_with_duration
+        )
     if metrics.total_model_turns > 0:
         metrics.avg_tool_calls_per_turn = (
-            metrics.total_tool_uses / metrics.total_model_turns
+            metrics.total_tool_uses_with_turns / metrics.total_model_turns
         )
         metrics.avg_tokens_per_turn = metrics.spend_tokens / metrics.total_model_turns
     if metrics.priced_model_turns > 0 and metrics.estimated_total_cost_usd > 0:
@@ -79,10 +98,32 @@ class AgentTypeMetrics:
     against the Usage & Cost Admin API; validated by internal cross-checks only
     (D059)."""
     avg_tokens_per_tool_use: float | None = None
-    """``total_tokens / total_tool_uses`` -- built on the rollup context-size
-    proxy, **not** spend (D057(1)); see ``total_tokens``. Its units differ from
-    the spend-based ``avg_tokens_per_turn``."""
+    """``total_tokens_with_tool_uses / total_tool_uses_with_tokens`` -- built on
+    the rollup context-size proxy, **not** spend (D057(1)); see ``total_tokens``.
+    Its units differ from the spend-based ``avg_tokens_per_turn``."""
     avg_duration_per_tool_use: float | None = None
+    """``total_duration_ms_with_tool_uses / total_tool_uses_with_duration``."""
+
+    # Coverage-matched pairs for the stored ratios (#690). ``tool_uses`` is
+    # trace-sourced on every trace-linked invocation while ``total_tokens``
+    # stays rollup-only, so the all-invocation sums above no longer cover the
+    # same invocations. Each ratio divides a pair summed over the invocations
+    # that carry BOTH of its values.
+    total_tool_uses_with_turns: int = 0
+    """Σ ``tool_uses`` over invocations with ``model_turns`` (a linked trace);
+    numerator of ``avg_tool_calls_per_turn`` over ``total_model_turns``."""
+
+    total_tokens_with_tool_uses: int = 0
+    """Σ ``total_tokens`` over invocations that also carry ``tool_uses``."""
+
+    total_tool_uses_with_tokens: int = 0
+    """Σ ``tool_uses`` over invocations that also carry ``total_tokens``."""
+
+    total_duration_ms_with_tool_uses: int = 0
+    """Σ ``duration_ms`` over invocations that also carry ``tool_uses``."""
+
+    total_tool_uses_with_duration: int = 0
+    """Σ ``tool_uses`` over invocations that also carry ``duration_ms``."""
 
     # Active-duration aggregates (#480). ``total_duration_ms`` above is
     # raw wall-clock summed over *all* invocations and silently includes
@@ -92,15 +133,17 @@ class AgentTypeMetrics:
     # interactive agent like ``pm`` doesn't read as a duration problem.
     #
     # Honesty constraint (#480, architect review): active duration only
-    # exists for trace-linked invocations (~80% of the dogfood corpus).
-    # To make the wall/active ratio measure *only* idle subtraction --
-    # not trace-coverage skew -- ``total_wallclock_ms_trace_linked``
-    # sums wall-clock over the SAME subset that contributed active
-    # duration, so both averages share ``active_duration_invocation_count``
-    # as their denominator.
+    # exists for trace-linked invocations. To make the wall/active ratio
+    # measure *only* idle subtraction -- not trace-coverage skew --
+    # ``total_wallclock_ms_trace_linked`` sums wall-clock over the SAME
+    # subset that contributed active duration, so both averages share
+    # ``active_duration_invocation_count`` as their denominator. Since #690
+    # both values of one invocation come from its trace.
     total_active_duration_ms: int = 0
-    """Sum of ``active_duration_ms`` over invocations that had a linked
-    trace (idle gaps subtracted)."""
+    """Sum of active duration over trace-linked invocations with a trace
+    duration: ``active_duration_ms`` (idle gaps subtracted), or the trace
+    ``duration_ms`` when idle gaps could not be computed (fewer than two
+    timestamped tool calls), mirroring ``active_duration_per_tool_use`` (#690)."""
 
     total_wallclock_ms_trace_linked: int = 0
     """Sum of raw ``duration_ms`` over the *same* trace-linked invocations
@@ -108,8 +151,8 @@ class AgentTypeMetrics:
     numerator for a coverage-matched wall/active ratio."""
 
     active_duration_invocation_count: int = 0
-    """Count of invocations contributing to the two active totals
-    (``active_duration_ms is not None``). Shared denominator for the
+    """Count of invocations contributing to the two active totals (a linked
+    trace with a ``duration_ms``). Shared denominator for the
     active and trace-linked-wall per-call averages, and the coverage
     figure against ``invocation_count``. Mirrors the
     ``invocations_with_turns`` pattern."""
@@ -293,17 +336,27 @@ def compute_agent_metrics(
             metrics.total_tokens += inv.total_tokens
         if inv.tool_uses is not None:
             metrics.total_tool_uses += inv.tool_uses
+            if inv.total_tokens is not None:
+                metrics.total_tokens_with_tool_uses += inv.total_tokens
+                metrics.total_tool_uses_with_tokens += inv.tool_uses
+            if inv.duration_ms is not None:
+                metrics.total_duration_ms_with_tool_uses += inv.duration_ms
+                metrics.total_tool_uses_with_duration += inv.tool_uses
         if inv.duration_ms is not None:
             metrics.total_duration_ms += inv.duration_ms
         # Active duration exists only for trace-linked invocations. Sum
         # active and its coverage-matched wall-clock over the same subset
         # (#480) so a downstream wall/active ratio reflects idle
         # subtraction, not which invocations happened to have a trace.
-        # ``duration_ms`` is guaranteed present here: a linked trace
-        # implies parent toolUseResult metadata, but guard anyway so a
-        # degenerate trace can't desync the two sums from their count.
-        if inv.active_duration_ms is not None and inv.duration_ms is not None:
-            metrics.total_active_duration_ms += inv.active_duration_ms
+        # On a trace-linked invocation both come from the trace (#690).
+        # Where idle gaps could not be computed (fewer than two timestamped
+        # tool calls), the trace span stands in as active -- same source, no
+        # idle subtracted -- so the invocation still counts as covered.
+        if inv.trace is not None and inv.duration_ms is not None:
+            active = inv.active_duration_ms
+            metrics.total_active_duration_ms += (
+                active if active is not None else inv.duration_ms
+            )
             metrics.total_wallclock_ms_trace_linked += inv.duration_ms
             metrics.active_duration_invocation_count += 1
         # ``is not None`` (not truthiness): a 0-turn trace still has turn
@@ -312,6 +365,8 @@ def compute_agent_metrics(
         if inv.model_turns is not None:
             metrics.total_model_turns += inv.model_turns
             metrics.invocations_with_turns += 1
+            if inv.tool_uses is not None:
+                metrics.total_tool_uses_with_turns += inv.tool_uses
         # Trace-sourced spend and cost (#646). Trace-missing invocations add
         # nothing here -- no blended fill-in (#646 AC4).
         trace = inv.trace
@@ -324,17 +379,9 @@ def compute_agent_metrics(
                 metrics.priced_invocation_count += 1
                 metrics.priced_model_turns += trace.model_turns
 
-    # Compute averages and cost
+    # Cost is already accumulated: cost-per-turn divides it.
     for metrics in by_type.values():
-        if metrics.total_tool_uses > 0:
-            if metrics.total_tokens > 0:
-                metrics.avg_tokens_per_tool_use = metrics.total_tokens / metrics.total_tool_uses
-            if metrics.total_duration_ms > 0:
-                metrics.avg_duration_per_tool_use = (
-                    metrics.total_duration_ms / metrics.total_tool_uses
-                )
-        # Cost is already accumulated: cost-per-turn divides it.
-        _recompute_turn_ratios(metrics)
+        _recompute_ratios(metrics)
 
     # Aggregate totals
     total_invocations = sum(m.invocation_count for m in by_type.values())

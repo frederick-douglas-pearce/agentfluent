@@ -10,8 +10,9 @@ results stay out of the context window. Anthropic reports a 37% token
 reduction on complex research tasks (see the Advanced Tool Use article).
 
 **Tier A scope (#406).** This is a coarse, metadata-only proxy built
-from the parent session's ``toolUseResult`` fields
-(``AgentInvocation.tool_uses`` and ``.total_tokens``). It fires on
+from ``AgentInvocation.tool_uses`` (trace-sourced when a trace is linked,
+#690, else the parent ``toolUseResult`` rollup) and the rollup
+``.total_tokens``, so it stays blind on invocations without a rollup. It fires on
 invocations with a high tool-call count *and* a high per-call token
 average, aggregated to 3+ matching invocations per agent type. Tier B
 (trace-enhanced, per-call inspection) is a deferred follow-up.

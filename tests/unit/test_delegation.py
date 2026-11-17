@@ -43,6 +43,7 @@ def _inv(
     prompt: str = "",
     total_tokens: int | None = None,
     trace: SubagentTrace | None = None,
+    tool_uses: int | None = None,
 ) -> AgentInvocation:
     return AgentInvocation(
         agent_type=agent_type,
@@ -50,6 +51,7 @@ def _inv(
         prompt=prompt,
         tool_use_id="toolu_" + description[:10],
         total_tokens=total_tokens,
+        tool_uses=tool_uses,
         trace=trace,
     )
 
@@ -309,13 +311,17 @@ class TestGenerateDraft:
         assert draft.tools == ["Grep", "Read"]
 
     def test_read_only_no_token_data_recommends_sonnet(self) -> None:
-        # Zero observable token/tool-call data — the unified classifier's
-        # has_observed_data guard returns "moderate" (Sonnet) rather than
-        # asserting the work is small. Pre-#185 this returned Haiku via
-        # the "all read-only" branch, which under-recommended for clusters
-        # whose actual scale was unknown.
+        # No token data — the unified classifier's has_token_evidence guard
+        # returns "moderate" (Sonnet) rather than asserting the work is
+        # small, even though the trace supplies tool calls. ``tool_uses=2``
+        # is what ``attach_trace`` sets for this trace in production (#690).
+        # Pre-#185 this returned Haiku via the "all read-only" branch, which
+        # under-recommended for clusters whose actual scale was unknown.
         members = [
-            _inv(description="d", prompt="p", trace=_trace_with_tools(["Read", "Grep"])),
+            _inv(
+                description="d", prompt="p", tool_uses=2,
+                trace=_trace_with_tools(["Read", "Grep"]),
+            ),
         ] * 5
         draft = generate_draft(self._cluster(members=members))
         assert draft.model == MODEL_SONNET
@@ -453,9 +459,9 @@ class TestGenerateDraft:
 
 class TestClassifyHelpers:
     def test_classify_model_no_observed_data_recommends_sonnet(self) -> None:
-        # When no token or tool-call data is available, the unified
-        # classifier's has_observed_data guard returns "moderate" →
-        # Sonnet rather than asserting the work is small.
+        # When no token data is available, the unified classifier's
+        # has_token_evidence guard returns "moderate" → Sonnet rather than
+        # asserting the work is small.
         members = [_inv(total_tokens=None)] * 3
         assert _classify_model(["Write"], members) == MODEL_SONNET
 

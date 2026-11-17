@@ -30,12 +30,14 @@ def link_traces(
     For every invocation with a non-``None`` ``agent_id``, call
     ``trace_loader(agent_id)``. When the loader returns a trace, overwrite
     its ``agent_type`` with the invocation's ``agent_type`` (parent is
-    authoritative) and assign it to ``invocation.trace``. Invocations
+    authoritative) and attach it with ``AgentInvocation.attach_trace``, which
+    also re-sources the invocation's ``tool_uses`` and ``duration_ms`` from the
+    trace (#690: one source per invocation). Invocations
     without an ``agent_id`` or with an unmatched loader return keep
     ``trace = None``.
 
-    Returns the same list object it received, with ``trace`` fields
-    mutated. Callers that want to track orphan traces (files whose
+    Returns the same list object it received, with ``trace``, ``tool_uses``
+    and ``duration_ms`` mutated. Callers that want to track orphan traces (files whose
     ``agent_id`` doesn't match any invocation) should diff against the
     set of keys they passed into the loader's closure.
     """
@@ -46,5 +48,5 @@ def link_traces(
         if trace is None:
             continue
         trace.agent_type = invocation.agent_type
-        invocation.trace = trace
+        invocation.attach_trace(trace)
     return invocations

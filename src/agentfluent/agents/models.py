@@ -85,7 +85,26 @@ class AgentInvocation(BaseModel):
     are built from (#646, ``AgentTypeMetrics.spend_tokens``)."""
 
     tool_uses: int | None = None
+    """Tool calls this invocation made. **One source per invocation (#690):**
+    when a subagent trace is linked, ``attach_trace`` sets it to
+    ``len(trace.tool_calls)``; otherwise it is the parent
+    ``toolUseResult.totalToolUseCount`` rollup, or ``None`` when the rollup is
+    absent. The trace-sourced count **excludes child agents' tool calls**:
+    depth-2 agents hang off ``trace.children`` and are not counted here (#595).
+    The rollup is not known to include them -- it equals the trace count on
+    99.5% / 98.4% / 100% / 93.7% of invocations carrying both across four
+    corpora, every mismatch having the trace larger (#690 AC7,
+    ``scripts/trace_sourcing_corpus_check.py``; residual tracked in #698)."""
+
     duration_ms: int | None = None
+    """Wall-clock duration in ms, from the same source as ``tool_uses`` (#690):
+    the linked trace's first-to-last message span (``trace.duration_ms``, which
+    may be ``None``; the rollup is never substituted), else the parent
+    ``toolUseResult.totalDurationMs`` rollup, else ``None``. The trace span
+    omits the parent-side tail after the subagent's last message, so it reads
+    slightly shorter than the rollup. Wall-clock either way: idle time is
+    subtracted only in ``active_duration_ms``."""
+
     agent_id: str | None = None
     resolved_model: str | None = None
     """The concrete model this subagent resolved to, read from the parent
@@ -109,6 +128,19 @@ class AgentInvocation(BaseModel):
     # otherwise (e.g., older sessions predating trace capture). Serves as the
     # evidence layer for trace-level diagnostics.
     trace: SubagentTrace | None = None
+
+    def attach_trace(self, trace: SubagentTrace) -> None:
+        """Adopt ``trace`` as this invocation's trace, together with its counts.
+
+        Sets ``trace``, ``tool_uses`` and ``duration_ms`` in one step so a
+        trace-linked invocation never mixes trace and rollup values (#690 AC1).
+        ``duration_ms`` takes the trace's value even when it is ``None``. Called
+        by ``traces.linker.link_traces``, the one place a trace is attached; an
+        invocation built directly (a test fixture) keeps whatever it was given.
+        """
+        self.trace = trace
+        self.tool_uses = len(trace.tool_calls)
+        self.duration_ms = trace.duration_ms
 
     @property
     def observed_tool_names(self) -> set[str]:
@@ -136,7 +168,13 @@ class AgentInvocation(BaseModel):
 
     @property
     def tokens_per_tool_use(self) -> float | None:
-        """Average tokens per tool call. None if data unavailable."""
+        """Average tokens per tool call. None if data unavailable.
+
+        Divides the rollup ``total_tokens`` (a context-size proxy) by
+        ``tool_uses``, which is trace-sourced when a trace is linked (#690), so
+        on a trace-linked invocation the two halves come from different
+        sources. They count nearly the same calls: see the #690 AC7 parity
+        figures on ``tool_uses``."""
         if self.total_tokens is not None and self.tool_uses and self.tool_uses > 0:
             return self.total_tokens / self.tool_uses
         return None
@@ -171,12 +209,14 @@ class AgentInvocation(BaseModel):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def duration_reliable(self) -> bool:
-        """Whether ``duration_ms`` represents active work rather than
-        wall-clock-including-wait. ``True`` only when a subagent trace is
-        linked: with a trace, the idle-gap heuristic can subtract user-
-        wait time. Without a trace, the only available duration is the
-        parent-side wall-clock, which silently includes any time the user
-        spent away from the keyboard between tool calls. Consumers
+        """Whether ``duration_ms`` is trace-sourced, so idle subtraction is
+        available. ``True`` only when a subagent trace is linked: then
+        ``duration_ms`` is the trace span (#690) and the idle-gap heuristic
+        can subtract user-wait time from it (``active_duration_ms``).
+        ``duration_ms`` itself is wall-clock either way. Without a trace,
+        the only available duration is the parent-side wall-clock, which
+        silently includes any time the user spent away from the keyboard
+        between tool calls. Consumers
         (formatter, ``duration_outlier`` signal, aggregate stats) should
         treat unreliable durations as wall-clock estimates, not active
         work, and either annotate or filter them out."""

@@ -224,13 +224,13 @@ def render_agent_metrics(data: dict[str, Any]) -> str:
     footnotes = ""
     if any_partial:
         footnotes += (
-            "\n† Active duration covers only the trace-linked invocations; "
-            "the average and active/wall split use that subset.\n"
+            "\n† Active duration covers only invocations with a measurable trace "
+            "span; the average and active/wall split use that subset.\n"
         )
     if any_unreliable:
         footnotes += (
-            "\n\\* Duration estimated from wall-clock; no subagent trace "
-            "available (may include user-wait time).\n"
+            "\n\\* Duration estimated from wall-clock; no subagent trace with a "
+            "measurable span available (may include user-wait time).\n"
         )
     return (
         "## Agent Metrics\n\n"

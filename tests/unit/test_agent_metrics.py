@@ -184,8 +184,9 @@ def _trace_linked_invocation(
 ) -> AgentInvocation:
     """Invocation whose linked trace yields an active duration
     (``duration_ms - idle_gap_ms``). ``inv.active_duration_ms`` reads
-    the trace; ``inv.duration_ms`` is the parent-side wall-clock summed
-    into ``total_wallclock_ms_trace_linked``."""
+    the trace; ``inv.duration_ms`` mirrors ``trace.duration_ms``, as
+    ``attach_trace`` would set it (#690), and is summed into
+    ``total_wallclock_ms_trace_linked``."""
     inv = AgentInvocation(
         agent_type=agent_type,
         description="test",

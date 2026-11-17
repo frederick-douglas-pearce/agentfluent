@@ -266,17 +266,18 @@ def format_analysis_table(
         # Duration column shows active (idle-subtracted) wall-clock per
         # call; the parenthetical raw wall-clock and yellow highlight mark
         # interactive agents whose wall-clock would otherwise mislead
-        # (#480). Footnotes mirror the verbose Per-Invocation table.
+        # (#480). Footnotes parallel the verbose Per-Invocation table's; the
+        # summary "*" also covers linked traces without a measurable span.
         if any_dur_partial:
             console.print(
-                "† Active duration covers only the trace-linked invocations; "
-                "the average and active/wall split use that subset.",
+                "† Active duration covers only invocations with a measurable trace "
+                "span; the average and active/wall split use that subset.",
                 style="dim",
             )
         if any_dur_unreliable:
             console.print(
-                "* Duration estimated from wall-clock; no subagent trace available "
-                "(may include user-wait time).",
+                "* Duration estimated from wall-clock; no subagent trace with a "
+                "measurable span available (may include user-wait time).",
                 style="dim",
             )
 
@@ -324,11 +325,12 @@ def format_analysis_table(
                 # trace always has >= 1 assistant message, so 0 only
                 # occurs for empty/degenerate traces where "-" is apt.
                 turns = str(inv.model_turns) if inv.model_turns else "-"
-                tools = str(inv.tool_uses) if inv.tool_uses else "-"
-                # Gate on idle_gap_ms, not (active vs duration) diff:
-                # the two come from different sources (JSONL timestamps
-                # vs parent toolUseResult) and disagree by ~ms even when
-                # no idle was detected.
+                # 0 is a measured value from either source -- a trace with no
+                # tool calls, or a rollup reporting 0 (#690) -- so it renders
+                # "0"; only a missing count renders "-".
+                tools = str(inv.tool_uses) if inv.tool_uses is not None else "-"
+                # Gate on idle_gap_ms, not an (active vs duration) diff: show
+                # the "(wall)" form only when idle time was actually detected.
                 if inv.duration_ms is None:
                     duration = "-"
                 elif not inv.duration_reliable:

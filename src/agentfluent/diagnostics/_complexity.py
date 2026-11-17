@@ -178,12 +178,28 @@ def classify_complexity(stats: AgentStats) -> ComplexityTier:
     ):
         return "complex"
     # The "simple" branch requires evidence of light work, not absence
-    # of data. A cluster with no observed tool calls AND no token data
-    # falls through to "moderate" so the recommendation reflects
-    # uncertainty rather than asserting the work is small.
-    has_observed_data = stats.mean_tool_calls > 0 or stats.mean_tokens > 0
+    # of data, and that evidence must include token data. ``mean_tokens``
+    # is 0.0 when no invocation carries the rollup ``total_tokens``; since
+    # #690 such an agent type can still have trace-sourced tool calls, and
+    # reading its 0.0 as "below the token threshold" would call it simple
+    # (and steer it toward Haiku) with no token evidence at all. A group
+    # without token data falls through to "moderate" so the recommendation
+    # reflects uncertainty rather than asserting the work is small.
+    #
+    # Known coverage mismatch, deferred to #675: for subagent stats
+    # (``model_routing.aggregate_agent_stats`` and
+    # ``aggregate_cluster_stats``), ``mean_tool_calls`` averages every
+    # invocation carrying ``tool_uses`` (trace-linked or rollup), while
+    # ``mean_tokens`` averages rollup ``total_tokens`` carriers only.
+    # Parent-session stats (``parent_workload`` bursts, SDK-main turns)
+    # compute both means over the same bursts or turns (``tool_use`` blocks
+    # and ``usage``), so they are unaffected. Thin token evidence --
+    # one rollup invocation among many rollup-less traces -- can therefore
+    # still reach "simple". #675 re-sources ``mean_tokens`` from trace spend,
+    # which puts both means on the same invocations.
+    has_token_evidence = stats.mean_tokens > 0
     if (
-        has_observed_data
+        has_token_evidence
         and stats.mean_tool_calls < _SIMPLE_MAX_TOOL_CALLS
         and stats.mean_tokens < _SIMPLE_MAX_TOKENS
     ):

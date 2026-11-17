@@ -1263,9 +1263,10 @@ write-tool presence alone, without high token volume or tool-call count,
 must not escalate an agent to "complex". It is retained as observation
 metadata for other diagnostics.
 
-An agent with no observed tool calls and no token data falls through to
-`moderate` rather than `simple`, so the recommendation reflects
-uncertainty instead of asserting the work is small.
+An agent with no token data (no invocation carrying the rollup
+`total_tokens`) falls through to `moderate` rather than `simple`, even
+when trace tool-call counts are available (#690), so the recommendation
+reflects uncertainty instead of asserting the work is small.
 
 Calibration note (#140): these thresholds are pending multi-contributor
 validation. On v0.3 single-dataset calibration, every observed agent
@@ -1717,8 +1718,9 @@ an estimate of time the agent was actually working.
 **Detail:** Added in v0.9 (#480; the underlying subtraction shipped in #230).
 Two duration measures exist for an agent invocation:
 
-- **wall-clock** (`duration_ms`) -- raw elapsed time from the parent's
-  `toolUseResult` metadata. It silently includes any stretch where a
+- **wall-clock** (`duration_ms`) -- raw elapsed time: the subagent
+  trace's first-to-last message span when a trace is linked (#690), else
+  the parent's `toolUseResult` metadata. It silently includes any stretch where a
   tool call sat pending user approval while the user was away (the IDE
   prompting to allow a `Write`, an MCP call, etc.).
 - **active** (`active_duration_ms`) -- wall-clock minus detected idle
