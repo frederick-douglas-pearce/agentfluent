@@ -257,7 +257,7 @@ class TestAcceptedAmbiguities:
         assert len(tools) == 1
         assert tools[0].input == {"p": "/x"}
 
-    def test_prefix_text_lines_collapse_losslessly(self) -> None:
+    def test_prefix_text_lines_collapse_to_last_line(self) -> None:
         merged = _merge_one([
             _frag([_text("Checking")], 5),
             _frag([_text("Checking the config now")], 5),

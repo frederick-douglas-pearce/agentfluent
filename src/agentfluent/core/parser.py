@@ -359,8 +359,9 @@ def _merge_fragment_group(fragments: list[SessionMessage]) -> SessionMessage:
       their final input.
     - Block-per-line ``text`` lines where each line's text is a prefix of
       the next look exactly like a legacy text snapshot, so only the last
-      line's block is kept. No characters are lost (the dropped text is the
-      start of the kept text); only the block boundary is.
+      line's block is kept. Every dropped text is a prefix of the kept
+      text, so no distinct wording is lost, but the repeated prefix text
+      and the block boundary are.
 
     ``usage`` is taken whole from the max-``output_tokens`` fragment on
     both paths (all four fields from one record), so the merge cannot
