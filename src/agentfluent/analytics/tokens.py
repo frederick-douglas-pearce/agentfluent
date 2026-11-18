@@ -231,6 +231,13 @@ def dedupe_trace_turns(
     ``usage``. A trace *object* appearing twice is processed once; two distinct
     objects for the same ``agent_id`` are not merged (#705).
 
+    **Only a trace that counts as spend may claim an id** -- the trace-side twin
+    of ``counted_parent_message_ids``' rule for the main session. A trace failing
+    ``trace_counts_as_spend`` (no model, or a ``<synthetic>`` first assistant
+    message -- the #692 shape) is skipped entirely and its ``spend_usage`` stays
+    ``None``: every spend reader excludes it anyway, so letting it claim a turn
+    it shares with a later fork would leave that turn counted nowhere.
+
     Mutates ``spend_usage`` only; the public per-file ``usage`` is unchanged.
     """
     ordered = [
@@ -243,7 +250,7 @@ def dedupe_trace_turns(
         if id(trace) in processed:
             continue
         processed.add(id(trace))
-        if not trace.turn_usages:
+        if not trace.turn_usages or not trace_counts_as_spend(trace):
             continue
         spend = Usage()
         for turn in trace.turn_usages:

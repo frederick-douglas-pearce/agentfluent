@@ -3,11 +3,11 @@
 Computes invocation counts, token usage, cost, and efficiency metrics grouped
 by agent type.
 
-**Spend is sourced from subagent traces (#646).** Per-agent spend is the sum of
-each linked trace's ``analytics.tokens.trace_spend_usage`` -- per-turn usage
-deduplicated within the file (#696) and across the session's files (#701) --
-(``spend_tokens``), and
-per-agent cost prices each trace at its own model's rate through
+**Spend is sourced from subagent traces (#646).** Per-agent spend
+(``spend_tokens``) is the sum of each linked trace's
+``analytics.tokens.trace_spend_usage`` -- per-turn usage deduplicated within the
+file (#696) and across the session's files (#701) -- and per-agent cost prices
+each trace at its own model's rate through
 ``analytics.tokens.price_trace`` -- the same primitive the session fold uses, so
 Σ per-agent cost reconciles with the session's subagent-origin ``by_model`` cost.
 Trace-missing invocations add no spend and no cost; there is no blended fill-in.

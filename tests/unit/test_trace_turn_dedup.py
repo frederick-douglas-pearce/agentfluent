@@ -455,3 +455,27 @@ class TestVerboseInvocationTable:
         detail = text[text.index("Per-Invocation Detail"):]
         assert format_tokens(_total(_A2_OWN)) in detail
         assert format_tokens(_total(_SHARED) + _total(_A2_OWN)) not in detail
+
+
+class TestNonSpendTracesClaimNothing:
+    """Round-2 r2.recheck.1: a trace every spend reader excludes must not claim
+    a message id, or a turn it shares with a later trace is counted nowhere."""
+
+    @pytest.mark.parametrize("model", [None, "<synthetic>"])
+    def test_excluded_trace_leaves_shared_turn_to_the_next(self, model: str | None) -> None:
+        excluded = _trace("a", [("s", 1000)])
+        excluded.model = model
+        kept = _trace("b", [("s", 1000), ("own", 1)])
+        dedupe_trace_turns(set(), [excluded, kept])
+        assert excluded.spend_usage is None
+        assert trace_spend_usage(kept).output_tokens == 1001
+
+    def test_excluded_trace_contributes_nothing_to_the_fold(self) -> None:
+        from agentfluent.analytics.tokens import compute_subagent_token_metrics
+
+        excluded = _trace("a", [("s", 1000)])
+        excluded.model = "<synthetic>"
+        kept = _trace("b", [("s", 1000), ("own", 1)])
+        dedupe_trace_turns(set(), [excluded, kept])
+        rows = compute_subagent_token_metrics([excluded, kept])
+        assert sum(r.output_tokens for r in rows) == 1001

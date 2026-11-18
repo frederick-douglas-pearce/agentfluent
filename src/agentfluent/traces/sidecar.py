@@ -26,9 +26,11 @@ Note the edge is a *label*, not a resolved parent: ``tool_use_id`` identifies a
 emitting agent requires an index over the main session plus sibling traces --
 that resolver is the linker's job (#595 PR B), not this module's.
 
-This layer is intentionally read-only and total: a missing or malformed
-sidecar yields ``None`` rather than raising, because sidecars are a Claude Code
-format evolution and older sessions simply do not have them.
+This layer is intentionally read-only and total: a missing, unreadable or
+non-object sidecar yields ``None`` rather than raising, because sidecars are a
+Claude Code format evolution and older sessions simply do not have them. Within
+an object, wrongly-typed fields fall back to their defaults rather than
+discarding the sidecar (#701).
 """
 
 from __future__ import annotations
@@ -151,9 +153,9 @@ def read_subagent_sidecar(trace_path: Path) -> SubagentSidecar | None:
     field coerces a missing or wrongly-typed value to its default, so one odd
     field never discards the rest; the validation branch is a backstop, not an
     expected path. (No key is required since #701 -- a sidecar without
-    ``toolUseId`` still carries the agent's type and name.) Absence is an expected, ordinary
-    case: sessions predating the sidecar format have trace files with no
-    sidecar, and callers must degrade rather than fail.
+    ``toolUseId`` still carries the agent's type and name.) Absence is an
+    expected, ordinary case: sessions predating the sidecar format have trace
+    files with no sidecar, and callers must degrade rather than fail.
     """
     path = sidecar_path_for(trace_path)
     try:
