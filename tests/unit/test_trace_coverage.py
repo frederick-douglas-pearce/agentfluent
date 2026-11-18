@@ -419,6 +419,46 @@ class TestAgentFilter:
             assert cohorts[root] == "unparseable"
             assert all(cohorts[child] == "nested" for child in children)
 
+    def _fail_w1(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        real = coverage_mod.parse_subagent_trace
+
+        def failing(path: Path):  # type: ignore[no-untyped-def]
+            if path.name == "agent-w1.jsonl":
+                raise ValueError("bad")
+            return real(path)
+
+        monkeypatch.setattr(coverage_mod, "parse_subagent_trace", failing)
+
+    def test_linked_root_ignores_its_sidecar_whether_or_not_it_parsed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A root that owns an invocation row is kept by its invocation type
+        only; its sidecar name never keeps it, parsed or not (r3.recheck.1)."""
+        main = _build_session(tmp_path)
+        sidecar = tmp_path / "cov-session" / "subagents" / "agent-w1.meta.json"
+        sidecar.write_text(json.dumps(
+            {"agentType": "worker", "name": "alias", "toolUseId": "toolu_w"},
+        ))
+        parsed = _cohorts(main, agent_filter="alias")
+        self._fail_w1(monkeypatch)
+        unparsed = _cohorts(main, agent_filter="alias")
+        assert [parsed[k] for k in ("leaf1", "deep1")] == ["filtered", "filtered"]
+        assert [unparsed[k] for k in ("leaf1", "deep1")] == ["filtered", "filtered"]
+
+    def test_unparseable_linked_root_without_sidecar_keeps_its_subtree(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No sidecar and no parsed trace: only the invocation row says w1 is
+        depth 1 and of type worker. Its children still follow it
+        (r3.recheck.2: pins the invocation-id lineage source and kept_linked)."""
+        main = _build_session(tmp_path)
+        (tmp_path / "cov-session" / "subagents" / "agent-w1.meta.json").unlink()
+        self._fail_w1(monkeypatch)
+        for agent_filter in (None, "worker"):
+            cohorts = _cohorts(main, agent_filter=agent_filter)
+            assert cohorts["w1"] == "unparseable"
+            assert [cohorts[k] for k in ("leaf1", "deep1")] == ["nested", "nested"]
+
     def test_session_spawned_match_on_name(self, tmp_path: Path) -> None:
         cohorts = _cohorts(_build_session(tmp_path), agent_filter="code-review")
         assert cohorts["cr1"] == "session_spawned"

@@ -160,19 +160,19 @@ def collect_session_traces(
         if inv.agent_id is not None and inv.trace is not None:
             linked_by_agent_id.setdefault(inv.agent_id, inv.trace)
 
-    # Linked agent ids are a second depth-1 source, so a depth-1 agent whose
-    # sidecar is missing does not sever its child's edge. ASSUMPTION, not an
-    # enforced invariant: an invocation row implies a main-session delegation.
-    # Nothing filters `isSidechain`, so a session JSONL that inlined sidechain
-    # lines would mint rows for nested agents. Holds for every fixture and for
-    # the current corpus.
-    # Every invocation's agent_id, not only the ones whose trace parsed: an
-    # invocation row is the depth-1 fact whether or not its file was readable,
-    # so an unparseable root does not sever its children's edge.
+    # Invocation agent ids are a second depth-1 source, so a depth-1 agent
+    # whose sidecar is missing does not sever its child's edge -- every
+    # invocation's agent_id, not only the ones whose trace parsed, since an
+    # invocation row is the depth-1 fact whether or not its file was readable.
+    # ASSUMPTION, not an enforced invariant: an invocation row implies a
+    # main-session delegation. Nothing filters `isSidechain`, so a session JSONL
+    # that inlined sidechain lines would mint rows for nested agents. Holds for
+    # every fixture and for the current corpus.
+    invocation_agent_ids = {inv.agent_id for inv in invocations if inv.agent_id is not None}
     lineages = resolve_lineage(
         files,
         {inv.tool_use_id for inv in invocations},
-        {inv.agent_id for inv in invocations if inv.agent_id is not None},
+        invocation_agent_ids,
     )
     for agent_id, trace in linked_by_agent_id.items():
         lineage = lineages.get(agent_id)
@@ -203,8 +203,13 @@ def collect_session_traces(
             lineage = lineages.get(info.agent_id, TraceLineage(None, 1))
             _label_unlinked_trace(parsed, lineage, linked_by_agent_id)
 
+    # The sidecar rule is for roots with no invocation row only. A root that
+    # owns one is decided by its invocation type above, whether or not its file
+    # parsed -- so an unparseable linked root is not also rescued by its sidecar.
     kept_roots = set(kept_linked)
-    for agent_id, parsed in parsed_unlinked.items():
+    for agent_id in parsed_unlinked:
+        if agent_id in invocation_agent_ids:
+            continue
         lineage = lineages.get(agent_id, TraceLineage(None, 1))
         if lineage.depth == 1 and _sidecar_matches(lineage, agent_filter):
             kept_roots.add(agent_id)
