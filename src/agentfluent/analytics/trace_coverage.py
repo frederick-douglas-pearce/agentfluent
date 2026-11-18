@@ -92,20 +92,14 @@ class TraceCoverage(BaseModel):
     present (``"code-review"``), else its ``agentType``, else ``"unknown"``."""
 
     deduped_turns: int = 0
-    """API turns dropped because another file in the session already counted
-    them (fork agents replay context, #701). Session-wide, all cohorts."""
+    """API turns dropped because the main session or an earlier trace already
+    counted them (fork agents replay context, #701). Session-wide and counted
+    before ``--agent`` is applied, so it includes drops among ``filtered``
+    traces, and a second parse of one file when two invocations share an
+    ``agent_id`` (#705)."""
 
     deduped_tokens: int = 0
     """Tokens in ``deduped_turns``."""
-
-    @property
-    def beyond_linked(self) -> bool:
-        """Whether any cohort other than ``linked`` has a file -- the condition
-        for the coverage line in ``analyze`` and ``report`` (#648 AC5)."""
-        return any(
-            cohort.files
-            for cohort in (self.nested, self.session_spawned, self.filtered, self.unparseable)
-        )
 
     def add(self, other: TraceCoverage) -> None:
         self.linked.add(other.linked)

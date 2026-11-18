@@ -57,7 +57,11 @@ from agentfluent.diagnostics.mcp_assessment import (
     extract_mcp_calls_from_messages,
 )
 from agentfluent.diagnostics.models import DiagnosticsResult
-from agentfluent.traces.coverage import SessionTraces, collect_session_traces
+from agentfluent.traces.coverage import (
+    SessionTraces,
+    collect_session_traces,
+    invocation_matches_filter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -101,8 +105,10 @@ class SessionAnalysis(BaseModel):
     invocations: list[AgentInvocation] = Field(default_factory=list)
     trace_coverage: TraceCoverage = Field(default_factory=TraceCoverage)
     """Subagent trace spend by cohort -- linked, nested, session-spawned,
-    filtered, unparseable (#648 AC4). Stored, not computed: the traces it is
-    built from are not serialized, and ``diff`` reads rehydrated JSON."""
+    filtered, unparseable (#648 AC4). Stored, not computed: linked and attached
+    depth-2 traces are serialized (``invocations[].trace``, ``children``), but
+    session-spawned and depth->=3 traces have no home in the JSON, so the
+    cohorts cannot be rebuilt from a rehydrated envelope (``diff``, ``report``)."""
     mcp_tool_calls: list[McpToolCall] = Field(default_factory=list)
     """Parent-session MCP tool calls (those made directly in the main
     session, outside any Agent delegation). Subagent-trace MCP calls
@@ -275,9 +281,7 @@ def analyze_session(
     )
     dedup = _dedupe_session_trace_turns(messages, session_traces)
     invocations = [
-        inv
-        for inv in all_invocations
-        if agent_filter is None or inv.agent_type.lower() == agent_filter.lower()
+        inv for inv in all_invocations if invocation_matches_filter(inv, agent_filter)
     ]
     mcp_tool_calls = extract_mcp_calls_from_messages(messages)
 

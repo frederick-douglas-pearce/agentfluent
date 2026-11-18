@@ -1,4 +1,4 @@
-"""Lineage resolution and the non-folding gate (#595 PR B).
+"""Lineage resolution and the depth-2 child cap (#595 PR B, #659).
 
 Two things are locked here:
 

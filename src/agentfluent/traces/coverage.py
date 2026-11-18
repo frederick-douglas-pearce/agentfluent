@@ -23,10 +23,10 @@ also never reads ``SubagentTrace.children`` -- the child tree is a display
 shape (#659 may deepen it without moving any total).
 
 **``--agent`` rule.** A ``linked`` trace follows its invocation's type. A
-``nested`` trace follows its depth-1 root: it folds only when the root is a
-kept invocation, and a root that owns no invocation row counts as
-``filtered``. A ``session_spawned`` trace folds only when its sidecar
-``agentType`` or ``name`` matches.
+``session_spawned`` trace folds only when its sidecar ``agentType`` or
+``name`` matches. A ``nested`` trace follows its depth-1 root's own keep
+decision, whichever of those two rules decided it; only a root the lineage
+walk cannot reach is unresolvable, and its subtree counts as ``filtered``.
 """
 
 from __future__ import annotations
@@ -125,22 +125,32 @@ def collect_session_traces(
 
     Mutates ``invocations`` in place (``link_traces``) and attaches depth-2
     traces to their linked parent as ``children``, exactly as before #648.
-    Each trace file is parsed at most once per role: invocation-linked traces
-    through ``link_traces`` (one parse per invocation, so two invocations
-    naming one ``agent_id`` keep two objects -- #705), every other file once.
+    Invocation-linked traces are parsed through ``link_traces`` -- once per
+    invocation, so two invocations naming one ``agent_id`` keep two objects
+    (#705). Every other file is parsed once; a file whose parse already failed
+    is not retried and is labeled ``unparseable``.
     """
     session_dir = session_path.parent / session_path.stem
     files = discover_session_subagents(session_dir)
     path_map = {info.agent_id: info.path for info in files}
 
+    failed: set[str] = set()
+
     def parse(agent_id: str) -> SubagentTrace | None:
         file_path = path_map.get(agent_id)
-        if file_path is None:
+        if file_path is None or agent_id in failed:
             return None
         try:
             return parse_subagent_trace(file_path)
-        except (FileNotFoundError, ValueError):
-            logger.debug("Skipping malformed or missing subagent trace: %s", file_path)
+        except (OSError, ValueError, RecursionError) as exc:
+            # Every owned trace is parsed now (#648), not just linked ones, so
+            # one unreadable or pathological file must not take down `analyze`
+            # for the whole project: it lands in the `unparseable` cohort.
+            # OSError covers a vanished file and permission errors;
+            # UnicodeDecodeError is a ValueError; RecursionError is json.loads
+            # on a deeply nested line.
+            failed.add(agent_id)
+            logger.debug("Skipping unreadable subagent trace %s: %s", file_path, exc)
             return None
 
     link_traces(invocations, parse)
@@ -167,51 +177,69 @@ def collect_session_traces(
             trace.parent_invocation_id = lineage.parent_invocation_id
             trace.depth = lineage.depth
 
-    kept_agent_ids = {
+    # Which depth-1 agents the filter keeps. A nested trace follows its depth-1
+    # root's own keep decision, whatever cohort the root got: a linked root is
+    # kept when any of its invocations matches, a root with no invocation row
+    # (session-spawned) when its sidecar agentType or name matches. Only a root
+    # the walk cannot find is unresolvable -> `filtered` (#648 AC2).
+    kept_linked = {
         inv.agent_id
         for inv in invocations
         if inv.agent_id is not None
         and inv.trace is not None
-        and (agent_filter is None or _matches(inv.agent_type, agent_filter))
+        and invocation_matches_filter(inv, agent_filter)
     }
+
+    parsed_unlinked: dict[str, SubagentTrace | None] = {}
+    for info in files:
+        if info.agent_id in linked_by_agent_id:
+            continue
+        parsed = parse(info.agent_id)
+        parsed_unlinked[info.agent_id] = parsed
+        if parsed is not None:
+            lineage = lineages.get(info.agent_id, TraceLineage(None, 1))
+            _label_unlinked_trace(parsed, lineage, linked_by_agent_id)
+
+    kept_roots = set(kept_linked)
+    for agent_id, parsed in parsed_unlinked.items():
+        lineage = lineages.get(agent_id, TraceLineage(None, 1))
+        if parsed is not None and lineage.depth == 1 and _sidecar_matches(lineage, agent_filter):
+            kept_roots.add(agent_id)
 
     result = SessionTraces()
     for info in files:
         agent_id = info.agent_id
         lineage = lineages.get(agent_id, TraceLineage(None, 1))
         if agent_id in linked_by_agent_id:
-            cohort: TraceCohort = (
-                "linked" if agent_id in kept_agent_ids else "filtered"
-            )
+            cohort: TraceCohort = "linked" if agent_id in kept_linked else "filtered"
             result.owned.append(OwnedTrace(agent_id, cohort, linked_by_agent_id[agent_id]))
             continue
 
-        parsed = parse(agent_id)
+        parsed = parsed_unlinked[agent_id]
         if parsed is None:
             result.owned.append(OwnedTrace(agent_id, "unparseable", None))
             continue
-        _label_unlinked_trace(parsed, lineage, linked_by_agent_id)
         result.dedup_rest.append(parsed)
 
         if lineage.depth >= 2:
             root = _depth_one_root(agent_id, lineages)
-            keep = agent_filter is None or root in kept_agent_ids
+            keep = agent_filter is None or (root is not None and root in kept_roots)
             cohort = "nested" if keep else "filtered"
             spawned_as = ""
         else:
             spawned_as = lineage.name or lineage.agent_type
-            keep = agent_filter is None or (
-                _matches(lineage.agent_type, agent_filter)
-                or _matches(lineage.name, agent_filter)
-            )
+            keep = agent_id in kept_roots
             cohort = "session_spawned" if keep else "filtered"
         result.owned.append(OwnedTrace(agent_id, cohort, parsed, spawned_as))
 
     result.dedup_depth_one = [inv.trace for inv in invocations if inv.trace is not None]
+    # Per invocation, with the same predicate the pipeline filters
+    # `invocations` by, so the fold and the per-agent rows agree even when two
+    # invocations of different types share one agent_id (#705).
     kept_invocation_traces = [
         inv.trace
         for inv in invocations
-        if inv.trace is not None and inv.agent_id in kept_agent_ids
+        if inv.trace is not None and invocation_matches_filter(inv, agent_filter)
     ]
     result.fold_traces = kept_invocation_traces + [
         owned.trace
@@ -219,6 +247,18 @@ def collect_session_traces(
         if owned.cohort in ("nested", "session_spawned") and owned.trace is not None
     ]
     return result
+
+
+def invocation_matches_filter(invocation: AgentInvocation, agent_filter: str | None) -> bool:
+    """Whether ``--agent`` keeps this invocation. The one predicate shared by the
+    fold (``collect_session_traces``) and ``analyze_session``'s per-agent rows."""
+    return agent_filter is None or _matches(invocation.agent_type, agent_filter)
+
+
+def _sidecar_matches(lineage: TraceLineage, agent_filter: str | None) -> bool:
+    return agent_filter is None or (
+        _matches(lineage.agent_type, agent_filter) or _matches(lineage.name, agent_filter)
+    )
 
 
 def _label_unlinked_trace(

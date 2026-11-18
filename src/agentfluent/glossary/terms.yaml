@@ -1572,13 +1572,14 @@
     session-spawned spend is in the totals but not in any per-agent row,
     so including it lowers `agent_token_percentage` (per-agent spend over
     the session total). `deduped_turns` / `deduped_tokens` count API turns
-    dropped because another file in the session already counted them
-    (fork agents replay context).
+    dropped because the main session or an earlier trace already counted
+    them (fork agents replay context). They are counted before `--agent`
+    is applied, so they include turns from `filtered` traces.
 
     In `analyze --format json` it appears per session and summed at the
-    top level. `analyze` and `report` print one line under the Token
-    Usage table when any cohort other than `linked` is non-empty, and
-    nothing at full coverage.
+    top level. `analyze` (under the Token Usage table) and `report`
+    (under Token Metrics) print one line when any cohort other than
+    `linked` is non-empty, and nothing at full coverage.
   example: |
     Token Usage
       ...

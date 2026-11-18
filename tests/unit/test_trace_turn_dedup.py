@@ -207,6 +207,14 @@ class TestForkSessionFold:
         analysis = analyze_session(_build_fork_session(tmp_path))
         assert _subagent_row_tokens(analysis) == _NAIVE_SUBAGENT_TOKENS
 
+    def test_coverage_counts_parent_and_trace_drops(self, tmp_path: Path) -> None:
+        """#648 AC4 dedup stats: forkZ's replay of main's msg_main1 (dropped
+        because the main session counted it) and forkA's second msg_shared
+        (dropped because forkZ counted it), cache tokens included."""
+        coverage = analyze_session(_build_fork_session(tmp_path)).trace_coverage
+        assert coverage.deduped_turns == 2
+        assert coverage.deduped_tokens == _total(_MAIN_1) + _total(_SHARED)
+
     def test_per_agent_spend_reconciles_with_subagent_rows(self, tmp_path: Path) -> None:
         """#646's reconciliation survives the dedup: per-agent spend and the
         session's subagent rows read the same deduplicated usage."""
@@ -487,9 +495,11 @@ class TestNonSpendTracesClaimNothing:
 
 class TestPipelineHandsChildrenToDedup:
     """Acceptance-gate Class B survivor P02: ``_dedupe_session_trace_turns``
-    must pass the non-linked tier (attached children among it) to the dedup, or
-    a depth-2 child keeps per-file usage including turns its parent already
-    counted."""
+    must hand both tiers of ``SessionTraces`` to the dedup, or a depth-2 child
+    keeps per-file usage including turns its parent already counted. That the
+    collector puts every non-linked trace into that tier is pinned separately,
+    by ``test_trace_coverage.py::TestFoldByOwnership``
+    (``test_non_linked_traces_go_through_the_dedup``)."""
 
     def test_child_loses_turn_its_parent_counted(self) -> None:
         parent = _trace("parent", [("x", 10)])
