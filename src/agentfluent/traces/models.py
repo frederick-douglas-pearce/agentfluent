@@ -105,6 +105,21 @@ class RetrySequence(BaseModel):
     tool_call_indices: list[int] = Field(default_factory=list)
 
 
+class TraceTurnUsage(BaseModel):
+    """One merged model turn's usage in a subagent trace, keyed by its API
+    ``message.id`` (#701).
+
+    Built after the #696 fragment merge, so a ``message_id`` occurs at most once
+    per trace file. It can still recur **across** files: a fork agent replays
+    the spawning conversation, so sibling fork traces (and the main session)
+    can carry the same API turn. ``None`` when the line had no ``message.id``
+    -- such a turn cannot be deduplicated and always counts.
+    """
+
+    message_id: str | None = None
+    usage: Usage = Field(default_factory=Usage)
+
+
 class SubagentTrace(BaseModel):
     """A parsed subagent session — the full internal trace of one agent invocation.
 
@@ -149,6 +164,29 @@ class SubagentTrace(BaseModel):
     ``int | None`` because the trace itself may be absent."""
 
     usage: Usage = Field(default_factory=Usage)
+    """Σ usage over every merged assistant turn **in this file** -- equal to
+    Σ ``turn_usages``. Public, and deliberately left as the per-file sum: it
+    describes the trace. What a trace contributes to *spend* is
+    ``analytics.tokens.trace_spend_usage`` (#701), which drops turns already
+    counted elsewhere in the session."""
+
+    turn_usages: list[TraceTurnUsage] = Field(default_factory=list, exclude=True)
+    """Per-turn ``(message_id, usage)`` in file order (#701). Excluded from JSON
+    output (D055): it is the input to cross-file deduplication, not a published
+    metric. A plain list rather than a dedup-only id set so per-turn pricing
+    (#682's >200K tier) can reuse it. Empty for a trace not built by the parser
+    (e.g. constructed in a test), in which case spend falls back to ``usage``."""
+
+    spend_usage: Usage | None = Field(default=None, exclude=True)
+    """This trace's usage with turns already counted elsewhere in the session
+    removed -- set by ``analytics.tokens.dedupe_trace_turns`` (#701). ``None``
+    until that runs -- and permanently for a trace dedup skips (no
+    ``turn_usages``, or failing ``analytics.tokens.trace_counts_as_spend``) --
+    meaning "not deduplicated": consumers read it through
+    ``analytics.tokens.trace_spend_usage``, which falls back to ``usage``.
+    Excluded from JSON output; the session fold and per-agent pricing both read
+    it, so they cannot disagree on which turns count."""
+
     duration_ms: int | None = None
     idle_gap_ms: int | None = None
     """Sum of per-call gaps flagged as idle by ``traces.parser._compute_idle_gap_ms``.

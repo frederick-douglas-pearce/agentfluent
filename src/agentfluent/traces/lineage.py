@@ -227,10 +227,13 @@ def resolve_lineage(
     # discovery would charge every path-only caller for I/O it never asked
     # for. The linker is the one caller that needs the edge, so it pays.
     sidecars = {info.agent_id: read_subagent_sidecar(info.path) for info in files}
+    # A sidecar with no `toolUseId` (skill/workflow-spawned agents, #701) still
+    # supplies `agent_type` below; it just contributes no edge, so the trace
+    # falls through to the unattributable (None, 1) lineage.
     tool_use_id_of: dict[str, str] = {
         agent_id: sidecar.tool_use_id
         for agent_id, sidecar in sidecars.items()
-        if sidecar is not None
+        if sidecar is not None and sidecar.tool_use_id is not None
     }
 
     # A trace is depth 1 if its sidecar names a parent-session tool_use, OR if

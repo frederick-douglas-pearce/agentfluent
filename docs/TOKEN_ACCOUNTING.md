@@ -412,11 +412,15 @@ corrected numbers.
   <session-id>.jsonl                                  # parent
   <session-id>/subagents/
     agent-<agentId>.jsonl                             # child trace
-    agent-<agentId>.meta.json                         # {agentType, description, toolUseId}
+    agent-<agentId>.meta.json                         # {agentType, description, toolUseId?, ...}
 ```
 
 Join on `toolUseResult.agentId` → child filename, or use the `.meta.json`
-sidecar's `toolUseId` for a direct `tool_use.id` → `agentId` map.
+sidecar's `toolUseId` for a direct `tool_use.id` → `agentId` map. **`toolUseId` is
+optional**: agents a session spawns without an `Agent` tool_use — skill- and
+workflow-run background agents such as the built-in `/code-review` — get a
+sidecar with `name`, `spawnDepth` and `requestShape` but no `toolUseId`, so they
+join to nothing in the parent (#701).
 
 ### Summing real spend, with dedup
 
@@ -452,6 +456,13 @@ def invocation_turns(trace_path):
     return [best[mid] for mid in order]
 ```
 
+**Then deduplicate across files, not only within one.** Fork agents replay the
+spawning conversation, so the same `message.id` can appear in several trace files
+of one session *and* in the parent session. Summing `invocation_turns()` per file
+counts those turns once per file. Keep a session-wide set of ids already counted —
+parent turns first, then traces in invocation order — and skip a turn whose id is
+in it (AgentFluent: `analytics.tokens.dedupe_trace_turns`, #701).
+
 Then price **per turn at that turn's own model rate** — not via a session blended
 rate. Two reasons: a `haiku` subagent under an `opus` session is otherwise
 misattributed, and a blended rate derived from a cache-inflated token denominator
@@ -462,7 +473,9 @@ is itself diluted (§2).
 1. **Never sum `totalTokens`.** Use it only as an explicitly-labeled context-size
    reading, or not at all.
 2. **Never price `toolUseResult.usage`.** It is one turn.
-3. **Always deduplicate by `message.id`** before summing per-turn usage (§3).
+3. **Always deduplicate by `message.id`** before summing per-turn usage (§3) —
+   **across the whole session** (parent plus every trace), not just within a
+   file: fork agents replay turns into several files (#701).
 4. **Account for orphan traces**, or report coverage alongside the number (§4).
 5. **Report coverage explicitly** when some invocations have traces and some do
    not — never silently blend real sums with snapshots. AgentFluent's

@@ -3,9 +3,11 @@
 Computes invocation counts, token usage, cost, and efficiency metrics grouped
 by agent type.
 
-**Spend is sourced from subagent traces (#646).** Per-agent spend is the sum of
-each linked trace's deduplicated per-turn ``usage`` (``spend_tokens``), and
-per-agent cost prices each trace at its own model's rate through
+**Spend is sourced from subagent traces (#646).** Per-agent spend
+(``spend_tokens``) is the sum of each linked trace's
+``analytics.tokens.trace_spend_usage`` -- per-turn usage deduplicated within the
+file (#696) and across the session's files (#701) -- and per-agent cost prices
+each trace at its own model's rate through
 ``analytics.tokens.price_trace`` -- the same primitive the session fold uses, so
 Σ per-agent cost reconciles with the session's subagent-origin ``by_model`` cost.
 Trace-missing invocations add no spend and no cost; there is no blended fill-in.
@@ -20,7 +22,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from agentfluent.agents.models import AgentInvocation
-from agentfluent.analytics.tokens import price_trace, trace_counts_as_spend
+from agentfluent.analytics.tokens import (
+    price_trace,
+    trace_counts_as_spend,
+    trace_spend_usage,
+)
 
 
 def _recompute_ratios(metrics: AgentTypeMetrics) -> None:
@@ -50,6 +56,13 @@ def _recompute_ratios(metrics: AgentTypeMetrics) -> None:
     ``None``, or a ``<synthetic>`` first assistant message) still contributes
     its real turns to ``total_model_turns``, diluting the ratio. That is a
     parser defect, tracked in #692 (latent: no local trace has the shape).
+
+    **Fork traces dilute both per-turn ratios too (#704).** Spend and cost are
+    deduplicated across the session's files (#701), but ``total_model_turns``
+    and ``priced_model_turns`` count every turn in each file, including turns a
+    fork replayed from the spawning conversation. A fork type's per-turn token
+    and cost figures therefore read low; the turn-shaped metrics are fixed
+    together in #704.
     """
     if metrics.invocations_with_turns > 0:
         metrics.avg_turns_per_invocation = (
@@ -176,7 +189,8 @@ class AgentTypeMetrics:
     # coverage (that trace's model also had a price). Cost averages divide by the
     # priced counts so an unpriced model reads as uncovered, never as cheap.
     spend_tokens: int = 0
-    """Σ deduplicated per-turn ``trace.usage`` tokens over trace-linked
+    """Σ ``trace_spend_usage`` tokens (per-turn usage, deduplicated within the file
+    by the #696 merge and across the session's files by #701) over trace-linked
     invocations whose trace counts as spend (``trace_counts_as_spend``)."""
 
     spend_invocation_count: int = 0
@@ -371,7 +385,7 @@ def compute_agent_metrics(
         # nothing here -- no blended fill-in (#646 AC4).
         trace = inv.trace
         if trace is not None and trace_counts_as_spend(trace):
-            metrics.spend_tokens += trace.usage.total_tokens
+            metrics.spend_tokens += trace_spend_usage(trace).total_tokens
             metrics.spend_invocation_count += 1
             cost = price_trace(trace, timestamp=timestamp)
             if cost is not None:

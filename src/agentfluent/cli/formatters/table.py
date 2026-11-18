@@ -15,7 +15,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
-from agentfluent.analytics.tokens import trace_counts_as_spend
+from agentfluent.analytics.tokens import trace_counts_as_spend, trace_spend_usage
 from agentfluent.cli.formatters.helpers import (
     CONFIDENCE_COLORS,
     GLOBAL_AGENT_LABEL,
@@ -317,7 +317,7 @@ def format_analysis_table(
                 # "-" when no trace counts as spend (never the rollup proxy).
                 trace = inv.trace
                 tokens = (
-                    format_tokens(trace.usage.total_tokens)
+                    format_tokens(trace_spend_usage(trace).total_tokens)
                     if trace is not None and trace_counts_as_spend(trace)
                     else "-"
                 )

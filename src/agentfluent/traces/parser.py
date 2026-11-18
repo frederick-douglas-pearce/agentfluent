@@ -39,6 +39,7 @@ from agentfluent.traces.models import (
     UNKNOWN_AGENT_TYPE,
     SubagentToolCall,
     SubagentTrace,
+    TraceTurnUsage,
 )
 from agentfluent.traces.retry import detect_retry_sequences
 
@@ -116,10 +117,24 @@ def _detect_is_error(block: ContentBlock, tool_name: str) -> bool:
     return detect_is_error_for_tool(block.text, tool_name)
 
 
-def _sum_usage(messages: list[SessionMessage]) -> Usage:
-    """Aggregate ``Usage`` across assistant messages. User messages have
-    no ``usage`` and are skipped."""
-    return sum((m.usage for m in messages if m.usage is not None), Usage())
+def _turn_usages(messages: list[SessionMessage]) -> list[TraceTurnUsage]:
+    """Per-turn ``(message_id, usage)`` for every message carrying usage (#701).
+
+    ``messages`` is already fragment-merged by ``parse_session`` (#696), so each
+    entry is one API turn. User messages have no ``usage`` and are skipped. The
+    trace's ``usage`` is the sum of exactly these entries (see ``_sum_usage``),
+    so the per-file total and the per-turn list cannot drift.
+    """
+    return [
+        TraceTurnUsage(message_id=m.message_id, usage=m.usage)
+        for m in messages
+        if m.usage is not None
+    ]
+
+
+def _sum_usage(turns: list[TraceTurnUsage]) -> Usage:
+    """Aggregate ``Usage`` across a trace's turns."""
+    return sum((turn.usage for turn in turns), Usage())
 
 
 def _compute_duration_ms(messages: list[SessionMessage]) -> int | None:
@@ -250,6 +265,7 @@ def parse_subagent_trace(path: Path) -> SubagentTrace:
     agent_id = filename_match.group(1)
 
     messages = parse_session(path)
+    turn_usages = _turn_usages(messages)
     tool_calls = _pair_tool_calls(messages)
     retry_sequences = detect_retry_sequences(tool_calls)
 
@@ -266,7 +282,8 @@ def parse_subagent_trace(path: Path) -> SubagentTrace:
             for m in messages
             if m.type == "assistant" and m.model not in SYNTHETIC_MODELS
         ),
-        usage=_sum_usage(messages),
+        usage=_sum_usage(turn_usages),
+        turn_usages=turn_usages,
         duration_ms=_compute_duration_ms(messages),
         idle_gap_ms=_compute_idle_gap_ms(tool_calls),
         source_file=path.resolve(),
