@@ -180,7 +180,9 @@ def trace_spend_usage(trace: SubagentTrace) -> Usage:
     """The usage a trace contributes to spend (#701).
 
     ``trace.spend_usage`` once ``dedupe_trace_turns`` has run on the session,
-    else the per-file ``trace.usage``. Every spend reader goes through it: the
+    else the per-file ``trace.usage`` -- which is also what a trace dedup skipped
+    returns (no ``turn_usages``, or failing ``trace_counts_as_spend``), so callers
+    must gate on ``trace_counts_as_spend`` first. Every spend reader goes through it: the
     session fold (``compute_subagent_token_metrics``), ``price_trace``,
     per-agent ``spend_tokens`` (``analytics.agent_metrics``) and the verbose
     Per-Invocation Detail Tokens column (``cli.formatters.table``). So a turn

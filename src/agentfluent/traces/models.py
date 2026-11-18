@@ -180,7 +180,9 @@ class SubagentTrace(BaseModel):
     spend_usage: Usage | None = Field(default=None, exclude=True)
     """This trace's usage with turns already counted elsewhere in the session
     removed -- set by ``analytics.tokens.dedupe_trace_turns`` (#701). ``None``
-    until that runs, meaning "not deduplicated": consumers read it through
+    until that runs -- and permanently for a trace dedup skips (no
+    ``turn_usages``, or failing ``analytics.tokens.trace_counts_as_spend``) --
+    meaning "not deduplicated": consumers read it through
     ``analytics.tokens.trace_spend_usage``, which falls back to ``usage``.
     Excluded from JSON output; the session fold and per-agent pricing both read
     it, so they cannot disagree on which turns count."""
