@@ -115,14 +115,87 @@ class TestDegradation:
             {},
         ],
     )
-    def test_missing_tool_use_id_returns_none(
+    def test_missing_tool_use_id_keeps_the_sidecar(
         self, tmp_path: Path, obj: dict[str, str]
     ) -> None:
-        """``tool_use_id`` is the one genuinely required field."""
+        """#701: a sidecar without ``toolUseId`` is a real shape (skill- and
+        workflow-spawned agents), not a malformed one -- it parses with no edge
+        and keeps its descriptive fields."""
         trace = tmp_path / "agent-partial.jsonl"
         trace.write_text("{}\n")
         (tmp_path / "agent-partial.meta.json").write_text(json.dumps(obj))
-        assert read_subagent_sidecar(trace) is None
+        sidecar = read_subagent_sidecar(trace)
+        assert sidecar is not None
+        assert sidecar.tool_use_id is None
+        assert sidecar.agent_type == obj.get("agentType", "")
+
+
+class TestSkillSpawnedSidecar:
+    """#701: the live shape Claude Code writes for a skill-run background agent."""
+
+    LIVE_SHAPE = {
+        "agentType": "general-purpose",
+        "isBuiltIn": True,
+        "description": "/code-review xhigh 237",
+        "name": "code-review",
+        "spawnDepth": 1,
+        "requestShape": "background",
+        "requestNonInteractive": True,
+        "finished": True,
+    }
+
+    def _read(self, tmp_path: Path, obj: object) -> SubagentSidecar | None:
+        trace = tmp_path / "agent-skill.jsonl"
+        trace.write_text("{}\n")
+        (tmp_path / "agent-skill.meta.json").write_text(json.dumps(obj))
+        return read_subagent_sidecar(trace)
+
+    def test_live_shape_parses_with_name_and_type(self, tmp_path: Path) -> None:
+        sidecar = self._read(tmp_path, self.LIVE_SHAPE)
+        assert sidecar is not None
+        assert sidecar.tool_use_id is None
+        assert sidecar.agent_type == "general-purpose"
+        assert sidecar.name == "code-review"
+        assert sidecar.spawn_depth == 1
+        assert sidecar.request_shape == "background"
+        assert sidecar.is_fork is False
+
+    def test_fork_and_parent_fields(self, tmp_path: Path) -> None:
+        sidecar = self._read(
+            tmp_path,
+            {"agentType": "fork", "toolUseId": "toolu_F", "isFork": True,
+             "spawnDepth": 2, "parentAgentId": "a1"},
+        )
+        assert sidecar is not None
+        assert sidecar.tool_use_id == "toolu_F"
+        assert sidecar.is_fork is True
+        assert sidecar.spawn_depth == 2
+        assert sidecar.parent_agent_id == "a1"
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {"toolUseId": 7},
+            {"name": ["x"]},
+            {"spawnDepth": "1"},
+            {"spawnDepth": True},
+            {"parentAgentId": {}},
+            {"isFork": "yes"},
+            {"requestShape": 3},
+        ],
+    )
+    def test_malformed_optional_field_never_discards_the_sidecar(
+        self, tmp_path: Path, bad: dict[str, object]
+    ) -> None:
+        sidecar = self._read(tmp_path, {"agentType": "keep", **bad})
+        assert sidecar is not None
+        assert sidecar.agent_type == "keep"
+        assert sidecar.tool_use_id is None
+        assert sidecar.name is None
+        assert sidecar.spawn_depth is None
+        assert sidecar.parent_agent_id is None
+        assert sidecar.is_fork is False
+        assert sidecar.request_shape is None
 
 
 class TestDescriptiveFieldsNeverCostTheEdge:

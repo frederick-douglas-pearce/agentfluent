@@ -7,7 +7,10 @@ Claude Code writes a small JSON sidecar next to each subagent trace:
 <session>/subagents/agent-<agentId>.meta.json    # this sidecar
 ```
 
-Shape: ``{"agentType", "description", "toolUseId"}``.
+Shape: ``{"agentType", "description", "toolUseId"}``, plus -- on newer
+Claude Code -- optional ``name``, ``spawnDepth``, ``parentAgentId``, ``isFork``,
+``requestShape`` and others (ignored). ``toolUseId`` itself is absent on agents
+spawned without an ``Agent`` tool_use, e.g. skill-run background agents (#701).
 
 **Why this matters (#595).** ``toolUseId`` names the ``Agent`` ``tool_use``
 block that spawned this agent, which makes the sidecar the *only structured*
@@ -50,14 +53,39 @@ class SubagentSidecar(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
-    tool_use_id: str = Field(alias="toolUseId")
+    tool_use_id: str | None = Field(None, alias="toolUseId")
     """The ``Agent`` ``tool_use`` block id that spawned this agent -- the edge
     label joining this trace to its invoking call. See the module docstring on
     why this is load-bearing at depth >= 2.
 
-    **The only required field.** It is the one this module exists to recover,
-    so the two descriptive fields below tolerate absence or a null rather than
-    taking a real parent edge down with them."""
+    ``None`` when the sidecar carries no ``toolUseId``. That is a real, common
+    shape, not a malformed one (#701): agents a session spawns **without** an
+    ``Agent`` tool_use -- skill- and workflow-run background agents such as the
+    built-in ``/code-review`` -- get a sidecar with ``name`` / ``spawnDepth`` /
+    ``requestShape`` and no ``toolUseId``. Rejecting the whole sidecar for the
+    missing edge used to discard their ``agentType`` and ``name`` too. Such a
+    sidecar simply contributes no edge to lineage resolution."""
+
+    name: str | None = None
+    """Runtime-assigned name, e.g. ``"code-review"`` for the built-in review
+    skill's background agent. Absent on ``Agent``-tool spawns."""
+
+    spawn_depth: int | None = Field(None, alias="spawnDepth")
+    """Runtime-recorded delegation depth (1 = spawned by the main session).
+    Present on newer sidecars only. **A label, never a fold input** -- which
+    traces count toward a session total is decided by ownership, not by this
+    field (#648 architect ruling)."""
+
+    parent_agent_id: str | None = Field(None, alias="parentAgentId")
+    """Runtime-recorded spawning agent's id, on some depth->=2 sidecars. Same
+    label-only status as ``spawn_depth``."""
+
+    is_fork: bool = Field(False, alias="isFork")
+    """``True`` for fork agents, which replay the spawning conversation's
+    context -- the reason trace turns can repeat across files (#701)."""
+
+    request_shape: str | None = Field(None, alias="requestShape")
+    """``"background"`` / ``"foreground"`` as recorded by the runtime."""
 
     agent_type: str = Field("", alias="agentType")
     """Agent type as recorded by the runtime. Parent-authoritative: unlike a
@@ -77,6 +105,32 @@ class SubagentSidecar(BaseModel):
         """
         return "" if value is None else value
 
+    @field_validator(
+        "tool_use_id", "name", "parent_agent_id", "request_shape", mode="before",
+    )
+    @classmethod
+    def _non_string_becomes_none(cls, value: object) -> object:
+        """Read a non-string optional text field as absent rather than failing.
+
+        Same posture as ``_null_becomes_empty``: one odd field must not discard
+        the rest of the sidecar.
+        """
+        return value if isinstance(value, str) else None
+
+    @field_validator("spawn_depth", mode="before")
+    @classmethod
+    def _non_int_depth_becomes_none(cls, value: object) -> object:
+        """Only a JSON integer is a depth; anything else (bool included) is absent."""
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        return value
+
+    @field_validator("is_fork", mode="before")
+    @classmethod
+    def _malformed_flag_becomes_false(cls, value: object) -> object:
+        """Anything but a JSON boolean reads as not-a-fork."""
+        return value if isinstance(value, bool) else False
+
 
 def sidecar_path_for(trace_path: Path) -> Path:
     """Return the sidecar path for a trace path (existence not checked).
@@ -92,7 +146,8 @@ def read_subagent_sidecar(trace_path: Path) -> SubagentSidecar | None:
     """Read the sidecar beside ``trace_path``.
 
     Returns ``None`` -- never raises -- when the sidecar is absent, unreadable,
-    not valid JSON, or missing required keys. Absence is an expected, ordinary
+    or not a JSON object. (No key is required since #701 -- a sidecar without
+    ``toolUseId`` still carries the agent's type and name.) Absence is an expected, ordinary
     case: sessions predating the sidecar format have trace files with no
     sidecar, and callers must degrade rather than fail.
     """

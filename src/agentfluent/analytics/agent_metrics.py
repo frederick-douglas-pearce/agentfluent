@@ -20,7 +20,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from agentfluent.agents.models import AgentInvocation
-from agentfluent.analytics.tokens import price_trace, trace_counts_as_spend
+from agentfluent.analytics.tokens import (
+    price_trace,
+    trace_counts_as_spend,
+    trace_spend_usage,
+)
 
 
 def _recompute_ratios(metrics: AgentTypeMetrics) -> None:
@@ -176,7 +180,8 @@ class AgentTypeMetrics:
     # coverage (that trace's model also had a price). Cost averages divide by the
     # priced counts so an unpriced model reads as uncovered, never as cheap.
     spend_tokens: int = 0
-    """Σ deduplicated per-turn ``trace.usage`` tokens over trace-linked
+    """Σ ``trace_spend_usage`` tokens (per-turn usage, deduplicated within the file
+    by the #696 merge and across the session's files by #701) over trace-linked
     invocations whose trace counts as spend (``trace_counts_as_spend``)."""
 
     spend_invocation_count: int = 0
@@ -371,7 +376,7 @@ def compute_agent_metrics(
         # nothing here -- no blended fill-in (#646 AC4).
         trace = inv.trace
         if trace is not None and trace_counts_as_spend(trace):
-            metrics.spend_tokens += trace.usage.total_tokens
+            metrics.spend_tokens += trace_spend_usage(trace).total_tokens
             metrics.spend_invocation_count += 1
             cost = price_trace(trace, timestamp=timestamp)
             if cost is not None:

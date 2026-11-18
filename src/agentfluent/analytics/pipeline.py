@@ -27,6 +27,7 @@ from agentfluent.analytics.tokens import (
     _aggregate_totals,
     compute_subagent_token_metrics,
     compute_token_metrics,
+    dedupe_trace_turns,
     fold_subagent_metrics_in,
     session_price_timestamp,
 )
@@ -254,6 +255,7 @@ def analyze_session(
         ]
 
     invocations = _link_subagent_traces(invocations, path)
+    _dedupe_session_trace_turns(messages, invocations)
     mcp_tool_calls = extract_mcp_calls_from_messages(messages)
 
     # NON-FOLDING GATE (#595 PR B, architect ruling 3) -- depth-1 traces ONLY.
@@ -660,6 +662,29 @@ def _link_subagent_traces(
         )
 
     return invocations
+
+
+def _dedupe_session_trace_turns(
+    messages: list[SessionMessage], invocations: list[AgentInvocation],
+) -> None:
+    """Drop API turns counted more than once across this session's files (#701).
+
+    Precedence, first occurrence wins: the main session's own assistant turns,
+    then depth-1 traces in invocation order, then their attached children by
+    ``(depth, agent_id)``. Must run before anything reads spend -- the session
+    fold and ``compute_agent_metrics`` both read ``trace_spend_usage``.
+    """
+    main_message_ids = {
+        m.message_id
+        for m in messages
+        if m.type == "assistant" and m.message_id is not None
+    }
+    depth_one = [inv.trace for inv in invocations if inv.trace is not None]
+    children = sorted(
+        (child for trace in depth_one for child in trace.children),
+        key=lambda child: (child.depth, child.agent_id),
+    )
+    dedupe_trace_turns([*depth_one, *children], main_message_ids)
 
 
 def _count_type(messages: list[SessionMessage], msg_type: str) -> int:

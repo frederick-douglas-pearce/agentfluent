@@ -8,7 +8,7 @@ cost breakdown and parent-vs-subagent origin attribution.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Literal
@@ -175,6 +175,59 @@ def trace_counts_as_spend(trace: SubagentTrace) -> bool:
     return trace.model is not None and trace.model not in SYNTHETIC_MODELS
 
 
+def trace_spend_usage(trace: SubagentTrace) -> Usage:
+    """The usage a trace contributes to spend (#701).
+
+    ``trace.spend_usage`` once ``dedupe_trace_turns`` has run on the session,
+    else the per-file ``trace.usage``. The **only** read path for spend: the
+    session fold (``compute_subagent_token_metrics``), ``price_trace`` and
+    per-agent ``spend_tokens`` all go through it, so a turn dropped as a
+    duplicate is dropped from all three and #646's per-agent ↔ ``by_model``
+    reconciliation keeps holding.
+    """
+    return trace.spend_usage if trace.spend_usage is not None else trace.usage
+
+
+def dedupe_trace_turns(
+    traces: Sequence[SubagentTrace], counted_message_ids: Iterable[str],
+) -> None:
+    """Set each trace's ``spend_usage`` so no API turn is counted twice (#701).
+
+    Exclusivity -- every turn's usage lives in exactly one file -- holds for
+    almost every trace, but **not** for fork agents, which replay the spawning
+    conversation: sibling fork traces share ``message.id`` s with each other and
+    with the main session. Summing per-file usage then counts those turns more
+    than once. This is the hard guard: first occurrence wins.
+
+    ``counted_message_ids`` are the turns already counted before any trace --
+    the main session's assistant ``message_id`` s. ``traces`` is the precedence
+    order: main session first (via ``counted_message_ids``), then depth-1 traces
+    in invocation order, then the rest by ``(depth, agent_id)`` -- the caller
+    supplies that order; this function only honors it. A turn with no
+    ``message_id`` always counts (it cannot be matched). A trace with no
+    ``turn_usages`` (not parser-built) is left alone and spends its ``usage``.
+    A trace object appearing twice in ``traces`` is processed once.
+
+    Mutates ``spend_usage`` only; the public per-file ``usage`` is unchanged.
+    """
+    seen = set(counted_message_ids)
+    processed: set[int] = set()
+    for trace in traces:
+        if id(trace) in processed:
+            continue
+        processed.add(id(trace))
+        if not trace.turn_usages:
+            continue
+        spend = Usage()
+        for turn in trace.turn_usages:
+            if turn.message_id is not None:
+                if turn.message_id in seen:
+                    continue
+                seen.add(turn.message_id)
+            spend = spend + turn.usage
+        trace.spend_usage = spend
+
+
 def price_trace(
     trace: SubagentTrace, *, timestamp: datetime | None = None,
 ) -> float | None:
@@ -191,7 +244,7 @@ def price_trace(
             f"(model={trace.model!r}); check trace_counts_as_spend first"
         )
     breakdown = ModelTokenBreakdown(model=trace.model, origin="subagent")
-    _accumulate_usage(breakdown, trace.usage)
+    _accumulate_usage(breakdown, trace_spend_usage(trace))
     return _cost_of(breakdown, timestamp)
 
 
@@ -309,11 +362,12 @@ def compute_subagent_token_metrics(
 ) -> list[ModelTokenBreakdown]:
     """Aggregate subagent-trace token usage into per-model breakdowns.
 
-    Uses ``SubagentTrace.usage`` (the trace-level aggregate) as the
+    Uses ``trace_spend_usage`` -- the trace-level aggregate with turns already
+    counted elsewhere in the session removed (#701) -- as the
     authoritative source — per-call ``SubagentToolCall.usage`` is left
     at zero by the parser (see traces/parser.py docstring). Skips
-    traces with no model and traces whose usage is wholly zero (no
-    assistant messages).
+    traces that do not count as spend (``trace_counts_as_spend``: no model, or
+    the ``<synthetic>`` sentinel).
 
     ``timestamp`` (#546) is the parent session's price date, applied to subagent rows
     too so the whole session prices at one consistent date; ``None`` → latest rate.
@@ -330,9 +384,7 @@ def compute_subagent_token_metrics(
     for trace in traces:
         if not trace_counts_as_spend(trace) or trace.model is None:
             continue
-        usage = trace.usage
-        if usage is None:
-            continue
+        usage = trace_spend_usage(trace)
         key = (trace.model, "subagent")
         breakdown = by_model.get(key)
         if breakdown is None:
