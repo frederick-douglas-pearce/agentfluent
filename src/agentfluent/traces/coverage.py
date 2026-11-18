@@ -166,10 +166,13 @@ def collect_session_traces(
     # Nothing filters `isSidechain`, so a session JSONL that inlined sidechain
     # lines would mint rows for nested agents. Holds for every fixture and for
     # the current corpus.
+    # Every invocation's agent_id, not only the ones whose trace parsed: an
+    # invocation row is the depth-1 fact whether or not its file was readable,
+    # so an unparseable root does not sever its children's edge.
     lineages = resolve_lineage(
         files,
         {inv.tool_use_id for inv in invocations},
-        set(linked_by_agent_id),
+        {inv.agent_id for inv in invocations if inv.agent_id is not None},
     )
     for agent_id, trace in linked_by_agent_id.items():
         lineage = lineages.get(agent_id)
@@ -180,14 +183,14 @@ def collect_session_traces(
     # Which depth-1 agents the filter keeps. A nested trace follows its depth-1
     # root's own keep decision, whatever cohort the root got: a linked root is
     # kept when any of its invocations matches, a root with no invocation row
-    # (session-spawned) when its sidecar agentType or name matches. Only a root
-    # the walk cannot find is unresolvable -> `filtered` (#648 AC2).
+    # (session-spawned) when its sidecar agentType or name matches. The decision
+    # is about the root's identity, never whether its own file parsed: an
+    # unparseable root keeps its subtree exactly as a parsed one would. Only a
+    # root the walk cannot find is unresolvable -> `filtered` (#648 AC2).
     kept_linked = {
         inv.agent_id
         for inv in invocations
-        if inv.agent_id is not None
-        and inv.trace is not None
-        and invocation_matches_filter(inv, agent_filter)
+        if inv.agent_id is not None and invocation_matches_filter(inv, agent_filter)
     }
 
     parsed_unlinked: dict[str, SubagentTrace | None] = {}
@@ -203,7 +206,7 @@ def collect_session_traces(
     kept_roots = set(kept_linked)
     for agent_id, parsed in parsed_unlinked.items():
         lineage = lineages.get(agent_id, TraceLineage(None, 1))
-        if parsed is not None and lineage.depth == 1 and _sidecar_matches(lineage, agent_filter):
+        if lineage.depth == 1 and _sidecar_matches(lineage, agent_filter):
             kept_roots.add(agent_id)
 
     result = SessionTraces()
@@ -211,6 +214,11 @@ def collect_session_traces(
         agent_id = info.agent_id
         lineage = lineages.get(agent_id, TraceLineage(None, 1))
         if agent_id in linked_by_agent_id:
+            # Per agent_id: when several invocations share one agent_id (#705),
+            # this prices only the first invocation's trace object, so it can
+            # disagree with the per-invocation fold below and the
+            # linked + nested + session_spawned == by_model reconciliation does
+            # not hold for that session. Owned by #705.
             cohort: TraceCohort = "linked" if agent_id in kept_linked else "filtered"
             result.owned.append(OwnedTrace(agent_id, cohort, linked_by_agent_id[agent_id]))
             continue

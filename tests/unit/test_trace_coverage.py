@@ -37,7 +37,7 @@ from agentfluent.analytics.pipeline import AnalysisResult, analyze_session, anal
 from agentfluent.analytics.pricing import compute_cost, get_pricing
 from agentfluent.analytics.trace_coverage import TraceCoverage
 from agentfluent.traces.discovery import discover_session_subagents
-from agentfluent.traces.lineage import resolve_lineage
+from agentfluent.traces.lineage import TraceLineage, resolve_lineage
 
 _MODEL = "claude-haiku-4-5-20251001"
 _NESTED_MAIN = (
@@ -378,9 +378,46 @@ class TestAgentFilter:
         cohorts = _cohorts(_build_session(tmp_path), agent_filter="child")
         assert cohorts["c0"] == "filtered"
 
-    def test_unresolvable_root_is_filtered(self, tmp_path: Path) -> None:
-        """A depth->=2 lineage whose walk breaks (no depth-1 ancestor in the map)."""
-        assert coverage_mod._depth_one_root("x", {}) is None
+    def test_unresolvable_root_is_filtered(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A depth-2 lineage whose parent is absent from the map: no root, so
+        ``filtered`` under ``--agent`` and still ``nested`` without a filter."""
+        real = coverage_mod.resolve_lineage
+
+        def broken(*args, **kwargs):  # type: ignore[no-untyped-def]
+            lineages = real(*args, **kwargs)
+            lineages["c0"] = TraceLineage("no-such-parent", 2, agent_type="child")
+            return lineages
+
+        monkeypatch.setattr(coverage_mod, "resolve_lineage", broken)
+        main = _build_session(tmp_path)
+        assert _cohorts(main)["c0"] == "nested"
+        assert _cohorts(main, agent_filter="runner")["c0"] == "filtered"
+
+    @pytest.mark.parametrize(
+        ("root_file", "agent_filter", "children"),
+        [("agent-w1.jsonl", "worker", ("leaf1", "deep1")), ("agent-r0.jsonl", "runner", ("c0",))],
+    )
+    def test_unparseable_root_keeps_its_subtree(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        root_file: str, agent_filter: str, children: tuple[str, ...],
+    ) -> None:
+        """Keep is decided by the root's identity, not by whether its own file
+        parsed (r2.recheck.1): children fold as with no filter."""
+        real = coverage_mod.parse_subagent_trace
+
+        def failing(path: Path):  # type: ignore[no-untyped-def]
+            if path.name == root_file:
+                raise ValueError("bad")
+            return real(path)
+
+        monkeypatch.setattr(coverage_mod, "parse_subagent_trace", failing)
+        main = _build_session(tmp_path)
+        root = root_file.removeprefix("agent-").removesuffix(".jsonl")
+        for cohorts in (_cohorts(main), _cohorts(main, agent_filter=agent_filter)):
+            assert cohorts[root] == "unparseable"
+            assert all(cohorts[child] == "nested" for child in children)
 
     def test_session_spawned_match_on_name(self, tmp_path: Path) -> None:
         cohorts = _cohorts(_build_session(tmp_path), agent_filter="code-review")

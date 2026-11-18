@@ -107,7 +107,8 @@ class SessionAnalysis(BaseModel):
     """Subagent trace spend by cohort -- linked, nested, session-spawned,
     filtered, unparseable (#648 AC4). Stored, not computed: linked and attached
     depth-2 traces are serialized (``invocations[].trace``, ``children``), but
-    session-spawned and depth->=3 traces have no home in the JSON, so the
+    session-spawned traces, their descendants, and depth->=3 traces have no
+    home in the JSON, so the
     cohorts cannot be rebuilt from a rehydrated envelope (``diff``, ``report``)."""
     mcp_tool_calls: list[McpToolCall] = Field(default_factory=list)
     """Parent-session MCP tool calls (those made directly in the main
