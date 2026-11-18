@@ -80,9 +80,11 @@ class AgentInvocation(BaseModel):
     3. **It is increasingly absent.** The rollup block is missing on most current
        invocations (D062(4)); ``None`` then.
 
-    Retained unchanged under D029 (it has shipped). For spend use the linked
-    trace's deduplicated per-turn ``trace.usage`` -- what per-agent spend and cost
-    are built from (#646, ``AgentTypeMetrics.spend_tokens``)."""
+    Retained unchanged under D029 (it has shipped). For spend use
+    ``analytics.tokens.trace_spend_usage(trace)`` -- per-turn usage deduplicated
+    within the file (#696) and across the session's files (#701), which is what
+    per-agent spend and cost are built from (#646,
+    ``AgentTypeMetrics.spend_tokens``)."""
 
     tool_uses: int | None = None
     """Tool calls this invocation made. **One source per invocation (#690):**

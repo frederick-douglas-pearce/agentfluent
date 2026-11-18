@@ -99,11 +99,12 @@ class SubagentSidecar(BaseModel):
     @field_validator("agent_type", "description", mode="before")
     @classmethod
     def _null_becomes_empty(cls, value: object) -> object:
-        """Coerce a null descriptive field to ``""`` instead of failing.
+        """Coerce a null or non-string descriptive field to ``""`` instead of
+        failing.
 
         A cosmetic field's shape must not cost us the ``tool_use_id`` edge.
         """
-        return "" if value is None else value
+        return value if isinstance(value, str) else ""
 
     @field_validator(
         "tool_use_id", "name", "parent_agent_id", "request_shape", mode="before",
@@ -146,7 +147,10 @@ def read_subagent_sidecar(trace_path: Path) -> SubagentSidecar | None:
     """Read the sidecar beside ``trace_path``.
 
     Returns ``None`` -- never raises -- when the sidecar is absent, unreadable,
-    or not a JSON object. (No key is required since #701 -- a sidecar without
+    or not a JSON object, or -- defensively -- fails model validation. Every
+    field coerces a missing or wrongly-typed value to its default, so one odd
+    field never discards the rest; the validation branch is a backstop, not an
+    expected path. (No key is required since #701 -- a sidecar without
     ``toolUseId`` still carries the agent's type and name.) Absence is an expected, ordinary
     case: sessions predating the sidecar format have trace files with no
     sidecar, and callers must degrade rather than fail.

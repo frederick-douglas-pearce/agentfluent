@@ -77,7 +77,8 @@ class TokenMetrics:
     """Number of deduplicated assistant messages (API calls). Counts
     parent-session messages only — subagent traces' per-call usage is
     not reliably attributable per call, so we sum at the trace level
-    instead (see ``SubagentTrace.usage``)."""
+    instead (see ``SubagentTrace.usage``; the spend a trace contributes, with
+    turns counted elsewhere in the session removed, is ``trace_spend_usage``)."""
 
     by_model: list[ModelTokenBreakdown] = field(default_factory=list)
     """Per-(model, origin) token breakdown. Schema v2: list, not dict.
@@ -179,17 +180,36 @@ def trace_spend_usage(trace: SubagentTrace) -> Usage:
     """The usage a trace contributes to spend (#701).
 
     ``trace.spend_usage`` once ``dedupe_trace_turns`` has run on the session,
-    else the per-file ``trace.usage``. The **only** read path for spend: the
-    session fold (``compute_subagent_token_metrics``), ``price_trace`` and
-    per-agent ``spend_tokens`` all go through it, so a turn dropped as a
-    duplicate is dropped from all three and #646's per-agent ↔ ``by_model``
-    reconciliation keeps holding.
+    else the per-file ``trace.usage``. Every spend reader goes through it: the
+    session fold (``compute_subagent_token_metrics``), ``price_trace``,
+    per-agent ``spend_tokens`` (``analytics.agent_metrics``) and the verbose
+    Per-Invocation Detail Tokens column (``cli.formatters.table``). So a turn
+    dropped as a duplicate is dropped from all of them, and #646's per-agent ↔
+    ``by_model`` reconciliation keeps holding.
     """
     return trace.spend_usage if trace.spend_usage is not None else trace.usage
 
 
+def counted_parent_message_ids(messages: Iterable[SessionMessage]) -> set[str]:
+    """``message_id`` s of the parent-session turns ``compute_token_metrics``
+    counts (#701).
+
+    Uses the same predicate (``_counts_as_parent_call``) so a trace turn is
+    never dropped as "already counted" on the strength of a main-session turn
+    the parent fold skipped (no usage, or ``<synthetic>``). Empty ids are not
+    ids -- the same reading the #696 fragment merge takes.
+    """
+    return {
+        msg.message_id
+        for msg in messages
+        if _counts_as_parent_call(msg) and msg.message_id
+    }
+
+
 def dedupe_trace_turns(
-    traces: Sequence[SubagentTrace], counted_message_ids: Iterable[str],
+    counted_message_ids: Iterable[str],
+    depth_one_in_invocation_order: Sequence[SubagentTrace],
+    rest: Iterable[SubagentTrace] = (),
 ) -> None:
     """Set each trace's ``spend_usage`` so no API turn is counted twice (#701).
 
@@ -199,20 +219,27 @@ def dedupe_trace_turns(
     with the main session. Summing per-file usage then counts those turns more
     than once. This is the hard guard: first occurrence wins.
 
-    ``counted_message_ids`` are the turns already counted before any trace --
-    the main session's assistant ``message_id`` s. ``traces`` is the precedence
-    order: main session first (via ``counted_message_ids``), then depth-1 traces
-    in invocation order, then the rest by ``(depth, agent_id)`` -- the caller
-    supplies that order; this function only honors it. A turn with no
-    ``message_id`` always counts (it cannot be matched). A trace with no
-    ``turn_usages`` (not parser-built) is left alone and spends its ``usage``.
-    A trace object appearing twice in ``traces`` is processed once.
+    **Precedence is fixed here**, so every caller gets the same answer:
+    ``counted_message_ids`` (the main session's counted turns -- see
+    ``counted_parent_message_ids``) first, then ``depth_one_in_invocation_order``
+    as given (the caller is the only one who knows invocation order), then
+    ``rest`` sorted by ``(depth, agent_id)``.
+
+    A turn with no ``message_id`` -- ``None`` or ``""``, matching the #696
+    merge's notion of "no id" -- always counts (it cannot be matched). A trace
+    with no ``turn_usages`` (not parser-built) is left alone and spends its
+    ``usage``. A trace *object* appearing twice is processed once; two distinct
+    objects for the same ``agent_id`` are not merged (#705).
 
     Mutates ``spend_usage`` only; the public per-file ``usage`` is unchanged.
     """
+    ordered = [
+        *depth_one_in_invocation_order,
+        *sorted(rest, key=lambda trace: (trace.depth, trace.agent_id)),
+    ]
     seen = set(counted_message_ids)
     processed: set[int] = set()
-    for trace in traces:
+    for trace in ordered:
         if id(trace) in processed:
             continue
         processed.add(id(trace))
@@ -220,7 +247,7 @@ def dedupe_trace_turns(
             continue
         spend = Usage()
         for turn in trace.turn_usages:
-            if turn.message_id is not None:
+            if turn.message_id:
                 if turn.message_id in seen:
                     continue
                 seen.add(turn.message_id)
@@ -296,6 +323,18 @@ def session_price_timestamp(messages: list[SessionMessage]) -> datetime | None:
     return price_date
 
 
+def _counts_as_parent_call(msg: SessionMessage) -> bool:
+    """Whether a parent-session message is a counted API call: an assistant
+    message with usage, not the ``<synthetic>`` sentinel (no real API call, no
+    pricing). Shared by ``compute_token_metrics`` and
+    ``counted_parent_message_ids`` so the two cannot drift (#701)."""
+    return (
+        msg.type == "assistant"
+        and msg.usage is not None
+        and msg.model not in SYNTHETIC_MODELS
+    )
+
+
 def compute_token_metrics(
     messages: list[SessionMessage], *, timestamp: datetime | None = None
 ) -> TokenMetrics:
@@ -320,15 +359,12 @@ def compute_token_metrics(
     api_call_count = 0
 
     for msg in messages:
-        if msg.type != "assistant" or msg.usage is None:
-            continue
-        # <synthetic> is a Claude Code sentinel — no real API call, no pricing.
-        if msg.model in SYNTHETIC_MODELS:
+        usage = msg.usage
+        if usage is None or not _counts_as_parent_call(msg):
             continue
 
         api_call_count += 1
         model_name = msg.model or "unknown"
-        usage = msg.usage
         key = (model_name, "parent")
 
         breakdown = by_model.get(key)

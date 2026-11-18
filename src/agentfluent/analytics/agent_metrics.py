@@ -4,7 +4,9 @@ Computes invocation counts, token usage, cost, and efficiency metrics grouped
 by agent type.
 
 **Spend is sourced from subagent traces (#646).** Per-agent spend is the sum of
-each linked trace's deduplicated per-turn ``usage`` (``spend_tokens``), and
+each linked trace's ``analytics.tokens.trace_spend_usage`` -- per-turn usage
+deduplicated within the file (#696) and across the session's files (#701) --
+(``spend_tokens``), and
 per-agent cost prices each trace at its own model's rate through
 ``analytics.tokens.price_trace`` -- the same primitive the session fold uses, so
 Σ per-agent cost reconciles with the session's subagent-origin ``by_model`` cost.
@@ -54,6 +56,13 @@ def _recompute_ratios(metrics: AgentTypeMetrics) -> None:
     ``None``, or a ``<synthetic>`` first assistant message) still contributes
     its real turns to ``total_model_turns``, diluting the ratio. That is a
     parser defect, tracked in #692 (latent: no local trace has the shape).
+
+    **Fork traces dilute both per-turn ratios too (#704).** Spend and cost are
+    deduplicated across the session's files (#701), but ``total_model_turns``
+    and ``priced_model_turns`` count every turn in each file, including turns a
+    fork replayed from the spawning conversation. A fork type's per-turn token
+    and cost figures therefore read low; the turn-shaped metrics are fixed
+    together in #704.
     """
     if metrics.invocations_with_turns > 0:
         metrics.avg_turns_per_invocation = (

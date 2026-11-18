@@ -257,3 +257,26 @@ class TestForwardCompatibility:
         """``populate_by_name`` -- construction in tests//code needn't use aliases."""
         meta = SubagentSidecar(agent_type="a", description="d", tool_use_id="t")
         assert meta.tool_use_id == "t"
+
+
+class TestNonStringDescriptiveFieldKeepsTheEdge:
+    """Round-1 F: a non-string ``agentType`` / ``description`` used to fail
+    validation and discard the whole sidecar, ``toolUseId`` edge included."""
+
+    @pytest.mark.parametrize(
+        "obj",
+        [
+            {"toolUseId": "toolu_KEEP", "agentType": 5},
+            {"toolUseId": "toolu_KEEP", "description": ["x"]},
+            {"toolUseId": "toolu_KEEP", "agentType": {}, "description": 3},
+        ],
+    )
+    def test_edge_survives(self, tmp_path: Path, obj: dict[str, object]) -> None:
+        trace = tmp_path / "agent-odd.jsonl"
+        trace.write_text("{}\n")
+        (tmp_path / "agent-odd.meta.json").write_text(json.dumps(obj))
+        sidecar = read_subagent_sidecar(trace)
+        assert sidecar is not None
+        assert sidecar.tool_use_id == "toolu_KEEP"
+        assert isinstance(sidecar.agent_type, str)
+        assert isinstance(sidecar.description, str)

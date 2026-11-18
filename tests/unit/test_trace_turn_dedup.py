@@ -14,10 +14,19 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from rich.console import Console
 
 import agentfluent.analytics.pipeline as pipeline_mod
 from agentfluent.analytics.pipeline import analyze_session
-from agentfluent.analytics.tokens import dedupe_trace_turns, trace_spend_usage
+from agentfluent.analytics.tokens import (
+    counted_parent_message_ids,
+    dedupe_trace_turns,
+    price_trace,
+    session_price_timestamp,
+    trace_spend_usage,
+)
+from agentfluent.cli.formatters.table import format_analysis_table
+from agentfluent.core.parser import parse_session
 from agentfluent.core.session import Usage
 from agentfluent.traces.discovery import discover_session_subagents
 from agentfluent.traces.lineage import resolve_lineage
@@ -91,17 +100,17 @@ def _write(path: Path, lines: list[dict[str, Any]]) -> None:
 _MAIN_1 = _usage(10, 20)
 _MAIN_2 = _usage(11, 21)
 _SHARED = _usage(100, 200, cc=300, cr=400)  # replayed in both forks
-_A_OWN = _usage(5, 7)
-_B_OWN = _usage(13, 17)
+_Z_OWN = _usage(5, 7)
+_A2_OWN = _usage(13, 17)
 
 
 def _build_fork_session(root: Path) -> Path:
     """Main session spawning two fork agents that replay shared context.
 
-    * ``forkA`` replays ``msg_shared`` and also the main session's ``msg_main1``,
-      then does its own turn ``msg_a_own`` -- written as two block-per-line
+    * ``forkZ`` replays ``msg_shared`` and also the main session's ``msg_main1``,
+      then does its own turn ``msg_z_own`` -- written as two block-per-line
       fragments sharing one ``message.id`` (#696), which must still count once.
-    * ``forkB`` replays ``msg_shared`` and does its own turn ``msg_b_own``.
+    * ``forkA`` replays ``msg_shared`` and does its own turn ``msg_a2_own``.
     """
     main = root / "fork-session.jsonl"
     _write(main, [
@@ -110,29 +119,29 @@ def _build_fork_session(root: Path) -> Path:
             {"type": "tool_use", "id": "toolu_a", "name": "Agent",
              "input": {"subagent_type": "fork", "description": "a", "prompt": "a"}},
         ], "2026-11-01T00:00:01Z"),
-        _agent_result("toolu_a", "forkA", "2026-11-01T00:00:05Z"),
+        _agent_result("toolu_a", "forkZ", "2026-11-01T00:00:05Z"),
         _assistant("msg_main2", _MAIN_2, [
             {"type": "tool_use", "id": "toolu_b", "name": "Agent",
              "input": {"subagent_type": "fork", "description": "b", "prompt": "b"}},
         ], "2026-11-01T00:00:06Z"),
-        _agent_result("toolu_b", "forkB", "2026-11-01T00:00:09Z"),
+        _agent_result("toolu_b", "forkA", "2026-11-01T00:00:09Z"),
     ])
     subagents = root / "fork-session" / "subagents"
     subagents.mkdir(parents=True)
-    _write(subagents / "agent-forkA.jsonl", [
+    _write(subagents / "agent-forkZ.jsonl", [
         _user("a", "2026-11-01T00:00:02Z", sidechain=True),
         _assistant("msg_shared", _SHARED, _text("ctx"), "2026-11-01T00:00:02Z", sidechain=True),
         _assistant("msg_main1", _MAIN_1, _text("replay"), "2026-11-01T00:00:03Z", sidechain=True),
-        _assistant("msg_a_own", _A_OWN, [{"type": "thinking", "thinking": "t"}],
+        _assistant("msg_z_own", _Z_OWN, [{"type": "thinking", "thinking": "t"}],
                    "2026-11-01T00:00:04Z", sidechain=True),
-        _assistant("msg_a_own", _A_OWN, _text("own"), "2026-11-01T00:00:04Z", sidechain=True),
+        _assistant("msg_z_own", _Z_OWN, _text("own"), "2026-11-01T00:00:04Z", sidechain=True),
     ])
-    _write(subagents / "agent-forkB.jsonl", [
+    _write(subagents / "agent-forkA.jsonl", [
         _user("b", "2026-11-01T00:00:07Z", sidechain=True),
         _assistant("msg_shared", _SHARED, _text("ctx"), "2026-11-01T00:00:07Z", sidechain=True),
-        _assistant("msg_b_own", _B_OWN, _text("own"), "2026-11-01T00:00:08Z", sidechain=True),
+        _assistant("msg_a2_own", _A2_OWN, _text("own"), "2026-11-01T00:00:08Z", sidechain=True),
     ])
-    for agent_id, tool_use_id in (("forkA", "toolu_a"), ("forkB", "toolu_b")):
+    for agent_id, tool_use_id in (("forkZ", "toolu_a"), ("forkA", "toolu_b")):
         (subagents / f"agent-{agent_id}.meta.json").write_text(json.dumps({
             "agentType": "fork", "description": agent_id, "toolUseId": tool_use_id,
             "isFork": True, "spawnDepth": 1,
@@ -146,9 +155,9 @@ def _total(u: dict[str, int]) -> int:
 
 # What the subagent side should spend: the shared turn once, each fork's own
 # turn once, and nothing of main's replayed turn (main counted it first).
-_EXPECTED_SUBAGENT_TOKENS = _total(_SHARED) + _total(_A_OWN) + _total(_B_OWN)
+_EXPECTED_SUBAGENT_TOKENS = _total(_SHARED) + _total(_Z_OWN) + _total(_A2_OWN)
 _NAIVE_SUBAGENT_TOKENS = (
-    2 * _total(_SHARED) + _total(_MAIN_1) + _total(_A_OWN) + _total(_B_OWN)
+    2 * _total(_SHARED) + _total(_MAIN_1) + _total(_Z_OWN) + _total(_A2_OWN)
 )
 
 
@@ -212,23 +221,25 @@ class TestForkSessionFold:
         assert row_cost > 0
 
     def test_first_occurrence_wins_in_invocation_order(self, tmp_path: Path) -> None:
-        """forkA (first invocation) keeps the shared turn; forkB loses it; forkA
-        loses the turn main already counted."""
+        """forkZ (first invocation) keeps the shared turn; forkA loses it; forkZ
+        loses the turn main already counted. forkZ sorts *after* forkA by
+        ``agent_id``, so an id-ordered (rather than invocation-ordered) pass
+        would hand the shared turn to forkA and fail this."""
         analysis = analyze_session(_build_fork_session(tmp_path))
         traces = {inv.agent_id: inv.trace for inv in analysis.invocations}
-        fork_a, fork_b = traces["forkA"], traces["forkB"]
-        assert fork_a is not None and fork_b is not None
-        assert trace_spend_usage(fork_a).total_tokens == _total(_SHARED) + _total(_A_OWN)
-        assert trace_spend_usage(fork_b).total_tokens == _total(_B_OWN)
+        fork_z, fork_a = traces["forkZ"], traces["forkA"]
+        assert fork_z is not None and fork_a is not None
+        assert trace_spend_usage(fork_z).total_tokens == _total(_SHARED) + _total(_Z_OWN)
+        assert trace_spend_usage(fork_a).total_tokens == _total(_A2_OWN)
 
     def test_public_usage_and_json_are_unchanged(self, tmp_path: Path) -> None:
         """``trace.usage`` stays the per-file sum, and neither new field leaks
         into JSON output (D055)."""
         analysis = analyze_session(_build_fork_session(tmp_path))
-        fork_b = next(inv.trace for inv in analysis.invocations if inv.agent_id == "forkB")
-        assert fork_b is not None
-        assert fork_b.usage.total_tokens == _total(_SHARED) + _total(_B_OWN)
-        dumped = json.loads(fork_b.model_dump_json())
+        fork_a = next(inv.trace for inv in analysis.invocations if inv.agent_id == "forkA")
+        assert fork_a is not None
+        assert fork_a.usage.total_tokens == _total(_SHARED) + _total(_A2_OWN)
+        dumped = json.loads(fork_a.model_dump_json())
         assert "turn_usages" not in dumped
         assert "spend_usage" not in dumped
 
@@ -236,9 +247,9 @@ class TestForkSessionFold:
 class TestParserTurnUsages:
     def test_fragments_merge_to_one_turn_and_sum_matches_usage(self, tmp_path: Path) -> None:
         main = _build_fork_session(tmp_path)
-        trace = parse_subagent_trace(main.with_suffix("") / "subagents" / "agent-forkA.jsonl")
+        trace = parse_subagent_trace(main.with_suffix("") / "subagents" / "agent-forkZ.jsonl")
         ids = [t.message_id for t in trace.turn_usages]
-        assert ids == ["msg_shared", "msg_main1", "msg_a_own"]
+        assert ids == ["msg_shared", "msg_main1", "msg_z_own"]
         assert sum((t.usage for t in trace.turn_usages), Usage()) == trace.usage
 
     def test_turns_without_message_id_always_count(self) -> None:
@@ -267,40 +278,40 @@ class TestDedupeTraceTurns:
     def test_counted_ids_and_earlier_traces_take_precedence(self) -> None:
         first = _trace("a", [("m1", 1), ("s", 10), ("a1", 100)])
         second = _trace("b", [("s", 10), ("b1", 1000)])
-        dedupe_trace_turns([first, second], {"m1"})
+        dedupe_trace_turns({"m1"}, [first, second])
         assert trace_spend_usage(first).output_tokens == 110
         assert trace_spend_usage(second).output_tokens == 1000
 
-    def test_order_is_the_callers(self) -> None:
+    def test_depth_one_order_is_the_callers(self) -> None:
         first = _trace("a", [("s", 10)])
         second = _trace("b", [("s", 10), ("b1", 1)])
-        dedupe_trace_turns([second, first], set())
+        dedupe_trace_turns(set(), [second, first])
         assert trace_spend_usage(second).output_tokens == 11
         assert trace_spend_usage(first).output_tokens == 0
 
     def test_none_ids_always_count(self) -> None:
         a = _trace("a", [(None, 3)])
         b = _trace("b", [(None, 3)])
-        dedupe_trace_turns([a, b], set())
+        dedupe_trace_turns(set(), [a, b])
         assert trace_spend_usage(a).output_tokens == 3
         assert trace_spend_usage(b).output_tokens == 3
 
     def test_same_trace_twice_is_processed_once(self) -> None:
         a = _trace("a", [("x", 4)])
-        dedupe_trace_turns([a, a], set())
+        dedupe_trace_turns(set(), [a, a])
         assert trace_spend_usage(a).output_tokens == 4
 
     def test_trace_without_turns_spends_its_usage(self) -> None:
         bare = SubagentTrace(
             agent_id="bare", delegation_prompt="", usage=Usage(output_tokens=9), model=_MODEL,
         )
-        dedupe_trace_turns([bare], {"anything"})
+        dedupe_trace_turns({"anything"}, [bare])
         assert bare.spend_usage is None
         assert trace_spend_usage(bare).output_tokens == 9
 
     def test_public_usage_is_not_mutated(self) -> None:
         a = _trace("a", [("m", 5), ("own", 1)])
-        dedupe_trace_turns([a], {"m"})
+        dedupe_trace_turns({"m"}, [a])
         assert a.usage.output_tokens == 6
         assert trace_spend_usage(a).output_tokens == 1
 
@@ -320,3 +331,127 @@ class TestSidecarWithoutToolUseIdInLineage:
         assert lineages["cr1"].agent_type == "general-purpose"
         assert lineages["cr1"].depth == 1
         assert lineages["cr1"].parent_invocation_id is None
+
+
+def _price_of(usage_dicts: list[dict[str, int]], main: Path) -> float:
+    """Price a token total independently of the dedup path: a bare trace (no
+    ``turn_usages``) carrying the expected usage, at the session's price date."""
+    usage = sum((Usage(**u) for u in usage_dicts), Usage())
+    reference = SubagentTrace(
+        agent_id="reference", delegation_prompt="", usage=usage, model=_MODEL,
+    )
+    cost = price_trace(reference, timestamp=session_price_timestamp(parse_session(main)))
+    assert cost is not None and cost > 0
+    return cost
+
+
+class TestForkSessionCost:
+    """Cost, not just tokens, is deduplicated (round-1 H1): the reconciliation
+    test compares Σ price_trace to Σ price_trace, so it cannot see a
+    ``price_trace`` that reverts to per-file ``usage``. These assert the dollar
+    figure against an independent price of the expected unique turns."""
+
+    def test_subagent_row_cost_prices_unique_turns_only(self, tmp_path: Path) -> None:
+        main = _build_fork_session(tmp_path)
+        analysis = analyze_session(main)
+        row_cost = sum(
+            r.cost for r in analysis.token_metrics.by_model if r.origin == "subagent"
+        )
+        assert row_cost == pytest.approx(_price_of([_SHARED, _Z_OWN, _A2_OWN], main))
+
+    def test_per_agent_cost_prices_unique_turns_only(self, tmp_path: Path) -> None:
+        main = _build_fork_session(tmp_path)
+        analysis = analyze_session(main)
+        per_agent_cost = sum(
+            m.estimated_total_cost_usd for m in analysis.agent_metrics.by_agent_type.values()
+        )
+        assert per_agent_cost == pytest.approx(_price_of([_SHARED, _Z_OWN, _A2_OWN], main))
+
+    def test_top_line_cost_is_main_plus_unique_subagent_turns(self, tmp_path: Path) -> None:
+        main = _build_fork_session(tmp_path)
+        analysis = analyze_session(main)
+        expected = _price_of([_MAIN_1, _MAIN_2], main) + _price_of(
+            [_SHARED, _Z_OWN, _A2_OWN], main,
+        )
+        assert analysis.token_metrics.total_cost == pytest.approx(expected)
+
+
+class TestNoIdAndCountedPredicate:
+    """Round-1 E: "no id" means ``None`` *or* ``""`` (the #696 merge's reading),
+    and main-session ids count only for turns the parent fold counted."""
+
+    def test_empty_string_ids_always_count(self) -> None:
+        a = _trace("a", [("", 3), ("", 4)])
+        dedupe_trace_turns({""}, [a])
+        assert trace_spend_usage(a).output_tokens == 7
+
+    def test_uncounted_main_turns_do_not_claim_trace_turns(self) -> None:
+        from agentfluent.core.session import SessionMessage
+
+        messages = [
+            SessionMessage(type="assistant", message_id="counted", model=_MODEL,
+                           usage=Usage(output_tokens=1)),
+            SessionMessage(type="assistant", message_id="synthetic", model="<synthetic>",
+                           usage=Usage()),
+            SessionMessage(type="assistant", message_id="no-usage", model=_MODEL),
+            SessionMessage(type="assistant", message_id="", model=_MODEL,
+                           usage=Usage(output_tokens=1)),
+            SessionMessage(type="user", message_id="user-line"),
+        ]
+        assert counted_parent_message_ids(messages) == {"counted"}
+
+        trace = _trace("t", [("counted", 1), ("synthetic", 10), ("no-usage", 100)])
+        dedupe_trace_turns(counted_parent_message_ids(messages), [trace])
+        assert trace_spend_usage(trace).output_tokens == 110
+
+
+class TestRestPrecedence:
+    """Round-1 G / AC3 option (a): the ``(depth, agent_id)`` order for traces
+    after depth 1 is owned by ``dedupe_trace_turns``, not by its caller."""
+
+    @staticmethod
+    def _at_depth(agent_id: str, depth: int, turns: list[tuple[str | None, int]]) -> SubagentTrace:
+        trace = _trace(agent_id, turns)
+        trace.depth = depth
+        return trace
+
+    def test_depth_one_before_rest_and_rest_sorted(self) -> None:
+        parent = _trace("p", [("p1", 1)])
+        late_d2 = self._at_depth("b", 2, [("x", 10), ("p1", 1)])
+        early_d2 = self._at_depth("a", 2, [("x", 10), ("y", 100)])
+        d3 = self._at_depth("0", 3, [("y", 100), ("z", 1000)])
+        # Rest is handed over in an order that disagrees with (depth, agent_id).
+        dedupe_trace_turns(set(), [parent], [d3, late_d2, early_d2])
+        assert trace_spend_usage(parent).output_tokens == 1
+        assert trace_spend_usage(early_d2).output_tokens == 110  # sorts first at depth 2
+        assert trace_spend_usage(late_d2).output_tokens == 0  # x taken by "a", p1 by parent
+        assert trace_spend_usage(d3).output_tokens == 1000  # depth 3 after every depth 2
+
+    def test_rest_never_outranks_depth_one(self) -> None:
+        d1 = _trace("z", [("s", 5)])
+        child = self._at_depth("a", 2, [("s", 5)])
+        dedupe_trace_turns(set(), [d1], [child])
+        assert trace_spend_usage(d1).output_tokens == 5
+        assert trace_spend_usage(child).output_tokens == 0
+
+
+class TestVerboseInvocationTable:
+    def test_tokens_column_shows_deduplicated_spend(self, tmp_path: Path) -> None:
+        """Round-1 D: the Per-Invocation Detail Tokens column reads
+        ``trace_spend_usage``, matching the agent table, not per-file usage."""
+        from agentfluent.analytics.pipeline import AnalysisResult
+        from agentfluent.cli.formatters.helpers import format_tokens
+
+        analysis = analyze_session(_build_fork_session(tmp_path))
+        result = AnalysisResult(
+            sessions=[analysis],
+            token_metrics=analysis.token_metrics,
+            agent_metrics=analysis.agent_metrics,
+            session_count=1,
+        )
+        console = Console(record=True, width=240, force_terminal=False)
+        format_analysis_table(console, result, verbose=True)
+        text = console.export_text()
+        detail = text[text.index("Per-Invocation Detail"):]
+        assert format_tokens(_total(_A2_OWN)) in detail
+        assert format_tokens(_total(_SHARED) + _total(_A2_OWN)) not in detail
