@@ -479,3 +479,56 @@ class TestNonSpendTracesClaimNothing:
         dedupe_trace_turns(set(), [excluded, kept])
         rows = compute_subagent_token_metrics([excluded, kept])
         assert sum(r.output_tokens for r in rows) == 1001
+
+
+class TestPipelineHandsChildrenToDedup:
+    """Acceptance-gate Class B survivor P02: ``_dedupe_session_trace_turns``
+    must pass attached children to the dedup, or a depth-2 child keeps per-file
+    usage including turns its parent already counted."""
+
+    def test_child_loses_turn_its_parent_counted(self) -> None:
+        from agentfluent.agents.models import AgentInvocation
+
+        parent = _trace("parent", [("x", 10)])
+        child = _trace("child", [("x", 10), ("c", 1)])
+        child.depth = 2
+        parent.children.append(child)
+        invocation = AgentInvocation(
+            agent_type="worker", description="d", prompt="p", tool_use_id="toolu_1",
+            trace=parent,
+        )
+        pipeline_mod._dedupe_session_trace_turns([], [invocation])
+        assert trace_spend_usage(parent).output_tokens == 10
+        assert child.spend_usage is not None
+        assert trace_spend_usage(child).output_tokens == 1
+
+
+class TestLineageSkipsIdlessEdges:
+    """Acceptance-gate Class B survivor L01: a sidecar with no ``toolUseId``
+    contributes no edge, so it must not send ``resolve_lineage`` down the
+    depth->=2 escalation path -- which reads every sibling trace file line by
+    line (``build_emitter_index``) to resolve an edge that does not exist."""
+
+    def test_idless_sidecar_does_not_trigger_the_emitter_scan(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import agentfluent.traces.lineage as lineage_mod
+
+        subagents = tmp_path / "s" / "subagents"
+        subagents.mkdir(parents=True)
+        for agent_id, sidecar in (
+            ("d1", {"agentType": "worker", "toolUseId": "toolu_main"}),
+            ("cr1", {"agentType": "general-purpose", "name": "code-review"}),
+        ):
+            (subagents / f"agent-{agent_id}.jsonl").write_text("{}\n")
+            (subagents / f"agent-{agent_id}.meta.json").write_text(json.dumps(sidecar))
+
+        def _no_scan(*_args: object, **_kwargs: object) -> dict[str, str]:
+            raise AssertionError("emitter index built for an edge-less sidecar")
+
+        monkeypatch.setattr(lineage_mod, "build_emitter_index", _no_scan)
+        lineages = resolve_lineage(discover_session_subagents(tmp_path / "s"), {"toolu_main"})
+        assert lineages["d1"].depth == 1
+        assert lineages["cr1"].depth == 1
+        assert lineages["cr1"].parent_invocation_id is None
+        assert lineages["cr1"].agent_type == "general-purpose"
