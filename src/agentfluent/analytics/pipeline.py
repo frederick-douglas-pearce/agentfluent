@@ -24,6 +24,7 @@ from agentfluent.analytics.pricing import SYNTHETIC_MODELS
 from agentfluent.analytics.tokens import (
     ModelTokenBreakdown,
     TokenMetrics,
+    TraceDedupStats,
     _aggregate_totals,
     compute_subagent_token_metrics,
     compute_token_metrics,
@@ -36,6 +37,11 @@ from agentfluent.analytics.tools import (
     ConcentrationEntry,
     ToolMetrics,
     compute_tool_metrics,
+)
+from agentfluent.analytics.trace_coverage import (
+    TraceCoverage,
+    compute_trace_coverage,
+    merge_trace_coverage,
 )
 from agentfluent.config.models import EnvironmentWarning
 from agentfluent.core.filtering import WindowMetadata
@@ -51,11 +57,7 @@ from agentfluent.diagnostics.mcp_assessment import (
     extract_mcp_calls_from_messages,
 )
 from agentfluent.diagnostics.models import DiagnosticsResult
-from agentfluent.traces.discovery import discover_session_subagents
-from agentfluent.traces.lineage import resolve_lineage
-from agentfluent.traces.linker import link_traces
-from agentfluent.traces.models import SubagentTrace
-from agentfluent.traces.parser import parse_subagent_trace
+from agentfluent.traces.coverage import SessionTraces, collect_session_traces
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +99,10 @@ class SessionAnalysis(BaseModel):
     drift (``prd-v0.11.md`` §9) into a self-describing report rather than a
     dead end. Do not "simplify" it away."""
     invocations: list[AgentInvocation] = Field(default_factory=list)
+    trace_coverage: TraceCoverage = Field(default_factory=TraceCoverage)
+    """Subagent trace spend by cohort -- linked, nested, session-spawned,
+    filtered, unparseable (#648 AC4). Stored, not computed: the traces it is
+    built from are not serialized, and ``diff`` reads rehydrated JSON."""
     mcp_tool_calls: list[McpToolCall] = Field(default_factory=list)
     """Parent-session MCP tool calls (those made directly in the main
     session, outside any Agent delegation). Subagent-trace MCP calls
@@ -212,6 +218,16 @@ class AnalysisResult(BaseModel):
 
     @computed_field  # type: ignore[prop-decorator]
     @property
+    def trace_coverage(self) -> TraceCoverage:
+        """Run-level ``trace_coverage``: each session's coverage summed (#648 AC4).
+
+        Recomputed from ``self.sessions`` like ``total_model_turns``, so it
+        survives JSON rehydration. This is the link-coverage count #676
+        consumes."""
+        return merge_trace_coverage([s.trace_coverage for s in self.sessions])
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
     def total_synthetic_messages(self) -> int:
         """Aggregate ``<synthetic>`` ghost-response count across all
         analyzed sessions (#507, D044).
@@ -249,51 +265,40 @@ def analyze_session(
     token_metrics = compute_token_metrics(messages, timestamp=price_date)
     tool_metrics = compute_tool_metrics(messages)
 
-    invocations = extract_agent_invocations(messages)
-    if agent_filter:
-        invocations = [
-            inv for inv in invocations if inv.agent_type.lower() == agent_filter.lower()
-        ]
-
-    invocations = _link_subagent_traces(invocations, path)
-    _dedupe_session_trace_turns(messages, invocations)
+    all_invocations = extract_agent_invocations(messages)
+    # Link, lineage and dedup run over EVERY invocation and every trace the
+    # session owns, before `--agent` is applied: dedup precedence (which file
+    # keeps a shared turn) must not depend on the filter, or a kept type's
+    # spend would rise when an earlier fork is filtered out (#648, #701 review).
+    session_traces = collect_session_traces(
+        all_invocations, path, agent_filter=agent_filter,
+    )
+    dedup = _dedupe_session_trace_turns(messages, session_traces)
+    invocations = [
+        inv
+        for inv in all_invocations
+        if agent_filter is None or inv.agent_type.lower() == agent_filter.lower()
+    ]
     mcp_tool_calls = extract_mcp_calls_from_messages(messages)
 
-    # NON-FOLDING GATE (#595 PR B, architect ruling 3) -- depth-1 traces ONLY.
+    # FOLD BY OWNERSHIP (#648 AC2). Session totals include every parseable
+    # trace in this session's own `subagents/` dir except the ones `--agent`
+    # excludes: depth-1, depth-2, depth->=3 and session-spawned (skill- and
+    # workflow-run background agents). Ownership is a runtime invariant of the
+    # layout, so the fold does not depend on the cohort labels, and it never
+    # reads `trace.children` -- the child tree is display shape (#659 may
+    # deepen it without moving a total). Before #648 only depth-1 traces were
+    # folded and the rest were dropped from `total_cost`; this is the
+    # deliberate act #595 PR B's non-folding gate deferred. Locked by
+    # tests/unit/test_trace_coverage.py::TestFoldByOwnership.
     #
-    # `inv.trace` is always depth 1 (an invocation row exists only for a
-    # main-session delegation), so `depth == 1` is currently redundant. It is
-    # written anyway because the thing being pinned is a DECISION, not an
-    # accident of how this line happens to be spelled.
-    #
-    # **It is redundant, therefore it is NOT tested, and cannot be.** The
-    # acceptance gate's mutation pass deleted this predicate and the whole
-    # suite stayed green -- correctly, since removing a no-op changes no
-    # behavior. Do not read the cross-reference below as pinning the
-    # predicate; a test that failed on its removal would be asserting a
-    # tautology. Depth->=2 traces
-    # now reach here via `trace.children`, and the moment anyone flattens that
-    # tree into this list, depth->=2 usage silently enters `total_cost`,
-    # `cache_efficiency`, `by_model` and every `diff` baseline for any session
-    # with nested delegation -- a cost-number movement inside a milestone
-    # themed "Cost correctness", arriving as an implementation side effect
-    # nobody chose.
-    #
-    # Folding that spend in IS correct in principle and IS wanted -- it is
-    # #648 AC2's deliberate act, with its own CHANGELOG line and its own
-    # before/after dogfood read. It is not PR B's.
-    #
-    # What IS locked, by
-    # tests/unit/test_lineage_fold_gate.py::TestNonFoldingGate: that the
-    # child tree is not flattened into this list. That mutation -- the
-    # regression this gate exists to stop -- is killed by the suite.
-    subagent_traces = [
-        inv.trace
-        for inv in invocations
-        if inv.trace is not None and inv.trace.depth == 1
-    ]
-    subagent_rows = compute_subagent_token_metrics(subagent_traces, timestamp=price_date)
+    # `by_agent_type` stays invocation-scoped: nested and session-spawned
+    # spend shows in `trace_coverage`, not in any per-agent row.
+    subagent_rows = compute_subagent_token_metrics(
+        session_traces.fold_traces, timestamp=price_date,
+    )
     token_metrics = fold_subagent_metrics_in(token_metrics, subagent_rows)
+    trace_coverage = compute_trace_coverage(session_traces, dedup, timestamp=price_date)
 
     # Same `price_date` as the session fold above, so Σ per-agent cost reconciles
     # with the subagent-origin `by_model` rows (#646 AC2/AC8).
@@ -315,6 +320,7 @@ def analyze_session(
         session_kind=classify_entrypoint(entrypoint),
         entrypoint=entrypoint,
         invocations=invocations,
+        trace_coverage=trace_coverage,
         mcp_tool_calls=mcp_tool_calls,
         messages=messages,
         message_count=len(messages),
@@ -534,159 +540,24 @@ def _merge_agent_metrics(
     )
 
 
-def _link_subagent_traces(
-    invocations: list[AgentInvocation], session_path: Path,
-) -> list[AgentInvocation]:
-    """Discover subagent trace files for ``session_path`` and attach them
-    to matching invocations.
-
-    Scoped per session: subagent files for a session ``<uuid>.jsonl`` live
-    under ``<uuid>/subagents/``. Parses the traces whose ``agent_id`` appears
-    in ``invocations``, plus -- since #595 PR B -- any **depth-2** trace being
-    attached as a child, which normally appears in no invocation (a trace whose
-    parse failed is the exception: its invocation carries ``trace=None``, so it
-    is absent from ``linked_by_agent_id`` and can be offered here again; the
-    loader returns ``None`` a second time and the attach loop skips it).
-
-    **Not free for the remaining files.** Lineage resolution reads the small
-    ``.meta.json`` sidecar for **every** trace in the session, and on the
-    depth->=2 escalation path it scans sibling trace files line by line. What
-    stays lazy is full trace *parsing*, which is the expensive part; do not
-    read this as "untouched files cost nothing".
-
-    Traces with no matching invocation are debug-logged as orphans. **That log
-    over-counts: a depth-2 trace successfully attached as a child is still
-    logged**, because ``linked_ids`` below is built from invocations only.
-    Harmless at debug level, but #648 AC3 plans to disclose an orphan cohort
-    from this same notion and must not inherit the over-count -- it should read
-    attached children out first.
-    """
-    # Discover subagent files for this session and build the lookup map.
-    session_dir = session_path.parent / session_path.stem
-    subagent_files = discover_session_subagents(session_dir)
-    path_map = {info.agent_id: info.path for info in subagent_files}
-
-    # Lazy loader: only parses traces for invocations that actually exist.
-    def loader(agent_id: str) -> SubagentTrace | None:
-        file_path = path_map.get(agent_id)
-        if file_path is None:
-            return None
-        try:
-            return parse_subagent_trace(file_path)
-        except (FileNotFoundError, ValueError):
-            logger.debug(
-                "Skipping malformed or missing subagent trace: %s", file_path,
-            )
-            return None
-
-    invocations = link_traces(invocations, loader)
-
-    # Lineage (#595 PR B): resolve depth + parent for every trace in the
-    # session, then hang **depth-2** traces off their parent as `children`
-    # (attachment is capped -- see the loop below; depth->=3 is #659).
-    # Depth->=2 agents deliberately do NOT become AgentInvocation rows.
-    main_session_tool_use_ids = {inv.tool_use_id for inv in invocations}
-    linked_by_agent_id = {
-        inv.agent_id: inv.trace
-        for inv in invocations
-        if inv.agent_id is not None and inv.trace is not None
-    }
-    # Pass the linked agent ids as a second depth-1 source, so a depth-1 agent
-    # whose sidecar is missing does not sever its child's edge.
-    #
-    # ASSUMPTION, not an enforced invariant: that an invocation row implies a
-    # main-session delegation. Nothing filters `isSidechain` anywhere in this
-    # package, so a session JSONL that inlined sidechain lines would mint
-    # invocation rows for nested agents and flatten their children to depth 1.
-    # Holds for every fixture and for the current corpus; tracked separately
-    # rather than asserted here as fact.
-    lineages = resolve_lineage(
-        subagent_files, main_session_tool_use_ids, set(linked_by_agent_id),
-    )
-    for agent_id, trace in linked_by_agent_id.items():
-        lineage = lineages.get(agent_id)
-        if lineage is not None:
-            trace.parent_invocation_id = lineage.parent_invocation_id
-            trace.depth = lineage.depth
-
-    # Depth-2 traces have no invocation row, so they are parsed here and
-    # attached to their parent. Only the residual is parsed -- on a real
-    # corpus that is 1.2% of traces, and a session with no nesting parses
-    # nothing extra.
-    #
-    # ATTACHMENT IS CAPPED AT DEPTH 2 (#595 AC2 as amended; depth->=3 is #659).
-    # `resolve_lineage` still computes arbitrary depth -- it is attachment that
-    # stops here.
-    #
-    # TWO things enforce the cap, and the load-bearing one is NOT the depth
-    # predicate. Verified by experiment: relaxing `!= 2` to `< 2` alone still
-    # does not attach a depth-3 trace. What blocks it is that the parent is
-    # looked up in `linked_by_agent_id` -- invocation-owning traces only -- so a
-    # depth-3 trace, whose parent is a depth-2 trace, finds no parent and is
-    # skipped. The depth predicate is a redundant, legible restatement.
-    # Re-admitting depth->=3 takes BOTH a relaxed predicate and an accumulator
-    # that adds each attached child to the lookup. #659 must change both, and
-    # must relax `parent_invocation_id`'s docstring with them -- the invariant
-    # that every non-None value joins to an invocation row holds *because* the
-    # parent lookup is restricted, so widening the lookup is what breaks it.
-    #
-    # Measured prevalence when capped: depth-1 1317, depth-2 16, depth->=3 0
-    # of 1333. Locked by tests/unit/test_lineage_fold_gate.py::TestDepthTwoCap,
-    # which builds a depth-3 session because the committed fixtures cannot
-    # distinguish capped from uncapped code.
-    for agent_id, lineage in lineages.items():
-        if lineage.depth != 2 or lineage.parent_invocation_id is None:
-            continue
-        parent_trace = linked_by_agent_id.get(lineage.parent_invocation_id)
-        if parent_trace is None:
-            # Parent is unlinked (orphaned subtree). #648 AC3 discloses this
-            # residual; PR B does not synthesize a home for it.
-            continue
-        child_trace = loader(agent_id)
-        if child_trace is None:
-            continue
-        child_trace.parent_invocation_id = lineage.parent_invocation_id
-        child_trace.depth = lineage.depth
-        if lineage.agent_type:
-            # The parser defaults an unlinked trace to UNKNOWN_AGENT_TYPE, and
-            # there is no invocation row here to overwrite it from -- the
-            # sidecar is the only source of the spawning side's name.
-            child_trace.agent_type = lineage.agent_type
-        parent_trace.children.append(child_trace)
-
-    # Orphans: trace files with no matching invocation.
-    linked_ids = {inv.agent_id for inv in invocations if inv.trace is not None}
-    for orphan_id in path_map.keys() - linked_ids:
-        logger.debug(
-            "Orphan subagent trace (no matching invocation): agent_id=%s",
-            orphan_id,
-        )
-
-    return invocations
-
-
 def _dedupe_session_trace_turns(
-    messages: list[SessionMessage], invocations: list[AgentInvocation],
-) -> None:
+    messages: list[SessionMessage], traces: SessionTraces,
+) -> TraceDedupStats:
     """Drop API turns counted more than once across this session's files (#701).
 
     Supplies what only the pipeline knows -- invocation order -- and leaves the
     precedence rule itself to ``tokens.dedupe_trace_turns``. Must run before
-    anything reads spend: the session fold and ``compute_agent_metrics`` both
-    read ``trace_spend_usage``.
+    anything reads spend: the session fold, ``compute_agent_metrics`` and
+    ``trace_coverage`` all read ``trace_spend_usage``.
 
-    **Under ``--agent`` precedence is computed over the filtered set.**
-    ``invocations`` arrives already filtered, so a filtered-out earlier fork
-    does not claim turns it shares with a kept one, and the kept type's spend
-    can read higher than in the unfiltered run. Filter-invariant precedence
-    (dedup over every owned trace before filtering) lands with #648, which
-    reworks the same filter/link ordering.
+    Runs over every trace the session owns, **unfiltered** (``SessionTraces``
+    carries both tiers before ``--agent`` is applied), so a type's spend is the
+    same with and without ``--agent`` (#648).
     """
-    depth_one = [inv.trace for inv in invocations if inv.trace is not None]
-    dedupe_trace_turns(
+    return dedupe_trace_turns(
         counted_parent_message_ids(messages),
-        depth_one,
-        (child for trace in depth_one for child in trace.children),
+        traces.dedup_depth_one,
+        traces.dedup_rest,
     )
 
 

@@ -16,6 +16,7 @@ from agentfluent.analytics.pipeline import (
 )
 from agentfluent.analytics.tokens import TokenMetrics
 from agentfluent.analytics.tools import ToolMetrics
+from agentfluent.analytics.trace_coverage import TraceCoverage
 from tests._builders import assistant_message, user_message
 
 WriteJSONL = Callable[[str, list[dict[str, Any]]], Path]
@@ -338,6 +339,14 @@ def _per_agent(am: AgentMetrics) -> tuple[float, int]:
     )
 
 
+def _beyond_linked(coverage: TraceCoverage) -> tuple[float, int]:
+    """Folded spend that has no per-agent row: nested + session-spawned (#648 AC3)."""
+    return (
+        coverage.nested.cost + coverage.session_spawned.cost,
+        coverage.nested.tokens + coverage.session_spawned.tokens,
+    )
+
+
 class TestAgentSpendReconciliation:
     """#646 AC8: Σ per-agent cost/spend == the subagent-origin rows of the session fold.
 
@@ -350,11 +359,10 @@ class TestAgentSpendReconciliation:
     non-linear change inside it moves both identically (see
     ``analytics.tokens._cost_of``; #682).
 
-    **Scope: the depth-1 fold set.** Both sides cover only the depth-1 traces that
-    ``analyze_session``'s non-folding gate admits. **#648 AC2** (folding depth->=2 spend
-    into ``token_metrics``) is the change that must update this test deliberately --
-    either by attributing that spend to an ancestor agent type or by narrowing the
-    right-hand side to depth-1 rows.
+    **Scope since #648 AC2/AC3.** The session fold now includes every trace the
+    session owns, but ``by_agent_type`` stays invocation-scoped, so the identity is
+    Σ per-agent + ``trace_coverage`` folded non-linked cost (nested +
+    session-spawned) == subagent-origin ``by_model``.
     """
 
     def test_mixed_models_reconcile_by_construction(self) -> None:
@@ -406,10 +414,11 @@ class TestAgentSpendReconciliation:
         result = analyze_session(path)
         fold_cost, fold_tokens = _subagent_origin(result.token_metrics)
         agent_cost, agent_tokens = _per_agent(result.agent_metrics)
+        extra_cost, extra_tokens = _beyond_linked(result.trace_coverage)
         assert fold_tokens > 0
         assert fold_cost > 0  # not a vacuous 0 == 0 (fixture model is priced)
-        assert agent_cost == pytest.approx(fold_cost)
-        assert agent_tokens == fold_tokens
+        assert agent_cost + extra_cost == pytest.approx(fold_cost)
+        assert agent_tokens + extra_tokens == fold_tokens
 
     # "worker" is the nested fixture's only agent (no-op filter); "no-such-agent" is
     # the discriminating case.
@@ -417,14 +426,15 @@ class TestAgentSpendReconciliation:
         ("agent_filter", "expect_spend"), [("worker", True), ("no-such-agent", False)],
     )
     def test_agent_filter_reconciles(self, agent_filter: str, expect_spend: bool) -> None:
-        # ``--agent`` filters invocations before linking and folding, so both sides
-        # see the same filtered set.
+        # ``--agent`` decides fold membership (nested traces follow their depth-1
+        # root), so both sides see the same filtered set.
         result = analyze_session(_NESTED_MAIN, agent_filter=agent_filter)
         fold_cost, fold_tokens = _subagent_origin(result.token_metrics)
         agent_cost, agent_tokens = _per_agent(result.agent_metrics)
+        extra_cost, extra_tokens = _beyond_linked(result.trace_coverage)
         assert (fold_cost > 0) is expect_spend
-        assert agent_cost == pytest.approx(fold_cost)
-        assert agent_tokens == fold_tokens
+        assert agent_cost + extra_cost == pytest.approx(fold_cost)
+        assert agent_tokens + extra_tokens == fold_tokens
 
     def test_session_price_date_threaded_into_agent_metrics(
         self, monkeypatch: pytest.MonkeyPatch,
@@ -463,9 +473,11 @@ class TestAgentSpendReconciliation:
         result = analyze_sessions([_NESTED_MAIN, _SDK_MAIN])
         fold_cost, fold_tokens = _subagent_origin(result.token_metrics)
         agent_cost, agent_tokens = _per_agent(result.agent_metrics)
+        extra_cost, extra_tokens = _beyond_linked(result.trace_coverage)
         assert fold_cost > 0
-        assert agent_cost == pytest.approx(fold_cost)
-        assert agent_tokens == fold_tokens
+        assert extra_tokens > 0  # the nested fixture's depth-2 leaf is folded
+        assert agent_cost + extra_cost == pytest.approx(fold_cost)
+        assert agent_tokens + extra_tokens == fold_tokens
 
 
 class TestMergeAgentMetricsSpend:

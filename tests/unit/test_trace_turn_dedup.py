@@ -19,6 +19,7 @@ from rich.console import Console
 import agentfluent.analytics.pipeline as pipeline_mod
 from agentfluent.analytics.pipeline import analyze_session
 from agentfluent.analytics.tokens import (
+    TraceDedupStats,
     counted_parent_message_ids,
     dedupe_trace_turns,
     price_trace,
@@ -28,6 +29,7 @@ from agentfluent.analytics.tokens import (
 from agentfluent.cli.formatters.table import format_analysis_table
 from agentfluent.core.parser import parse_session
 from agentfluent.core.session import Usage
+from agentfluent.traces.coverage import SessionTraces
 from agentfluent.traces.discovery import discover_session_subagents
 from agentfluent.traces.lineage import resolve_lineage
 from agentfluent.traces.models import SubagentTrace, TraceTurnUsage
@@ -199,7 +201,9 @@ class TestForkSessionFold:
     ) -> None:
         """Mutation in-suite: with the dedup pass disabled the fold over-counts,
         so the assertions above are what hold the guard in place."""
-        monkeypatch.setattr(pipeline_mod, "dedupe_trace_turns", lambda *_a, **_k: None)
+        monkeypatch.setattr(
+            pipeline_mod, "dedupe_trace_turns", lambda *_a, **_k: TraceDedupStats(),
+        )
         analysis = analyze_session(_build_fork_session(tmp_path))
         assert _subagent_row_tokens(analysis) == _NAIVE_SUBAGENT_TOKENS
 
@@ -483,21 +487,18 @@ class TestNonSpendTracesClaimNothing:
 
 class TestPipelineHandsChildrenToDedup:
     """Acceptance-gate Class B survivor P02: ``_dedupe_session_trace_turns``
-    must pass attached children to the dedup, or a depth-2 child keeps per-file
-    usage including turns its parent already counted."""
+    must pass the non-linked tier (attached children among it) to the dedup, or
+    a depth-2 child keeps per-file usage including turns its parent already
+    counted."""
 
     def test_child_loses_turn_its_parent_counted(self) -> None:
-        from agentfluent.agents.models import AgentInvocation
-
         parent = _trace("parent", [("x", 10)])
         child = _trace("child", [("x", 10), ("c", 1)])
         child.depth = 2
         parent.children.append(child)
-        invocation = AgentInvocation(
-            agent_type="worker", description="d", prompt="p", tool_use_id="toolu_1",
-            trace=parent,
+        pipeline_mod._dedupe_session_trace_turns(
+            [], SessionTraces(dedup_depth_one=[parent], dedup_rest=[child]),
         )
-        pipeline_mod._dedupe_session_trace_turns([], [invocation])
         assert trace_spend_usage(parent).output_tokens == 10
         assert child.spend_usage is not None
         assert trace_spend_usage(child).output_tokens == 1

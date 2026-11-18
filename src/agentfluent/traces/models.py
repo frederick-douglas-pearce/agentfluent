@@ -216,8 +216,9 @@ class SubagentTrace(BaseModel):
     **Such a trace is NOT distinguishable from a genuine depth-1 trace by
     these two fields.** Every degradation branch yields ``(None, 1)``, which is
     exactly what a real depth-1 trace carries. That is deliberate -- guessing a
-    parent would be worse -- but it is why the orphan cohort needs its own
-    disclosure (#648 AC3) rather than being derivable from ``depth``.
+    parent would be worse -- but it is why cohorts are labeled separately
+    (``traces.coverage``, ``SessionAnalysis.trace_coverage``, #648) rather than
+    derived from ``depth``.
 
     **Public JSON API** (D055): serialized via ``AgentInvocation.trace`` ->
     ``SessionAnalysis.invocations`` -> ``analyze --format json``. Additive, so

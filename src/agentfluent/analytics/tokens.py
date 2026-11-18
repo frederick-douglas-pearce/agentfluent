@@ -170,8 +170,8 @@ def trace_counts_as_spend(trace: SubagentTrace) -> bool:
     (``compute_subagent_token_metrics``) and per-agent attribution
     (``analytics.agent_metrics``), so the two cannot drift on *which* traces count:
     the trace must carry a model, and not the ``<synthetic>`` sentinel (no real API
-    call). It does not test depth -- which traces reach the fold is the caller's
-    non-folding gate (``analyze_session``), not this predicate's.
+    call). It does not test depth -- which traces reach the fold is ownership
+    (``traces.coverage.collect_session_traces``, #648), not this predicate's.
     """
     return trace.model is not None and trace.model not in SYNTHETIC_MODELS
 
@@ -208,11 +208,19 @@ def counted_parent_message_ids(messages: Iterable[SessionMessage]) -> set[str]:
     }
 
 
+@dataclass(frozen=True)
+class TraceDedupStats:
+    """What ``dedupe_trace_turns`` dropped as already counted (#648 AC4)."""
+
+    dropped_turns: int = 0
+    dropped_tokens: int = 0
+
+
 def dedupe_trace_turns(
     counted_message_ids: Iterable[str],
     depth_one_in_invocation_order: Sequence[SubagentTrace],
     rest: Iterable[SubagentTrace] = (),
-) -> None:
+) -> TraceDedupStats:
     """Set each trace's ``spend_usage`` so no API turn is counted twice (#701).
 
     Exclusivity -- every turn's usage lives in exactly one file -- holds for
@@ -241,6 +249,7 @@ def dedupe_trace_turns(
     it shares with a later fork would leave that turn counted nowhere.
 
     Mutates ``spend_usage`` only; the public per-file ``usage`` is unchanged.
+    Returns how many turns, and how many tokens, were dropped as duplicates.
     """
     ordered = [
         *depth_one_in_invocation_order,
@@ -248,6 +257,8 @@ def dedupe_trace_turns(
     ]
     seen = set(counted_message_ids)
     processed: set[int] = set()
+    dropped_turns = 0
+    dropped_tokens = 0
     for trace in ordered:
         if id(trace) in processed:
             continue
@@ -258,10 +269,13 @@ def dedupe_trace_turns(
         for turn in trace.turn_usages:
             if turn.message_id:
                 if turn.message_id in seen:
+                    dropped_turns += 1
+                    dropped_tokens += turn.usage.total_tokens
                     continue
                 seen.add(turn.message_id)
             spend = spend + turn.usage
         trace.spend_usage = spend
+    return TraceDedupStats(dropped_turns=dropped_turns, dropped_tokens=dropped_tokens)
 
 
 def price_trace(

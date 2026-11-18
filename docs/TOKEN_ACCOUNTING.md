@@ -23,7 +23,8 @@ Three independent defects, in descending order of subtlety:
 2. **Streaming chunks repeat `message.id`.** Summing every `assistant` line's
    `usage` without deduplicating **double-counts by ~2x**. (§3)
 3. **Orphan / depth-≥2 traces get silently dropped**, hiding **~30%** of all
-   subagent tokens. (§4)
+   subagent tokens. (§4 — AgentFluent folds them by ownership and discloses
+   them as `trace_coverage` since v0.12, #648)
 
 If your code does any of these, you have a bug:
 
@@ -243,10 +244,31 @@ across the group (#694).
 
 Independent of §1 and §3.
 
-A subagent trace only contributes if it links to an invocation discovered in the
-parent session. Non-linking traces are silently discarded (AgentFluent:
-`analytics/pipeline.py:494`, *"Orphan traces (file exists, no matching
-invocation) are debug-logged"*).
+**Status (v0.12, #648).** AgentFluent now folds every parseable trace a live
+session owns (its own `<uuid>/subagents/` dir) into the session totals and
+labels each file by cohort in `trace_coverage`. Re-measured 2026-11-18 with the
+production pipeline (`scripts/trace_coverage_corpus_check.py --all`, full
+install, 2,307 sessions, 5,086 trace files):
+
+| cohort | files | tokens | share of subagent tokens | cost |
+| --- | ---: | ---: | ---: | ---: |
+| linked (invocation row, depth 1) | 4,869 | 5.27B | 90.0% | $4,856 |
+| nested (depth ≥ 2) | 39 | 113.6M | 1.9% | $79 |
+| session-spawned (no `Agent` tool_use; 163 are `/code-review`) | 178 | 473.8M | 8.1% | $347 |
+
+Before #648 the nested and session-spawned rows were dropped from
+`total_cost`; folding them raises the full-install total from $19,157 to $19,584
+(+2.2%), and by 0.3% / 0.7% / 2.5% / 4.5% on the agentfluent / claude-code-loop /
+claude-code-sessions / us-presidential-vote-analysis corpora. Traces
+whose parent session file no longer exists are in no session at all and are not
+in these numbers ([#702][i702]). The analysis below is the original July
+measurement, kept for the record: it predates skill- and workflow-spawned
+background agents, which are now the largest cohort.
+
+A subagent trace only contributed if it linked to an invocation discovered in
+the parent session. Non-linking traces were silently discarded (AgentFluent
+before v0.12: *"Orphan traces (file exists, no matching invocation) are
+debug-logged"*).
 
 | | trace files | processed tokens |
 | --- | ---: | ---: |
@@ -568,7 +590,7 @@ way.
 
 | project | §1 rollup defect | §3 dedup defect | §4 orphan defect |
 | --- | --- | --- | --- |
-| **AgentFluent** | **Affected** — [#646][i646] | clean (`core/parser.py`); locked by [#649][i649] | **Affected** — 30.7%, [#648][i648] |
+| **AgentFluent** | **Affected** — [#646][i646] | clean (`core/parser.py`); locked by [#649][i649] | **Fixed** for live sessions — fold by ownership + `trace_coverage` ([#648][i648]); parent-absent → [#702][i702] |
 | **CodeFluent** | **Not affected** — never reads the rollup | clean — dedups by `message.id` | **Affected** — 30.2%, [codefluent#334][cf334] |
 | **claude-code-sessions** | **Documents the inverse error** — [#144][ccs144] | gap — [#144][ccs144] | asymmetry documented correctly |
 
@@ -714,7 +736,9 @@ For [#646][i646]'s design pass — not settled here.
    invocations are trace-linked and some are not? (Recommendation: coverage-count
    the corrected subset, as `active_duration_invocation_count` already does.)
 3. **Orphan traces** (§4) — attribute to the session, report separately, or
-   surface as a coverage gap?
+   surface as a coverage gap? *Settled by [#648][i648]: every trace a live
+   session owns is attributed to it and labeled by cohort; parent-absent traces
+   are [#702][i702].*
 4. **Supersede or re-scope [#143][i143]?** Its premise — populate per-invocation
    input/output splits from `toolUseResult.usage` — is undercut by §1. As written
    it would replace one non-spend number with four non-spend numbers.
@@ -722,6 +746,7 @@ For [#646][i646]'s design pass — not settled here.
    Per-turn per-model pricing fixes both; confirm that is in scope.
 
 [i143]: https://github.com/frederick-douglas-pearce/agentfluent/issues/143
+[i702]: https://github.com/frederick-douglas-pearce/agentfluent/issues/702
 
 ---
 

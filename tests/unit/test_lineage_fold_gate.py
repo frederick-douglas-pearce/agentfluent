@@ -5,10 +5,11 @@ Two things are locked here:
 * **Lineage** -- ``depth`` and ``parent_invocation_id`` resolve from *data*
   (the cross-file ``toolUseId`` join), never from path shape, and degrade to
   ``depth=1``/``parent_invocation_id=None`` rather than guessing a parent.
-* **The non-folding gate** (``analytics/pipeline.py``) -- depth->=2 usage must
-  NOT reach ``fold_subagent_metrics_in``. Folding it in is #648 AC2's
-  deliberate act; PR B pins the gate closed so it cannot happen as an
-  implementation side effect.
+* **The child tree is display shape, not the fold.** #595 PR B kept depth->=2
+  usage out of the session fold; #648 AC2 opened that gate deliberately, by
+  ownership rather than by flattening ``children``. The fold itself is locked
+  in ``test_trace_coverage.py::TestFoldByOwnership``; ``TestDepthTwoFolds``
+  below keeps the nested fixture's view of it.
 """
 
 from __future__ import annotations
@@ -107,22 +108,16 @@ class TestEndToEndThroughAnalyze:
         assert payload["children"][0]["depth"] == 2
 
 
-class TestNonFoldingGate:
-    """Depth->=2 usage must not enter token metrics. Blocking concern #2.
+class TestDepthTwoFolds:
+    """#648 AC2: the depth-2 child now reaches the fold (the #595 PR B gate is open).
 
-    Named by the gate comment in ``analytics/pipeline.py``; that comment
-    asserts this class exists, so it must.
+    Asserts the MECHANISM -- what is handed to the folder -- because a total
+    passes for any implementation that reaches it.
     """
 
-    def test_depth_two_traces_never_reach_the_folding_function(
+    def test_depth_two_trace_reaches_the_folding_function(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Assert the MECHANISM: what the gate hands to the folder.
-
-        Asserting a total instead would pass for every implementation that
-        happens to reach that total -- including the broken one this guards
-        against. Only observing *which traces are passed* distinguishes them.
-        """
         captured: list[list[object]] = []
         real = pipeline_mod.compute_subagent_token_metrics
 
@@ -134,25 +129,12 @@ class TestNonFoldingGate:
         analysis = analyze_session(_NESTED_MAIN)
 
         assert captured, "the folding path never ran -- test proves nothing"
-        folded = captured[0]
-        # The depth-2 child exists and is non-empty, so its exclusion here is
-        # a real exclusion rather than an empty-set vacuity.
         child = analysis.invocations[0].trace.children[0]
         assert child.depth == 2
         assert child.usage.input_tokens + child.usage.output_tokens > 0
-        assert child.agent_id not in {t.agent_id for t in folded}
-        assert all(t.depth == 1 for t in folded)
-
-    def test_the_child_carries_spend_the_gate_is_withholding(self) -> None:
-        """The gate is load-bearing, not decorative.
-
-        If the depth-2 child ever carried zero usage, the test above would go
-        vacuous -- excluding an empty trace proves nothing. This pins the
-        precondition that makes that exclusion meaningful.
-        """
-        analysis = analyze_session(_NESTED_MAIN)
-        child = analysis.invocations[0].trace.children[0]
-        assert child.usage.input_tokens + child.usage.output_tokens > 0
+        # The same object, not a re-parse: the fold and the child tree share it,
+        # so the session dedup sees it once.
+        assert any(t is child for t in captured[0])
 
 
 class TestDegradationPaths:
@@ -573,7 +555,8 @@ class TestDepthTwoCap:
         # resolve_lineage is NOT capped -- it sees depth 3...
         assert lineages["deep0001"].depth == 3
 
-        # ...but attachment is, so deep0001 reaches no output at all.
+        # ...but attachment is, so deep0001 is never attached (it still folds
+        # into session totals, #648 AC2 -- see test_trace_coverage.py).
         analysis = analyze_session(session_dir.parent / "nested-session-1.jsonl")
         parent = analysis.invocations[0].trace
         assert [c.agent_id for c in parent.children] == ["leaf0001"]
