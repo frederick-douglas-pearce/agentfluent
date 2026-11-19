@@ -571,6 +571,28 @@ class TestCoverageObject:
             "code-review": (1, _tok("cr1")), "runner": (1, _tok("r0")), "ghost": (1, _tok("un1")),
         }
 
+    def test_spawner_falls_back_to_unknown(self, tmp_path: Path) -> None:
+        """A session-spawned sidecar with neither ``name`` nor ``agentType``
+        is keyed ``unknown`` (Class B survivor: breakdown-no-unknown-fallback)."""
+        main = _build_session(tmp_path)
+        subagents = tmp_path / "cov-session" / "subagents"
+        _write(subagents / "agent-anon1.jsonl", [_assistant("msg_anon1", "main1")])
+        (subagents / "agent-anon1.meta.json").write_text(json.dumps({"spawnDepth": 1}))
+        breakdown = analyze_session(main).trace_coverage.session_spawned_by_type
+        assert (breakdown["unknown"].files, breakdown["unknown"].tokens) == (1, _tok("main1"))
+        assert "" not in breakdown
+
+    def test_run_level_dedup_stats_sum_across_sessions(self, tmp_path: Path) -> None:
+        """``AnalysisResult.trace_coverage`` sums each session's dedup stats
+        (Class B survivor: coverage-add-drops-deduped-turns)."""
+        (tmp_path / "a").mkdir()
+        (tmp_path / "b").mkdir()
+        first = _build_session(tmp_path / "a")
+        second = _build_session(tmp_path / "b")
+        coverage = analyze_sessions([first, second]).trace_coverage
+        assert coverage.deduped_turns == 6
+        assert coverage.deduped_tokens == 2 * (_tok("shared") + _tok("w1") + _tok("cr1"))
+
     def test_deduped_turns_and_tokens(self, tmp_path: Path) -> None:
         """fB's msg_shared, leaf1's msg_w1 and c0's msg_cr1, cache tokens included."""
         coverage = analyze_session(_build_session(tmp_path)).trace_coverage
