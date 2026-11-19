@@ -296,9 +296,12 @@ class TestComplexityNeedsTokenEvidence:
         assert classify_complexity(stats) == "moderate"
 
     def test_light_work_with_token_evidence_is_still_simple(self) -> None:
+        # Three linked invocations: the "simple" branch needs token evidence on
+        # at least MIN_INVOCATIONS_FOR_ANALYSIS of them (#675).
+        ids = ["a", "b", "c"]
         invocations = _link(
-            [_invocation("a", total_tokens=1_000)],
-            [_trace("a", tool_calls=2, duration_ms=1_000)],
+            [_invocation(i, total_tokens=1_000) for i in ids],
+            [_trace(i, tool_calls=2, duration_ms=1_000) for i in ids],
         )
         stats = aggregate_agent_stats(invocations, None)["pm"]
         assert classify_complexity(stats) == "simple"

@@ -12,7 +12,9 @@ from collections import defaultdict
 from collections.abc import Callable, Iterator
 
 from agentfluent.agents.models import AgentInvocation
+from agentfluent.analytics.tokens import trace_spend
 from agentfluent.config.models import Severity
+from agentfluent.core.session import Usage
 from agentfluent.diagnostics.models import DiagnosticSignal, SignalType
 
 # Error keywords and their severity. "blocked"/"permission denied" are critical;
@@ -207,6 +209,7 @@ def _detect_outliers(
     signal_type: SignalType,
     format_message: Callable[[AgentInvocation, float, float, float], str],
     extra_detail: Callable[[AgentInvocation], dict[str, object]] | None = None,
+    spend_usage: Callable[[AgentInvocation], Usage | None] | None = None,
 ) -> list[DiagnosticSignal]:
     """Generic per-agent-type outlier detector (Tukey IQR rule).
 
@@ -218,8 +221,9 @@ def _detect_outliers(
 
     Callers supply ``format_message(inv, value, q3, iqr)`` and may supply
     ``extra_detail(inv)`` to merge per-invocation keys into the signal's
-    ``detail`` (e.g. the duration path attaches the current model + token
-    count the correlator needs to name + price a concrete model switch).
+    ``detail`` (e.g. the duration path attaches the current model the
+    correlator needs to name a concrete model switch), and ``spend_usage(inv)``
+    to attach the invocation's trace spend for pricing it (#675).
     """
     signals: list[DiagnosticSignal] = []
 
@@ -268,6 +272,7 @@ def _detect_outliers(
                 invocation_id=inv.invocation_id,
                 message=format_message(inv, val, q3, iqr),
                 detail=detail,
+                spend_usage=spend_usage(inv) if spend_usage is not None else None,
             ))
 
     return signals
@@ -306,13 +311,21 @@ def _extract_duration_outliers(invocations: list[AgentInvocation]) -> list[Diagn
         ),
         # The correlator's DurationOutlierRule can't reach the invocation
         # (its interface is (signal, config)), so carry the model it ran
-        # on and this invocation's token count — enough to name and price
-        # a concrete faster-model switch (#170).
+        # on — enough to name a concrete faster-model switch (#170) — and
+        # its trace spend to price it (#675). ``total_tokens`` stays in the
+        # public detail but is a context-size proxy and is never priced.
         extra_detail=lambda inv: {
             "current_model": inv.trace.model if inv.trace else None,
             "total_tokens": inv.total_tokens,
         },
+        spend_usage=_trace_spend_usage,
     )
+
+
+def _trace_spend_usage(inv: AgentInvocation) -> Usage | None:
+    """The invocation's trace spend, or ``None`` when it has none (#675)."""
+    spend = trace_spend(inv.trace)
+    return spend[0] if spend is not None else None
 
 
 def extract_signals(invocations: list[AgentInvocation]) -> list[DiagnosticSignal]:
