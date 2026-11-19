@@ -237,8 +237,9 @@ class TestEvidenceFloor:
 
 
 class TestComplexBranchTokens:
-    """g7 — broken: the complex branch (or the published ``mean_tokens``) reading
-    the matched subset instead of the group-wide mean."""
+    """g7 — broken: the complex branch (``test_group_wide_tokens_still_make_the_group_complex``)
+    or the published ``mean_tokens`` detail (``test_published_mean_tokens_is_group_wide``)
+    reading the matched subset instead of the group-wide mean."""
 
     def test_group_wide_tokens_still_make_the_group_complex(self) -> None:
         invs = [_inv(total_tokens=500, tool_uses=2, n=i) for i in range(3)] + [
@@ -248,6 +249,19 @@ class TestComplexBranchTokens:
         assert stats.mean_tokens == pytest.approx(25_250.0)
         assert classify_complexity(stats) == "complex"
         assert simple_branch_inputs(invs).mean_tokens == pytest.approx(500.0)
+
+    def test_published_mean_tokens_is_group_wide(self) -> None:
+        # 3 matched invocations (500 tokens) + 3 tool-less rollups (1,500 tokens):
+        # group mean 1,000, subset mean 500 -- both "simple", so an overspec
+        # signal fires and the two published values must differ.
+        invs = [_inv(total_tokens=500, tool_uses=1, n=i) for i in range(3)] + [
+            _inv(total_tokens=1_500, tool_uses=None, n=i) for i in range(3, 6)
+        ]
+        signals = extract_model_routing_signals(invs, {"pm": _config("pm", MODEL_OPUS)})
+        assert len(signals) == 1
+        detail = signals[0].detail
+        assert detail["mean_tokens"] == pytest.approx(1_000.0)
+        assert detail["simple_branch_mean_tokens"] == pytest.approx(500.0)
 
 
 class TestPublishedSimpleBranchInputs:

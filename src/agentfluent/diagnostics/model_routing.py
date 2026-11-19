@@ -7,11 +7,11 @@ complexity. Downstream, ``ModelRoutingRule`` in ``correlator.py`` turns
 the signal into an actionable ``target="model"`` recommendation with a
 cost-savings estimate (when pricing is available).
 
-**MVP scope constraint.** Model-routing only activates for agent types
-with an explicit ``model:`` field in their ``.claude/agents/X.md``
-frontmatter. Agents without a declared model are silently skipped.
-Broader coverage (inferring the model from ``SubagentTrace``) is
-tracked in #142.
+**Model resolution.** An agent type's model resolves from its
+``.claude/agents/X.md`` frontmatter ``model:``, else a linked trace's model,
+else the parent tool-result's ``resolved_model`` (``_resolve_current_model``);
+types with none of these are skipped. SDK main sessions are routed
+separately (``extract_sdk_main_session_signals``).
 
 **Cost source (#675).** Dollar savings price observed spend, never the
 ``total_tokens`` context-size proxy: a subagent's linked trace's deduplicated
