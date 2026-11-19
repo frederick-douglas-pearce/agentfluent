@@ -42,6 +42,12 @@ _COMPLEX_MIN_TOOL_CALLS = 10
 _COMPLEX_MIN_TOKENS = 5_000
 _COMPLEX_MIN_ERROR_RATE = 0.20
 
+# Minimum number of observations before a group is analyzed at all
+# (``model_routing._detect_mismatch``) and, since #675, the minimum number of
+# invocations carrying BOTH ``tool_uses`` and ``total_tokens`` before the
+# "simple" branch may fire on them (``simple_branch_inputs``).
+MIN_INVOCATIONS_FOR_ANALYSIS = 3
+
 _TIER_TO_MODEL: dict[ComplexityTier, str] = {
     "simple": MODEL_HAIKU,
     "moderate": MODEL_SONNET,
@@ -109,6 +115,46 @@ def classify_model_tier(model: str) -> ComplexityTier:
     return "moderate"
 
 
+class SimpleBranchInputs(BaseModel):
+    """``mean_tool_calls`` / ``mean_tokens`` over one invocation subset (#675).
+
+    Built by ``simple_branch_inputs``; read only by ``classify_complexity``'s
+    "simple" branch.
+    """
+
+    mean_tool_calls: float
+    mean_tokens: float
+
+
+def simple_branch_inputs(invocations: list[AgentInvocation]) -> SimpleBranchInputs:
+    """Both "simple"-branch means over the invocations carrying both values (#675).
+
+    Since #690 ``tool_uses`` is trace-sourced on every linked invocation while
+    ``total_tokens`` stays on the rollup, so the group-wide means average
+    different invocations. Here both are averaged over the invocations that
+    carry ``tool_uses`` AND ``total_tokens``. ``mean_tokens`` stays on the rollup
+    context-size proxy the thresholds were tuned on (D057(1)) -- trace spend would
+    re-calibrate the tiers, which #675 AC6 rules out.
+
+    **Evidence floor.** Below ``MIN_INVOCATIONS_FOR_ANALYSIS`` such invocations
+    ``mean_tokens`` is ``0.0``, which ``classify_complexity`` reads as "no token
+    evidence" and classifies "moderate" -- so one rollup invocation among many
+    rollup-less traces cannot call a whole group "simple".
+    """
+    matched = [
+        (inv.tool_uses, inv.total_tokens)
+        for inv in invocations
+        if inv.tool_uses is not None and inv.total_tokens is not None
+    ]
+    if not matched:
+        return SimpleBranchInputs(mean_tool_calls=0.0, mean_tokens=0.0)
+    mean_tool_calls = sum(tools for tools, _ in matched) / len(matched)
+    if len(matched) < MIN_INVOCATIONS_FOR_ANALYSIS:
+        return SimpleBranchInputs(mean_tool_calls=mean_tool_calls, mean_tokens=0.0)
+    mean_tokens = sum(tokens for _, tokens in matched) / len(matched)
+    return SimpleBranchInputs(mean_tool_calls=mean_tool_calls, mean_tokens=mean_tokens)
+
+
 class AgentStats(BaseModel):
     """Aggregated stats consumed by complexity classification.
 
@@ -131,6 +177,11 @@ class AgentStats(BaseModel):
     error_rate: float
     has_write_tools: bool
     current_model: str | None
+    simple_inputs: SimpleBranchInputs | None = None
+    """Coverage-matched inputs for the "simple" branch only (#675). ``None``
+    means the builder's ``mean_tool_calls`` / ``mean_tokens`` already cover the
+    same observations (parent bursts, SDK-main turns) and the branch reads them.
+    Invocation-based builders always set it via ``simple_branch_inputs``."""
 
 
 def compute_error_rate(inv: AgentInvocation) -> float:
@@ -179,29 +230,29 @@ def classify_complexity(stats: AgentStats) -> ComplexityTier:
         return "complex"
     # The "simple" branch requires evidence of light work, not absence
     # of data, and that evidence must include token data. ``mean_tokens``
-    # is 0.0 when no invocation carries the rollup ``total_tokens``; since
-    # #690 such an agent type can still have trace-sourced tool calls, and
-    # reading its 0.0 as "below the token threshold" would call it simple
-    # (and steer it toward Haiku) with no token evidence at all. A group
-    # without token data falls through to "moderate" so the recommendation
-    # reflects uncertainty rather than asserting the work is small.
+    # is 0.0 when no observation carries token data; since #690 an agent
+    # type can still have trace-sourced tool calls, and reading its 0.0 as
+    # "below the token threshold" would call it simple (and steer it toward
+    # Haiku) with no token evidence at all. Such a group falls through to
+    # "moderate" so the recommendation reflects uncertainty rather than
+    # asserting the work is small.
     #
-    # Known coverage mismatch, deferred to #675: for subagent stats
-    # (``model_routing.aggregate_agent_stats`` and
-    # ``aggregate_cluster_stats``), ``mean_tool_calls`` averages every
-    # invocation carrying ``tool_uses`` (trace-linked or rollup), while
-    # ``mean_tokens`` averages rollup ``total_tokens`` carriers only.
-    # Parent-session stats (``parent_workload`` bursts, SDK-main turns)
-    # compute both means over the same bursts or turns (``tool_use`` blocks
-    # and ``usage``), so they are unaffected. Thin token evidence --
-    # one rollup invocation among many rollup-less traces -- can therefore
-    # still reach "simple". #675 re-sources ``mean_tokens`` from trace spend,
-    # which puts both means on the same invocations.
-    has_token_evidence = stats.mean_tokens > 0
+    # Coverage (#675): invocation-based builders (``model_routing.
+    # aggregate_agent_stats``, ``aggregate_cluster_stats``) supply
+    # ``simple_inputs`` -- both means over the invocations carrying tool
+    # calls AND rollup tokens, with an evidence floor (``simple_branch_inputs``).
+    # The group-wide means above still drive "complex" and are what the signal
+    # publishes. Parent-session builders (``parent_workload`` bursts, SDK-main
+    # turns) compute both means over the same bursts or turns and leave
+    # ``simple_inputs`` unset.
+    simple = stats.simple_inputs or SimpleBranchInputs(
+        mean_tool_calls=stats.mean_tool_calls, mean_tokens=stats.mean_tokens,
+    )
+    has_token_evidence = simple.mean_tokens > 0
     if (
         has_token_evidence
-        and stats.mean_tool_calls < _SIMPLE_MAX_TOOL_CALLS
-        and stats.mean_tokens < _SIMPLE_MAX_TOKENS
+        and simple.mean_tool_calls < _SIMPLE_MAX_TOOL_CALLS
+        and simple.mean_tokens < _SIMPLE_MAX_TOKENS
     ):
         return "simple"
     return "moderate"
@@ -293,4 +344,5 @@ def aggregate_cluster_stats(
         ),
         has_write_tools=has_writes,
         current_model=None,
+        simple_inputs=simple_branch_inputs(invocations),
     )

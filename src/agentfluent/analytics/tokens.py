@@ -192,11 +192,24 @@ def trace_spend_usage(trace: SubagentTrace) -> Usage:
     return trace.spend_usage if trace.spend_usage is not None else trace.usage
 
 
+def trace_spend(trace: SubagentTrace | None) -> tuple[Usage, str] | None:
+    """A trace's spend and the model it ran on, or ``None`` when it has none (#675).
+
+    The ``trace_counts_as_spend`` / ``trace_spend_usage`` pair every spend reader
+    uses (#646, #701), packaged for the diagnostics savings estimates so their
+    dollars and the analytics fold rest on one definition of spend. ``None`` for a
+    missing trace or one that does not count as spend -- never a zero usage.
+    """
+    if trace is None or trace.model is None or not trace_counts_as_spend(trace):
+        return None
+    return trace_spend_usage(trace), trace.model
+
+
 def counted_parent_message_ids(messages: Iterable[SessionMessage]) -> set[str]:
     """``message_id`` s of the parent-session turns ``compute_token_metrics``
     counts (#701).
 
-    Uses the same predicate (``_counts_as_parent_call``) so a trace turn is
+    Uses the same predicate (``counts_as_parent_call``) so a trace turn is
     never dropped as "already counted" on the strength of a main-session turn
     the parent fold skipped (no usage, or ``<synthetic>``). Empty ids are not
     ids -- the same reading the #696 fragment merge takes.
@@ -204,7 +217,7 @@ def counted_parent_message_ids(messages: Iterable[SessionMessage]) -> set[str]:
     return {
         msg.message_id
         for msg in messages
-        if _counts_as_parent_call(msg) and msg.message_id
+        if counts_as_parent_call(msg) and msg.message_id
     }
 
 
@@ -278,6 +291,32 @@ def dedupe_trace_turns(
     return TraceDedupStats(dropped_turns=dropped_turns, dropped_tokens=dropped_tokens)
 
 
+def price_usage(
+    usage: Usage, model: str, *, timestamp: datetime | None = None,
+) -> float | None:
+    """Price one ``Usage`` at ``model``'s rate; ``None`` iff ``model`` is unpriced.
+
+    The one public token -> dollar primitive (#675): ``price_trace`` and every
+    diagnostics dollar figure route through it, and it routes through ``_cost_of``,
+    so all five usage components -- including the 5m/1h cache-write split -- map to
+    rates on a single path (#646 AC1).
+
+    **Model-switch counterfactual.** A savings estimate prices the *same* usage at
+    two models: the token mix actually observed, cache reads and writes included, at
+    the alternative model's rates. That deliberately ignores tokenizer differences
+    between model generations, a different turn count on the other model, and
+    per-request levers (context tiers #682, multipliers and surcharges #537-#539).
+    ``diagnostics.parent_workload``'s offload estimate uses a *different*
+    counterfactual on purpose -- a delegated subagent loses the parent's cache, so
+    its alternative side re-prices cache reads as fresh input -- and the two are not
+    meant to converge (#707 routes that estimate's pricing, not its counterfactual,
+    through here).
+    """
+    breakdown = ModelTokenBreakdown(model=model)
+    _accumulate_usage(breakdown, usage)
+    return _cost_of(breakdown, timestamp)
+
+
 def price_trace(
     trace: SubagentTrace, *, timestamp: datetime | None = None,
 ) -> float | None:
@@ -293,9 +332,7 @@ def price_trace(
             f"price_trace: trace {trace.agent_id!r} does not count as spend "
             f"(model={trace.model!r}); check trace_counts_as_spend first"
         )
-    breakdown = ModelTokenBreakdown(model=trace.model, origin="subagent")
-    _accumulate_usage(breakdown, trace_spend_usage(trace))
-    return _cost_of(breakdown, timestamp)
+    return price_usage(trace_spend_usage(trace), trace.model, timestamp=timestamp)
 
 
 def _aggregate_totals(
@@ -346,11 +383,12 @@ def session_price_timestamp(messages: list[SessionMessage]) -> datetime | None:
     return price_date
 
 
-def _counts_as_parent_call(msg: SessionMessage) -> bool:
+def counts_as_parent_call(msg: SessionMessage) -> bool:
     """Whether a parent-session message is a counted API call: an assistant
     message with usage, not the ``<synthetic>`` sentinel (no real API call, no
-    pricing). Shared by ``compute_token_metrics`` and
-    ``counted_parent_message_ids`` so the two cannot drift (#701)."""
+    pricing). Shared by ``compute_token_metrics``,
+    ``counted_parent_message_ids`` and the SDK main-session savings estimate
+    (``diagnostics.model_routing``, #675) so they cannot drift (#701)."""
     return (
         msg.type == "assistant"
         and msg.usage is not None
@@ -383,7 +421,7 @@ def compute_token_metrics(
 
     for msg in messages:
         usage = msg.usage
-        if usage is None or not _counts_as_parent_call(msg):
+        if usage is None or not counts_as_parent_call(msg):
             continue
 
         api_call_count += 1

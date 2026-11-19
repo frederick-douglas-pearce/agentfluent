@@ -13,10 +13,13 @@ frontmatter. Agents without a declared model are silently skipped.
 Broader coverage (inferring the model from ``SubagentTrace``) is
 tracked in #142.
 
-**Cost approximation.** ``AgentInvocation.total_tokens`` is a single
-combined figure; we split 50/50 for the cost calculation. The real
-input/output ratio would change the savings estimate by up to ~2×
-(Opus's output rate is 5× its input rate). Tracked in #143.
+**Cost source (#675).** Dollar savings price observed spend, never the
+``total_tokens`` context-size proxy: a subagent's linked trace's deduplicated
+per-turn usage (``analytics.tokens.trace_spend_usage``) and, for an SDK main
+session, the turns the parent token fold counts -- each at the model it ran on
+and at the alternative model, through ``analytics.tokens.price_usage``. An
+invocation without trace spend contributes no dollars; it is never estimated.
+Both sides price at the latest rate: savings is a forward-looking figure.
 
 **Threshold calibration.** The complexity thresholds below are informed
 by the same backlog guidance that drove #110's defaults. Empirical
@@ -28,11 +31,18 @@ from __future__ import annotations
 
 import logging
 from collections import Counter, defaultdict
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-from agentfluent.analytics.pricing import compute_cost, get_pricing
+from agentfluent.analytics.tokens import (
+    counts_as_parent_call,
+    price_usage,
+    trace_spend,
+)
 from agentfluent.config.models import Severity
 from agentfluent.diagnostics._complexity import (
+    MIN_INVOCATIONS_FOR_ANALYSIS,
     AgentStats,
     ComplexityTier,
     classify_complexity,
@@ -40,6 +50,7 @@ from agentfluent.diagnostics._complexity import (
     compute_error_rate,
     has_write_tools_in_trace,
     select_target_model,
+    simple_branch_inputs,
 )
 from agentfluent.diagnostics.models import DiagnosticSignal, SignalType
 
@@ -54,14 +65,20 @@ logger = logging.getLogger(__name__)
 # Re-exported for tests and downstream consumers that already import
 # AgentStats / ComplexityTier / classify_complexity from this module.
 __all__ = [
+    "PRICED_INVOCATION_COUNT_KEY",
     "SAVINGS_USD_KEY",
     "AgentStats",
+    "SavingsEstimate",
     "ComplexityTier",
     "MismatchType",
     "aggregate_agent_stats",
     "classify_complexity",
     "classify_model_tier",
     "estimate_model_savings",
+    "estimate_usage_savings",
+    "invocation_spend",
+    "savings_scope_from_detail",
+    "savings_scope_phrase",
     "extract_model_routing_signals",
     "extract_sdk_main_session_signals",
 ]
@@ -75,8 +92,11 @@ MismatchType = Literal["overspec", "underspec"]
 # Sharing the constant prevents silent drift if any consumer typos
 # the key (the dict-get fallback would degrade output without raising).
 SAVINGS_USD_KEY = "estimated_savings_usd"
+# How many of the signal's ``invocation_count`` observations the dollar figure
+# covers (#675). Shared by the two renderers of "across k of N invocations".
+PRICED_INVOCATION_COUNT_KEY = "priced_invocation_count"
 
-_MIN_INVOCATIONS_FOR_ANALYSIS = 3
+_MIN_INVOCATIONS_FOR_ANALYSIS = MIN_INVOCATIONS_FOR_ANALYSIS
 # Complexity thresholds and the AgentStats model live in
 # diagnostics/_complexity.py — see #185 for the consolidation rationale.
 # The error-rate threshold below is reused for the underspec gate; kept
@@ -158,53 +178,105 @@ def aggregate_agent_stats(
             ),
             has_write_tools=has_writes,
             current_model=current_model,
+            simple_inputs=simple_branch_inputs(group),
         )
     return stats_by_type
 
 
-def estimate_model_savings(
-    current_model: str | None,
-    alt_model: str,
-    total_tokens: float | None,
-    count: int,
-) -> tuple[float | None, float | None]:
-    """Estimate ``(savings_usd, current_cost_usd)`` for ``current → alt``.
+@dataclass(frozen=True)
+class SavingsEstimate:
+    """A model-switch savings figure over the observations it could price (#675)."""
 
-    Shared by both ``target: model`` paths (#170): the complexity-mismatch
-    path prices ``mean_tokens × invocation_count``; the duration-outlier
-    path prices a single outlier's ``total_tokens × 1``. Returns
-    ``(None, None)`` when the current model is unknown, token data is
-    missing, or pricing is unavailable for either model — the
-    recommendation still ships, just without the dollar figure. Token
-    in/out split is approximated 50/50; real ratio tracked in #143.
+    savings_usd: float
+    """``max(0, current - alternative)``."""
+    current_cost_usd: float
+    """Observed spend of the priced observations at the models they ran on."""
+    priced_invocation_count: int
+    """How many observations both sides could price; never extrapolated to the rest."""
+
+
+def invocation_spend(inv: AgentInvocation) -> tuple[Usage, str] | None:
+    """An invocation's spend and the model it ran on, or ``None`` (#675).
+
+    Spend is the linked trace's deduplicated per-turn usage
+    (``analytics.tokens.trace_spend``) -- what the analytics fold and per-agent
+    cost read (#646, #701). An invocation with no linked trace, or whose trace
+    does not count as spend, has none.
     """
-    if not current_model or total_tokens is None:
-        return None, None
-    current_pricing = get_pricing(current_model)
-    alt_pricing = get_pricing(alt_model)
-    if current_pricing is None or alt_pricing is None:
-        return None, None
-    half = total_tokens / 2.0
-    current_per_inv = compute_cost(
-        current_pricing, input_tokens=int(half), output_tokens=int(half),
-    )
-    alt_per_inv = compute_cost(
-        alt_pricing, input_tokens=int(half), output_tokens=int(half),
-    )
-    current_cost = current_per_inv * count
-    alt_cost = alt_per_inv * count
-    savings = max(0.0, current_cost - alt_cost)
-    return savings, current_cost
+    return trace_spend(inv.trace)
 
 
-def _compute_savings(
-    stats: AgentStats,
+def estimate_usage_savings(
+    observations: Iterable[tuple[Usage, str]],
     alt_model: str,
-) -> tuple[float | None, float | None]:
-    """Per-agent savings for the mismatch path: ``mean_tokens × count``."""
-    return estimate_model_savings(
-        stats.current_model, alt_model, stats.mean_tokens, stats.invocation_count,
+) -> SavingsEstimate | None:
+    """Price each ``(usage, model it ran on)`` at its own model and at ``alt_model``.
+
+    An observation counts only when both rates exist; the rest are left out,
+    never estimated. Returns ``None`` when nothing could be priced -- no dollar
+    figure, not $0. Latest rate on both sides (``timestamp=None``); see
+    ``analytics.tokens.price_usage`` for the counterfactual and what it ignores.
+    """
+    current_total = 0.0
+    alt_total = 0.0
+    priced = 0
+    for usage, model in observations:
+        current = price_usage(usage, model, timestamp=None)
+        alternative = price_usage(usage, alt_model, timestamp=None)
+        if current is None or alternative is None:
+            continue
+        current_total += current
+        alt_total += alternative
+        priced += 1
+    if priced == 0:
+        return None
+    return SavingsEstimate(
+        savings_usd=max(0.0, current_total - alt_total),
+        current_cost_usd=current_total,
+        priced_invocation_count=priced,
     )
+
+
+def estimate_model_savings(
+    invocations: Iterable[AgentInvocation],
+    alt_model: str,
+) -> SavingsEstimate | None:
+    """Savings from switching these invocations to ``alt_model``, from trace spend.
+
+    Sums over invocations with trace spend (``invocation_spend``), each priced at
+    its trace's model -- what was actually spent -- not the group's declared
+    model. Invocations without trace spend add nothing and are not extrapolated:
+    ``priced_invocation_count`` says how many the figure covers.
+    """
+    spend = (invocation_spend(inv) for inv in invocations)
+    return estimate_usage_savings(
+        (observation for observation in spend if observation is not None), alt_model,
+    )
+
+
+def savings_scope_phrase(priced: int, total: int) -> str:
+    """``"k of N invocations"`` when the figure covers fewer than all, else ``"N invocations"``.
+
+    Shared by both renderers of a mismatch savings figure (``correlator.
+    ModelRoutingRule`` and ``pipeline._append_mismatch_phrase``) so neither
+    claims the whole group for a figure priced over part of it (#675).
+    """
+    if priced < total:
+        return f"{priced} of {total} invocations"
+    return f"{total} invocations"
+
+
+def savings_scope_from_detail(detail: Mapping[str, object]) -> str:
+    """``savings_scope_phrase`` read off a ``MODEL_MISMATCH`` signal's detail.
+
+    A detail without ``priced_invocation_count`` (a signal built before #675)
+    reads as covering every invocation, which is what that figure claimed.
+    """
+    total = detail.get("invocation_count", 0)
+    total_count = total if isinstance(total, int) else 0
+    priced = detail.get(PRICED_INVOCATION_COUNT_KEY, total_count)
+    priced_count = priced if isinstance(priced, int) else total_count
+    return savings_scope_phrase(priced_count, total_count)
 
 
 def _build_mismatch_signal(
@@ -212,15 +284,16 @@ def _build_mismatch_signal(
     mismatch_type: MismatchType,
     complexity: ComplexityTier,
     recommended_model: str,
+    spend: Sequence[tuple[Usage, str]],
     routing_scope: str = "subagent",
 ) -> DiagnosticSignal:
     # Savings are only meaningful for overspec (cheap recommended model).
     # For underspec, Haiku → Sonnet costs MORE; `max(0.0, ...)` would
     # always wipe it to zero anyway, so skip the pricing lookup.
-    if mismatch_type == "overspec":
-        savings, current_cost = _compute_savings(stats, recommended_model)
-    else:
-        savings, current_cost = None, None
+    estimate = (
+        estimate_usage_savings(spend, recommended_model)
+        if mismatch_type == "overspec" else None
+    )
     if routing_scope == "main_session":
         # ``stats.agent_type`` already reads "SDK main [<model>]" — keep the
         # phrase focused on the configured main-session model surface.
@@ -252,14 +325,18 @@ def _build_mismatch_signal(
             "mean_tokens": stats.mean_tokens,
             "error_rate": stats.error_rate,
             "routing_scope": routing_scope,
-            SAVINGS_USD_KEY: savings,
-            "current_cost_usd": current_cost,
+            SAVINGS_USD_KEY: estimate.savings_usd if estimate else None,
+            "current_cost_usd": estimate.current_cost_usd if estimate else None,
+            PRICED_INVOCATION_COUNT_KEY: (
+                estimate.priced_invocation_count if estimate else 0
+            ),
         },
     )
 
 
 def _detect_mismatch(
     stats: AgentStats,
+    spend: Sequence[tuple[Usage, str]],
     routing_scope: str = "subagent",
 ) -> DiagnosticSignal | None:
     """Emit a MODEL_MISMATCH signal when declared tier is wrong for complexity.
@@ -288,7 +365,7 @@ def _detect_mismatch(
         if recommended is not None:
             return _build_mismatch_signal(
                 stats, "overspec", complexity, recommended_model=recommended,
-                routing_scope=routing_scope,
+                spend=spend, routing_scope=routing_scope,
             )
     if (
         complexity == "complex"
@@ -299,7 +376,7 @@ def _detect_mismatch(
         if recommended is not None:
             return _build_mismatch_signal(
                 stats, "underspec", complexity, recommended_model=recommended,
-                routing_scope=routing_scope,
+                spend=spend, routing_scope=routing_scope,
             )
     return None
 
@@ -318,9 +395,14 @@ def extract_model_routing_signals(
     if not invocations:
         return []
     stats_by_type = aggregate_agent_stats(invocations, configs)
+    spend_by_type: dict[str, list[tuple[Usage, str]]] = defaultdict(list)
+    for inv in invocations:
+        observation = invocation_spend(inv)
+        if observation is not None:
+            spend_by_type[inv.agent_type.lower()].append(observation)
     signals: list[DiagnosticSignal] = []
-    for stats in stats_by_type.values():
-        signal = _detect_mismatch(stats)
+    for key, stats in stats_by_type.items():
+        signal = _detect_mismatch(stats, spend_by_type.get(key, []))
         if signal is not None:
             signals.append(signal)
     return signals
@@ -414,6 +496,21 @@ def _build_main_session_stats(session: SessionAnalysis) -> AgentStats | None:
     )
 
 
+def _main_session_spend(session: SessionAnalysis) -> list[tuple[Usage, str]]:
+    """The main session's own spend: the turns the parent token fold counts (#675).
+
+    ``counts_as_parent_call`` is ``compute_token_metrics``'s predicate (usage
+    present, not ``<synthetic>``), so the savings figure prices exactly the turns
+    analytics prices, each at its own ``message.model``. Classification inputs
+    (``_build_main_session_stats``) are untouched.
+    """
+    return [
+        (msg.usage, msg.model)
+        for msg in session.messages
+        if counts_as_parent_call(msg) and msg.usage is not None and msg.model
+    ]
+
+
 def extract_sdk_main_session_signals(
     sessions: list[SessionAnalysis],
 ) -> list[DiagnosticSignal]:
@@ -434,7 +531,9 @@ def extract_sdk_main_session_signals(
         stats = _build_main_session_stats(session)
         if stats is None:
             continue
-        signal = _detect_mismatch(stats, routing_scope="main_session")
+        signal = _detect_mismatch(
+            stats, _main_session_spend(session), routing_scope="main_session",
+        )
         if signal is not None:
             signals.append(signal)
     return signals

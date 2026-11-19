@@ -298,11 +298,13 @@ class TestGenerateDraft:
 
     def test_read_only_low_volume_recommends_haiku(self) -> None:
         # Read-only tools with observable low-volume token data → "simple"
-        # tier → Haiku. Tokens stay under the 2k simple ceiling.
+        # tier → Haiku. Tokens stay under the 2k simple ceiling. ``tool_uses=2``
+        # is what ``attach_trace`` sets for this trace in production (#690); the
+        # "simple" branch reads only invocations carrying both counts (#675).
         members = [
             _inv(
                 description="d", prompt="p",
-                total_tokens=500,
+                total_tokens=500, tool_uses=2,
                 trace=_trace_with_tools(["Read", "Grep"]),
             ),
         ] * 5

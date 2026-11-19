@@ -209,13 +209,15 @@ class TestDurationOutlierCorrelation:
         assert recs[0].target == "prompt"
         assert "a faster model" not in recs[0].action
 
-    def test_savings_included_when_tokens_and_pricing_available(self) -> None:
-        # AC4: cost-savings estimate present when pricing + tokens available.
+    def test_total_tokens_alone_is_never_priced(self) -> None:
+        # #675 AC3: the rollup ``total_tokens`` is a context-size proxy, not
+        # spend — without trace spend there is no dollar figure. Trace-priced
+        # savings are covered in test_trace_spend_savings.py.
         signals = [_duration_signal(detail={"total_tokens": 500_000})]
         configs = {"pm": _config(model="claude-opus-4-6")}
         recs = correlate(signals, configs)
         assert len(recs) == 1
-        assert "estimated savings" in recs[0].action
+        assert "estimated savings" not in recs[0].action
 
     def test_savings_omitted_when_tokens_missing(self) -> None:
         # AC4: degrades gracefully — concrete target, no dollar figure.

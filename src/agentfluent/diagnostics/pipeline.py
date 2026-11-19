@@ -55,6 +55,7 @@ from agentfluent.diagnostics.model_routing import (
     SAVINGS_USD_KEY,
     extract_model_routing_signals,
     extract_sdk_main_session_signals,
+    savings_scope_from_detail,
 )
 from agentfluent.diagnostics.models import (
     TRACE_SIGNAL_TYPES,
@@ -100,7 +101,6 @@ def _append_mismatch_phrase(
     recommended = str(detail.get("recommended_model", ""))
     mismatch_type = str(detail.get("mismatch_type", ""))
     savings = detail.get(SAVINGS_USD_KEY)
-    invocation_count = detail.get("invocation_count", 0)
 
     clauses = [
         f"Note: '{signal.agent_type}' is {mismatch_type}'d on {matched_name}",
@@ -108,7 +108,7 @@ def _append_mismatch_phrase(
     ]
     if mismatch_type == "overspec" and isinstance(savings, int | float):
         clauses.append(
-            f"est. savings ${savings:.2f} across {invocation_count} invocations",
+            f"est. savings ${savings:.2f} across {savings_scope_from_detail(detail)}",
         )
     # Strip trailing terminal punctuation from the incoming note so the
     # ". " separator produces a well-formed sentence regardless of the

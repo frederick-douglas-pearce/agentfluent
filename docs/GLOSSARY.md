@@ -457,13 +457,16 @@ its mean tool calls, mean tokens, error rate, and write-tool usage.
 Emits `overspec` when a complex model is doing simple work (potential
 savings) or `underspec` when a simple model is doing complex work
 (potential failures). Only fires when the agent has 3+ invocations and
-declares a model in its `.claude/agents/X.md` frontmatter.
+declares a model in its `.claude/agents/X.md` frontmatter. The savings
+figure prices trace-linked invocations' actual spend at their own model
+and at the recommended one; invocations without a linked trace add no
+dollars and are not estimated, so the figure names how many it covers.
 
 **Example:**
 
 ```
 Agent 'pm' is overspec'd: classified 'simple' but uses claude-opus-4-7.
-Estimated savings $0.42 across 11 invocations by switching to
+Estimated savings $0.42 across 9 of 11 invocations by switching to
 claude-haiku-4-5.
 ```
 
@@ -1281,8 +1284,8 @@ warrants.
 
 **Detail:** A `simple`-tier agent declared on `claude-opus-4-7`, for example. The
 `model_mismatch` signal recommends switching to the classified tier's
-family with an estimated cost savings derived from the observed token
-volume.
+family with an estimated cost savings priced from the agent's observed
+trace spend.
 
 **Related:** [`underspec`](#underspec), [`complexity_tier`](#complexity_tier), [`model_mismatch`](#model_mismatch)
 

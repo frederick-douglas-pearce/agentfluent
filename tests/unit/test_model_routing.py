@@ -20,7 +20,6 @@ from agentfluent.diagnostics.delegation import (
 )
 from agentfluent.diagnostics.model_routing import (
     AgentStats,
-    _compute_savings,
     _resolve_current_model,
     aggregate_agent_stats,
     classify_complexity,
@@ -386,35 +385,6 @@ class TestDetectMismatch:
         invs = [_inv(agent_type="pm", tool_uses=2, total_tokens=500) for _ in range(5)]
         signals = extract_model_routing_signals(invs, configs=None)
         assert signals == []
-
-
-class TestCostSavings:
-    def test_both_pricings_available_savings_computed(self) -> None:
-        stats = _stats(
-            mean_tokens=1000.0, invocation_count=10,
-            current_model=MODEL_OPUS,
-        )
-        savings, current_cost = _compute_savings(stats, MODEL_HAIKU)
-        assert savings is not None and savings > 0
-        assert current_cost is not None and current_cost > 0
-
-    def test_unknown_current_model_returns_none(self) -> None:
-        stats = _stats(current_model="claude-mystery-model-9")
-        savings, current_cost = _compute_savings(stats, MODEL_HAIKU)
-        assert savings is None
-        assert current_cost is None
-
-    def test_unknown_alt_model_returns_none(self) -> None:
-        stats = _stats(current_model=MODEL_SONNET)
-        savings, current_cost = _compute_savings(stats, "claude-mystery-model-9")
-        assert savings is None
-        assert current_cost is None
-
-    def test_none_current_model_returns_none(self) -> None:
-        stats = _stats(current_model=None)
-        savings, current_cost = _compute_savings(stats, MODEL_HAIKU)
-        assert savings is None
-        assert current_cost is None
 
 
 class TestExtractModelRoutingSignals:

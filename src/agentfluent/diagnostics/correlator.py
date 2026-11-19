@@ -24,7 +24,8 @@ from agentfluent.diagnostics.builtin_actions import (
 )
 from agentfluent.diagnostics.model_routing import (
     SAVINGS_USD_KEY,
-    estimate_model_savings,
+    estimate_usage_savings,
+    savings_scope_from_detail,
 )
 from agentfluent.diagnostics.models import (
     DiagnosticRecommendation,
@@ -391,13 +392,20 @@ class DurationOutlierRule:
         scoped to *this invocation* — a single slow outlier's tokens are
         atypically high, so framing them as per-agent savings would
         overstate the typical case (architect review, #170).
+
+        The figure prices the invocation's trace spend (``signal.spend_usage``,
+        #675) at the model the trace ran on (``detail["current_model"]``) — not
+        the config-declared ``current_model`` used to choose the target — so
+        "current cost" means what was spent, as on the mismatch path. No trace
+        spend → no dollar figure.
         """
-        tokens = signal.detail.get("total_tokens")
-        savings, _ = estimate_model_savings(
-            current_model, target_model,
-            tokens if isinstance(tokens, int | float) else None,
-            count=1,
+        trace_model = signal.detail.get("current_model")
+        estimate = (
+            estimate_usage_savings([(signal.spend_usage, trace_model)], target_model)
+            if signal.spend_usage is not None and isinstance(trace_model, str)
+            else None
         )
+        savings = estimate.savings_usd if estimate is not None else None
         where = f" in {_relpath(config.file_path)}" if config else ""
         action = (
             f"If this agent's task is routine, consider switching from "
@@ -643,7 +651,6 @@ class ModelRoutingRule:
         current_model = str(detail.get("current_model", ""))
         recommended_model = str(detail.get("recommended_model", ""))
         complexity = str(detail.get("complexity_tier", "moderate"))
-        invocation_count = detail.get("invocation_count", 0)
         savings = detail.get(SAVINGS_USD_KEY)
         # Main-vs-subagent origin (#112). Copied onto the recommendation as
         # the explicit discriminator JSON consumers read (AC#6); also selects
@@ -670,7 +677,7 @@ class ModelRoutingRule:
         if mismatch_type == "overspec" and isinstance(savings, int | float):
             action_parts.append(
                 f"(estimated savings: ${savings:.2f} across "
-                f"{invocation_count} invocations)",
+                f"{savings_scope_from_detail(detail)})",
             )
         if is_main_session:
             # No ``.claude/agents/*.md`` for a main session — the surface is
