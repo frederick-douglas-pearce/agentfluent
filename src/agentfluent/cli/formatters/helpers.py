@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from rich.console import Console
 from rich.markup import escape
@@ -261,3 +262,37 @@ def format_agent_duration_cell(
         unreliable=False,
         partial=partial,
     )
+
+
+def _cohort_count(coverage: Mapping[str, Any], cohort: str, key: str) -> int:
+    value = (coverage.get(cohort) or {}).get(key, 0)
+    return value if isinstance(value, int) else 0
+
+
+def trace_coverage_line(coverage: Mapping[str, Any] | None) -> str | None:
+    """One plain-text line disclosing subagent traces beyond agent invocations (#648 AC5).
+
+    Takes the serialized ``trace_coverage`` dict so ``analyze`` (in-memory
+    ``model_dump()``) and ``report`` (rehydrated JSON) render the same text.
+    Returns ``None`` -- render nothing -- when every trace file is ``linked``.
+    """
+    if not coverage:
+        return None
+    parts: list[str] = []
+    folded: list[str] = []
+    for cohort, label in (("nested", "nested"), ("session_spawned", "session-spawned")):
+        files = _cohort_count(coverage, cohort, "files")
+        if files:
+            tokens = format_tokens(_cohort_count(coverage, cohort, "tokens"))
+            folded.append(f"{files} {label} ({tokens} tokens)")
+    if folded:
+        parts.append(" and ".join(folded) + " included in totals, not in per-agent rows")
+    filtered = _cohort_count(coverage, "filtered", "files")
+    if filtered:
+        parts.append(f"{filtered} excluded by --agent")
+    unparseable = _cohort_count(coverage, "unparseable", "files")
+    if unparseable:
+        parts.append(f"{unparseable} unparseable (spend unknown)")
+    if not parts:
+        return None
+    return "Subagent traces: " + "; ".join(parts) + "."

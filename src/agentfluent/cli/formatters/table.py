@@ -33,6 +33,7 @@ from agentfluent.cli.formatters.helpers import (
     score_color,
     session_kind_label,
     severity_cell,
+    trace_coverage_line,
     truncate,
 )
 from agentfluent.diagnostics.models import Axis, SignalType
@@ -177,6 +178,9 @@ def format_analysis_table(
         f"[dim]{result.total_synthetic_messages}[/dim]",
     )
     console.print(token_table)
+    coverage_line = trace_coverage_line(result.trace_coverage.model_dump())
+    if coverage_line is not None:
+        console.print(f"[dim]{escape(coverage_line)}[/dim]")
 
     if tm.by_model and (verbose or len(tm.by_model) > 1):
         model_table = Table(

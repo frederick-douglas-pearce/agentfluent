@@ -23,6 +23,7 @@ from agentfluent.cli.formatters.helpers import (
     format_agent_duration_cell,
     format_cost,
     format_tokens,
+    trace_coverage_line,
 )
 from agentfluent.config.models import Severity
 from agentfluent.diagnostics.models import Axis
@@ -169,7 +170,11 @@ def render_token_metrics(data: dict[str, Any]) -> str:
         f"**{format_cost(tm.get('total_cost', 0.0))}**",
     ])
 
-    return "## Token Metrics\n\n" + _md_table(headers, rows, align)
+    section = "## Token Metrics\n\n" + _md_table(headers, rows, align)
+    coverage_line = trace_coverage_line(data.get("trace_coverage"))
+    if coverage_line is not None:
+        section += f"\n{coverage_line}\n"
+    return section
 
 
 def render_agent_metrics(data: dict[str, Any]) -> str:

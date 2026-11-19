@@ -1710,6 +1710,71 @@ Token Usage
 
 **Related:** [`api_call_count`](#api_call_count), [`output`](#output), [`total_cost`](#total_cost)
 
+### `trace_coverage`
+
+**Short:** Where a session's subagent trace spend came from, split by cohort:
+linked, nested, session-spawned, filtered and unparseable.
+
+**Detail:** Added in v0.12 (#648). A session owns every subagent trace file in its
+own `subagents/` directory, and its token totals (and so
+[`total_cost`](#total_cost)) include every one of them that parses,
+except traces `--agent` excludes. `trace_coverage` labels each file
+with exactly one cohort so you can see what that total is made of:
+
+- **linked** -- the trace belongs to an agent invocation (an `Agent`
+  call in the main session). This is the spend behind the per-agent
+  rows.
+- **nested** -- spawned by another subagent (depth 2 or deeper).
+- **session_spawned** -- see [`session_spawned`](#session_spawned).
+- **filtered** -- excluded by `--agent`. Not a loss; you asked for it.
+- **unparseable** -- the file could not be read as a trace, so its
+  spend is unknown.
+
+Each cohort reports `files`, `tokens`, `cost`, `unpriced_files` and
+`folded` (whether it is in the session totals). Nested and
+session-spawned spend is in the totals but not in any per-agent row,
+so including it lowers `agent_token_percentage` (per-agent spend over
+the session total). `deduped_turns` / `deduped_tokens` count API turns
+dropped because the main session or an earlier trace already counted
+them (fork agents replay context). They are counted before `--agent`
+is applied, so they include turns from `filtered` traces.
+
+In `analyze --format json` it appears per session and summed at the
+top level. `analyze` (under the Token Usage table) and `report`
+(under Token Metrics) print one line when any cohort other than
+`linked` is non-empty, and nothing at full coverage.
+
+**Example:**
+
+```
+Token Usage
+  ...
+Subagent traces: 3 nested (1,234 tokens) and 2 session-spawned (56 tokens)
+included in totals, not in per-agent rows; 5 excluded by --agent.
+```
+
+**Related:** [`session_spawned`](#session_spawned), [`total_cost`](#total_cost)
+
+### `session_spawned`
+
+**Short:** A subagent the session started without an `Agent` tool call, such as
+the built-in `/code-review` skill's background agent.
+
+**Detail:** Added in v0.12 (#648). Skills and workflows can start background
+agents directly. Their trace files sit in the session's `subagents/`
+directory like any other, but no `Agent` call in the main session
+names them, so they have no invocation row and no per-agent metrics.
+Since v0.12 their spend is included in the session totals and
+disclosed in [`trace_coverage`](#trace_coverage), split by what
+spawned them (the sidecar `name`, e.g. `code-review`, else its agent
+type). A trace whose spawning `Agent` call never linked to a result
+also lands here.
+
+With `--agent`, a session-spawned trace is kept only when its agent
+type or name matches the filter.
+
+**Related:** [`trace_coverage`](#trace_coverage)
+
 ### `active_duration`
 
 **Short:** Wall-clock duration with detected idle (user-wait) gaps subtracted --

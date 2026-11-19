@@ -73,6 +73,10 @@ class TraceLineage:
     invocation row to inherit from**, so the sidecar is its only source. Left
     empty, every depth->=2 trace this exposes would serialize as ``unknown``
     -- the one field that makes the ``children`` array usable."""
+    name: str | None = None
+    """Runtime-assigned agent name from the sidecar (``"code-review"``), or
+    ``None``. Read by ``traces.coverage`` for the ``--agent`` rule and the
+    session-spawned breakdown; never an edge or a fold input."""
 
 
 def emitted_tool_use_ids(trace_path: Path) -> set[str]:
@@ -136,9 +140,8 @@ def build_emitter_index(files: Iterable[SubagentFileInfo]) -> dict[str, str]:
     left that hits this index was spawned by another agent.
 
     Exposed as a reusable unit rather than an internal of
-    ``resolve_lineage``: #648 AC1/AC4's coverage counter needs the same
-    emitter resolution to split structurally-recoverable depth->=2 traces from
-    true orphans, and two implementations of this would drift.
+    ``resolve_lineage``. #648's cohort labels (``traces.coverage``) reach it
+    only through ``resolve_lineage``, so there is one emitter resolution.
     """
     index: dict[str, str] = {}
     for info in files:
@@ -218,7 +221,8 @@ def resolve_lineage(
     sidecar whose ``toolUseId`` resolves to no emitter, or a chain that hits
     the cycle guard all yield ``TraceLineage(None, 1)``. That biases toward
     under-reporting nesting rather than asserting a parent that may be wrong,
-    and leaves the residual for #648 AC3 to disclose as an orphan cohort.
+    and leaves the residual to ``traces.coverage``, which labels it
+    ``session_spawned`` (#648).
     """
     # Sidecars are read here, NOT in discovery. `discover_session_subagents`
     # is contracted to "only walk directories and name files", and
@@ -273,10 +277,11 @@ def resolve_lineage(
         agent_id = info.agent_id
         sidecar = sidecars.get(agent_id)
         agent_type = sidecar.agent_type if sidecar is not None else ""
+        name = sidecar.name if sidecar is not None else None
 
         if agent_id in depth_1_agents:
             lineages[agent_id] = TraceLineage(
-                parent_invocation_id=None, depth=1, agent_type=agent_type,
+                parent_invocation_id=None, depth=1, agent_type=agent_type, name=name,
             )
             continue
 
@@ -286,10 +291,11 @@ def resolve_lineage(
             # Unattributable: no sidecar, an emitter we could not resolve, or a
             # cycle. Never a guessed parent.
             lineages[agent_id] = TraceLineage(
-                parent_invocation_id=None, depth=1, agent_type=agent_type,
+                parent_invocation_id=None, depth=1, agent_type=agent_type, name=name,
             )
             continue
         lineages[agent_id] = TraceLineage(
             parent_invocation_id=parent_agent, depth=depth, agent_type=agent_type,
+            name=name,
         )
     return lineages
