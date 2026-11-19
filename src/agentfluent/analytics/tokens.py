@@ -296,8 +296,11 @@ def price_usage(
 ) -> float | None:
     """Price one ``Usage`` at ``model``'s rate; ``None`` iff ``model`` is unpriced.
 
-    The one public token -> dollar primitive (#675): ``price_trace`` and every
-    diagnostics dollar figure route through it, and it routes through ``_cost_of``,
+    The public token -> dollar primitive (#675): ``price_trace`` and the
+    model-switch savings figures (``diagnostics.model_routing`` and the
+    duration-outlier rule) route through it -- ``diagnostics.parent_workload``'s
+    offload estimate still calls ``compute_cost`` directly until #707 -- and it
+    routes through ``_cost_of``,
     so all five usage components -- including the 5m/1h cache-write split -- map to
     rates on a single path (#646 AC1).
 

@@ -118,12 +118,16 @@ def classify_model_tier(model: str) -> ComplexityTier:
 class SimpleBranchInputs(BaseModel):
     """``mean_tool_calls`` / ``mean_tokens`` over one invocation subset (#675).
 
-    Built by ``simple_branch_inputs``; read only by ``classify_complexity``'s
-    "simple" branch.
+    Built by ``simple_branch_inputs`` (or by ``effective_simple_inputs`` from a
+    builder's own means); read by ``classify_complexity``'s "simple" branch and
+    published on ``MODEL_MISMATCH`` detail as the ``simple_branch_*`` keys.
     """
 
     mean_tool_calls: float
     mean_tokens: float
+    invocation_count: int
+    """Observations the two means cover: invocations carrying both values, or
+    the builder's own observation count where it supplies no subset."""
 
 
 def simple_branch_inputs(invocations: list[AgentInvocation]) -> SimpleBranchInputs:
@@ -147,12 +151,17 @@ def simple_branch_inputs(invocations: list[AgentInvocation]) -> SimpleBranchInpu
         if inv.tool_uses is not None and inv.total_tokens is not None
     ]
     if not matched:
-        return SimpleBranchInputs(mean_tool_calls=0.0, mean_tokens=0.0)
-    mean_tool_calls = sum(tools for tools, _ in matched) / len(matched)
-    if len(matched) < MIN_INVOCATIONS_FOR_ANALYSIS:
-        return SimpleBranchInputs(mean_tool_calls=mean_tool_calls, mean_tokens=0.0)
-    mean_tokens = sum(tokens for _, tokens in matched) / len(matched)
-    return SimpleBranchInputs(mean_tool_calls=mean_tool_calls, mean_tokens=mean_tokens)
+        return SimpleBranchInputs(mean_tool_calls=0.0, mean_tokens=0.0, invocation_count=0)
+    count = len(matched)
+    mean_tool_calls = sum(tools for tools, _ in matched) / count
+    if count < MIN_INVOCATIONS_FOR_ANALYSIS:
+        return SimpleBranchInputs(
+            mean_tool_calls=mean_tool_calls, mean_tokens=0.0, invocation_count=count,
+        )
+    mean_tokens = sum(tokens for _, tokens in matched) / count
+    return SimpleBranchInputs(
+        mean_tool_calls=mean_tool_calls, mean_tokens=mean_tokens, invocation_count=count,
+    )
 
 
 class AgentStats(BaseModel):
@@ -179,9 +188,11 @@ class AgentStats(BaseModel):
     current_model: str | None
     simple_inputs: SimpleBranchInputs | None = None
     """Coverage-matched inputs for the "simple" branch only (#675). ``None``
-    means the builder's ``mean_tool_calls`` / ``mean_tokens`` already cover the
-    same observations (parent bursts, SDK-main turns) and the branch reads them.
-    Invocation-based builders always set it via ``simple_branch_inputs``."""
+    means the branch reads the builder's own ``mean_tool_calls`` /
+    ``mean_tokens`` (``effective_simple_inputs``): parent bursts compute both
+    over the same bursts; SDK-main averages tool calls over all non-synthetic
+    turns and tokens over the turns carrying usage. Invocation-based builders
+    always set it via ``simple_branch_inputs``."""
 
 
 def compute_error_rate(inv: AgentInvocation) -> float:
@@ -241,13 +252,12 @@ def classify_complexity(stats: AgentStats) -> ComplexityTier:
     # aggregate_agent_stats``, ``aggregate_cluster_stats``) supply
     # ``simple_inputs`` -- both means over the invocations carrying tool
     # calls AND rollup tokens, with an evidence floor (``simple_branch_inputs``).
-    # The group-wide means above still drive "complex" and are what the signal
-    # publishes. Parent-session builders (``parent_workload`` bursts, SDK-main
-    # turns) compute both means over the same bursts or turns and leave
-    # ``simple_inputs`` unset.
-    simple = stats.simple_inputs or SimpleBranchInputs(
-        mean_tool_calls=stats.mean_tool_calls, mean_tokens=stats.mean_tokens,
-    )
+    # The group-wide means above still drive "complex"; the signal publishes
+    # both (``simple_branch_*`` keys). Parent-session builders leave
+    # ``simple_inputs`` unset and the branch reads their own means: parent
+    # bursts average both over the same bursts; SDK-main averages tool calls
+    # over all non-synthetic turns and tokens over the turns carrying usage.
+    simple = effective_simple_inputs(stats)
     has_token_evidence = simple.mean_tokens > 0
     if (
         has_token_evidence
@@ -256,6 +266,23 @@ def classify_complexity(stats: AgentStats) -> ComplexityTier:
     ):
         return "simple"
     return "moderate"
+
+
+def effective_simple_inputs(stats: AgentStats) -> SimpleBranchInputs:
+    """The inputs ``classify_complexity``'s "simple" branch reads (#675).
+
+    ``stats.simple_inputs`` when a builder supplied the coverage-matched subset,
+    else the builder's own group means over ``invocation_count`` observations.
+    The one place that fallback lives, so the published ``simple_branch_*``
+    detail keys are exactly what was classified.
+    """
+    if stats.simple_inputs is not None:
+        return stats.simple_inputs
+    return SimpleBranchInputs(
+        mean_tool_calls=stats.mean_tool_calls,
+        mean_tokens=stats.mean_tokens,
+        invocation_count=stats.invocation_count,
+    )
 
 
 def recommend_model_for_complexity(tier: ComplexityTier) -> str:

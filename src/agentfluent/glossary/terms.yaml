@@ -336,15 +336,22 @@
     An agent's declared model is wrong for the complexity of its observed
     work.
   long: |
-    Per-agent-type signal. Compares the agent's declared model family
-    (`current_model`) against a complexity classification computed from
-    its mean tool calls, mean tokens, error rate, and write-tool usage.
-    Emits `overspec` when a complex model is doing simple work (potential
-    savings) or `underspec` when a simple model is doing complex work
-    (potential failures). Only fires when the agent has 3+ invocations and
-    declares a model in its `.claude/agents/X.md` frontmatter. The savings
-    figure prices trace-linked invocations' actual spend at their own model
-    and at the recommended one; invocations without a linked trace add no
+    Per-agent-type signal (and, for Agent SDK main sessions, per configured
+    main-session model). Compares the model family (`current_model`) against a
+    complexity classification computed from mean tool calls, mean tokens, and
+    error rate (see `complexity_tier`). Emits `overspec` when a complex model is
+    doing simple work (potential savings) or `underspec` when a simple model is
+    doing complex work (potential failures). Only fires with 3+ invocations
+    (model turns, for a main session) and a resolvable model: frontmatter
+    `model`, else the linked trace's model, else the resolved model. Detail
+    publishes the group-wide `mean_tool_calls` / `mean_tokens` (which drive
+    `complex`) and the `simple_branch_mean_tool_calls` /
+    `simple_branch_mean_tokens` / `simple_branch_invocation_count` the `simple`
+    check actually read. The savings figure prices observed spend at the
+    model it ran on and at the recommended one -- each trace-linked
+    invocation's deduplicated trace spend, or for an SDK main session its own
+    counted turns; observations without priced spend (no linked trace, a trace
+    that does not count as spend, or an unpriced model on either side) add no
     dollars and are not estimated, so the figure names how many it covers.
   example: |
     Agent 'pm' is overspec'd: classified 'simple' but uses claude-opus-4-7.
@@ -1010,8 +1017,11 @@
     a family may share a tier with another:
 
     - **`simple`** -- classifies the `claude-haiku` family; recommended
-      target `claude-haiku-4-5`. Requires observed data (mean tool calls > 0
-      OR mean tokens > 0) AND mean tool calls < 5 AND mean tokens < 2,000.
+      target `claude-haiku-4-5`. Requires token evidence (mean tokens > 0)
+      AND mean tool calls < 5 AND mean tokens < 2,000. For invocation groups
+      both means are taken over the invocations carrying both a tool-call
+      count and rollup tokens, and at least 3 such invocations are required
+      (else no token evidence, so `moderate`).
     - **`moderate`** -- classifies the `claude-sonnet` family; recommended
       target `claude-sonnet-4-6`. The default tier when neither the simple
       nor the complex conditions are met.

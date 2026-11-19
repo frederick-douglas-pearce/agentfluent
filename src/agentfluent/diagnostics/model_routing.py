@@ -48,6 +48,7 @@ from agentfluent.diagnostics._complexity import (
     classify_complexity,
     classify_model_tier,
     compute_error_rate,
+    effective_simple_inputs,
     has_write_tools_in_trace,
     select_target_model,
     simple_branch_inputs,
@@ -294,6 +295,7 @@ def _build_mismatch_signal(
         estimate_usage_savings(spend, recommended_model)
         if mismatch_type == "overspec" else None
     )
+    simple = effective_simple_inputs(stats)
     if routing_scope == "main_session":
         # ``stats.agent_type`` already reads "SDK main [<model>]" — keep the
         # phrase focused on the configured main-session model surface.
@@ -325,6 +327,11 @@ def _build_mismatch_signal(
             "mean_tokens": stats.mean_tokens,
             "error_rate": stats.error_rate,
             "routing_scope": routing_scope,
+            # What the "simple" branch actually read (#675): the group-wide
+            # means above drive "complex"; these may cover fewer invocations.
+            "simple_branch_mean_tool_calls": simple.mean_tool_calls,
+            "simple_branch_mean_tokens": simple.mean_tokens,
+            "simple_branch_invocation_count": simple.invocation_count,
             SAVINGS_USD_KEY: estimate.savings_usd if estimate else None,
             "current_cost_usd": estimate.current_cost_usd if estimate else None,
             PRICED_INVOCATION_COUNT_KEY: (
