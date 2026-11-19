@@ -6,6 +6,7 @@ docstring.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -295,3 +296,25 @@ class TestPublishedSimpleBranchInputs:
         assert detail["simple_branch_mean_tool_calls"] == detail["mean_tool_calls"]
         assert detail["simple_branch_mean_tokens"] == detail["mean_tokens"]
         assert detail["simple_branch_invocation_count"] == 4
+
+
+class TestPublicDetailKeyNames:
+    """Class B survivor (acceptance gate round 1) — broken: renaming a public
+    ``MODEL_MISMATCH`` detail key. Tests read the constants, so the literal JSON
+    names (D055 public API) are pinned here against the serialized signal."""
+
+    def test_serialized_detail_uses_the_published_key_names(self) -> None:
+        signals = extract_model_routing_signals(
+            _group(linked=2, total=5, model=MODEL_OPUS), {"pm": _config("pm", MODEL_OPUS)},
+        )
+        assert len(signals) == 1
+        detail = json.loads(signals[0].model_dump_json())["detail"]
+        assert detail["priced_invocation_count"] == 2
+        assert detail["estimated_savings_usd"] is not None
+        assert "current_cost_usd" in detail
+        for key in (
+            "simple_branch_mean_tool_calls",
+            "simple_branch_mean_tokens",
+            "simple_branch_invocation_count",
+        ):
+            assert key in detail
