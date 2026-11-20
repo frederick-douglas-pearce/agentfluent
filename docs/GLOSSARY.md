@@ -1851,7 +1851,8 @@ when it changes how cost is computed). `diff` compares the two sides
 and reports `cost_model_status`: `match`, `mismatch` (with
 `cost_model_changes` naming `pricing_table` and/or `cost_method`) or
 `unknown`, when either snapshot has no readable stamp (it predates
-v0.12.0, or the stamp is malformed) or a stamp part is missing. Two
+v0.12.0, or the stamp is malformed), or a stamp part is missing and no
+other part is known to differ (a known difference reports `mismatch`). Two
 unstamped snapshots are `unknown` even from the same release. On anything but
 `match` it prints a caveat above the cost tables, and `diff --quiet`
 marks its cost figure. The caveat never changes the exit code.
