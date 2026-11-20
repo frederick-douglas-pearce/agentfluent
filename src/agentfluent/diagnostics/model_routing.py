@@ -68,6 +68,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "PRICED_INVOCATION_COUNT_KEY",
     "SAVINGS_USD_KEY",
+    "savings_is_partial",
     "AgentStats",
     "SavingsEstimate",
     "ComplexityTier",
@@ -267,8 +268,8 @@ def savings_scope_phrase(priced: int, total: int) -> str:
     return f"{total} invocations"
 
 
-def savings_scope_from_detail(detail: Mapping[str, object]) -> str:
-    """``savings_scope_phrase`` read off a ``MODEL_MISMATCH`` signal's detail.
+def _savings_scope_counts(detail: Mapping[str, object]) -> tuple[int, int]:
+    """``(priced, total)`` invocations a ``MODEL_MISMATCH`` savings figure covers.
 
     A detail without ``priced_invocation_count`` (a signal built before #675)
     reads as covering every invocation, which is what that figure claimed.
@@ -277,7 +278,19 @@ def savings_scope_from_detail(detail: Mapping[str, object]) -> str:
     total_count = total if isinstance(total, int) else 0
     priced = detail.get(PRICED_INVOCATION_COUNT_KEY, total_count)
     priced_count = priced if isinstance(priced, int) else total_count
-    return savings_scope_phrase(priced_count, total_count)
+    return priced_count, total_count
+
+
+def savings_scope_from_detail(detail: Mapping[str, object]) -> str:
+    """``savings_scope_phrase`` read off a ``MODEL_MISMATCH`` signal's detail."""
+    return savings_scope_phrase(*_savings_scope_counts(detail))
+
+
+def savings_is_partial(detail: Mapping[str, object]) -> bool:
+    """Whether the signal's savings figure covers fewer than all its invocations --
+    the case ``savings_scope_from_detail`` renders as "k of N" (#675, #676)."""
+    priced, total = _savings_scope_counts(detail)
+    return priced < total
 
 
 def _build_mismatch_signal(

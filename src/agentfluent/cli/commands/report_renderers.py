@@ -18,12 +18,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from agentfluent.cli.formatters.coverage import CoverageFooter, cost_coverage_footer
 from agentfluent.cli.formatters.helpers import (
     GLOBAL_AGENT_LABEL,
     format_agent_duration_cell,
     format_cost,
     format_tokens,
-    trace_coverage_line,
 )
 from agentfluent.config.models import Severity
 from agentfluent.diagnostics.models import Axis
@@ -171,10 +171,23 @@ def render_token_metrics(data: dict[str, Any]) -> str:
     ])
 
     section = "## Token Metrics\n\n" + _md_table(headers, rows, align)
-    coverage_line = trace_coverage_line(data.get("trace_coverage"))
-    if coverage_line is not None:
-        section += f"\n{coverage_line}\n"
+    section += "\n" + render_cost_coverage(
+        cost_coverage_footer(data.get("cost_coverage"), data.get("trace_coverage")),
+    )
     return section
+
+
+def render_cost_coverage(footer: CoverageFooter) -> str:
+    """Markdown form of the cost-coverage footer (#676), same text as ``analyze``."""
+    if footer.status == "full":
+        text = f"{footer.headline}\n"
+    else:
+        text = f"**{footer.headline}**\n"
+        if footer.clauses:
+            text += "\n" + "".join(f"- {clause}\n" for clause in footer.clauses)
+    if footer.attribution is not None:
+        text += f"\n{footer.attribution}\n"
+    return text
 
 
 def render_agent_metrics(data: dict[str, Any]) -> str:

@@ -471,6 +471,12 @@ class OffloadCandidate(BaseModel):
     ``alternative_model``. NEGATIVE means offloading would cost more —
     see ``cost_note``. ``0.0`` when pricing unavailable."""
 
+    cost_priced: bool | None = None
+    """Whether the two cost figures above were priced: ``False`` when the parent
+    or alternative model had no price, so their ``0.0`` means "no estimate",
+    not "free" (#676). ``None`` on candidates from envelopes written before
+    this field existed -- unknown."""
+
     parent_model: str = ""
     """Model id observed on the cluster's parent-thread bursts."""
 

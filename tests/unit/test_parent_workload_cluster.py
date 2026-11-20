@@ -401,6 +401,23 @@ class TestGenerateOffloadCandidate:
         )
         assert candidate.estimated_parent_cost_usd == 0.0
         assert candidate.estimated_savings_usd == 0.0
+        # The 0.0 figures are "no estimate", not "free" (#676).
+        assert candidate.cost_priced is False
+
+    @pytest.mark.parametrize(
+        ("parent_priced", "alt_priced", "expected"),
+        [(True, True, True), (True, False, False), (False, True, False)],
+    )
+    def test_cost_priced_marks_whether_both_models_had_prices(
+        self, parent_priced: bool, alt_priced: bool, expected: bool,
+    ) -> None:
+        candidate = generate_offload_candidate(
+            self._cluster(),
+            parent_model="claude-opus-4-7",
+            parent_pricing=_OPUS if parent_priced else None,
+            alt_pricing=_SONNET if alt_priced else None,
+        )
+        assert candidate.cost_priced is expected
 
     def test_subagent_draft_tools_frequency_filtered(self) -> None:
         # 5/6 bursts use Read; 1/6 uses Bash. Threshold filters Bash out.

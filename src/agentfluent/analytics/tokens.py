@@ -43,6 +43,13 @@ class ModelTokenBreakdown:
     cache_creation_1h_tokens: int = 0
     cost: float = 0.0
     origin: Origin = "parent"
+    unpriced_tokens: int = 0
+    """Tokens in this row whose model had no price at the session's price date,
+    so they are in the token counts and not in ``cost`` (#676/#688). ``cost``
+    stays ``0.0``-defaulted, so this is the only signal that a row's ``0.0`` is
+    "unpriced", not "free". A parent row is all-or-nothing; a subagent row sums
+    the unpriced traces, so one id can be partly unpriced across sessions priced
+    at different dates (#546)."""
 
     @property
     def total_tokens(self) -> int:
@@ -157,7 +164,9 @@ def _populate_costs(
     total = 0.0
     for breakdown in by_model.values():
         cost = _cost_of(breakdown, timestamp)
-        if cost is not None:
+        if cost is None:
+            breakdown.unpriced_tokens = breakdown.total_tokens
+        else:
             breakdown.cost = cost
             total += cost
     return total
@@ -494,7 +503,9 @@ def compute_subagent_token_metrics(
         # Priced per trace and summed (not aggregate-then-price), so per-agent cost
         # reconciles with this row by construction (#646 AC8; see ``_cost_of``).
         cost = price_trace(trace, timestamp=timestamp)
-        if cost is not None:
+        if cost is None:
+            breakdown.unpriced_tokens += usage.total_tokens
+        else:
             breakdown.cost += cost
 
     return list(by_model.values())

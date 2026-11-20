@@ -97,7 +97,7 @@ Phase 1 (`#545`/`#546`/`#547`) shipped in v0.11, so the base⊕overlay seam #547
 |---|-------|------|--------------|------|
 | #548 | catch up README + GLOSSARY + CHANGELOG for v0.12.0 | docs | `docs:` | **#646 + #648 landed** (updates the v0.11 caveat #549 shipped); reflects WS2 lever coverage |
 
-**Critical docs delta:** v0.11 shipped a cost caveat (D057(11)) stating the composite cost is no more accurate than v0.10. Once #646/#648 land, #548 must **update** that caveat (`COST_MODEL.md`, README, GLOSSARY, CHANGELOG) to reflect the corrected quantity, and add the **v0.12.0 CLI/JSON runtime cost caveat** D057(11) deferred from v0.11 (state the corrected value and its coverage). #548 rides the loop's **`docs` graduated route** (D047).
+**Critical docs delta:** v0.11 shipped a cost caveat (D057(11)) stating the composite cost is no more accurate than v0.10. Once #646/#648 land, #548 must **update** that caveat (`COST_MODEL.md`, README, GLOSSARY, CHANGELOG) to reflect the corrected quantity, and **document** the v0.12.0 CLI/JSON runtime cost caveat D057(11) deferred from v0.11. The caveat itself is code, not docs: a `docs:` PR cannot change CLI or JSON rendering, so it ships in **#676 + #688** (recombined 2026-11-20) as the measured `cost_coverage` block and its CLI/report footer (pricing, agent-invocation and diagnostics coverage). #548 documents what that ships. #548 rides the loop's **`docs` graduated route** (D047).
 
 ## 5. Sizing Sanity Check
 

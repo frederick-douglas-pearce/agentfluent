@@ -11,6 +11,7 @@ import typer
 from rich.console import Console
 
 from agentfluent import __version__
+from agentfluent.analytics.cost_coverage import pricing_gap_warning
 from agentfluent.analytics.pipeline import AnalysisResult, analyze_sessions
 from agentfluent.cli._time_args import parse_time_window
 from agentfluent.cli.exit_codes import EXIT_NO_DATA, EXIT_USER_ERROR
@@ -566,6 +567,13 @@ def analyze(
 
     if min_severity is not None:
         _apply_min_severity(result, min_severity)
+
+    # A pricing gap rides in ``warnings[]`` as well as the coverage footer, so a
+    # consumer reading only the warnings never sees an empty list on a run whose
+    # totals omit unpriced tokens (#688).
+    pricing_warning = pricing_gap_warning(result.cost_coverage)
+    if pricing_warning is not None:
+        result.warnings.append(pricing_warning)
 
     result.window = window_metadata
     result.diagnostics_version = __version__
