@@ -797,10 +797,18 @@ def _format_offload_candidates(
 
     console.print("\n[bold]Offload Candidates[/bold]")
     if not visible:
+        # Name hidden rows by cause: an unpriced candidate's 0.0 savings is
+        # "no estimate", not a negative saving (#676).
+        unpriced = sum(1 for c in candidates if c.cost_priced is False)
+        negative = len(candidates) - unpriced
+        hidden = []
+        if negative:
+            hidden.append(f"{negative} negative-savings")
+        if unpriced:
+            hidden.append(f"{unpriced} unpriced (no estimate)")
         console.print(
-            f"[dim]No offload candidates surfaced ({len(candidates)} "
-            "negative-savings rows hidden — pass --show-negative-savings "
-            "to inspect).[/dim]",
+            f"[dim]No offload candidates surfaced ({' and '.join(hidden)} "
+            "rows hidden — pass --show-negative-savings to inspect).[/dim]",
         )
         return
 

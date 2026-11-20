@@ -47,9 +47,9 @@ class ModelTokenBreakdown:
     """Tokens in this row whose model had no price at the session's price date,
     so they are in the token counts and not in ``cost`` (#676/#688). ``cost``
     stays ``0.0``-defaulted, so this is the only signal that a row's ``0.0`` is
-    "unpriced", not "free". A parent row is all-or-nothing; a subagent row sums
-    the unpriced traces, so one id can be partly unpriced across sessions priced
-    at different dates (#546)."""
+    "unpriced", not "free". A per-session parent row is all-or-nothing; a subagent
+    row sums its unpriced traces; and a merged run-level row (either origin) sums
+    sessions priced at different dates (#546), so it can be partly unpriced."""
 
     @property
     def total_tokens(self) -> int:

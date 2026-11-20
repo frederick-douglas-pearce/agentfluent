@@ -28,8 +28,10 @@ class CoverageFooter:
     headline: str
     clauses: list[str] = field(default_factory=list)
     attribution: str | None = None
-    """#648's trace-cohort line: where folded spend went. Not a gap, so it is
-    rendered quietly whatever the status."""
+    """#648's trace-cohort line, rendered quietly whatever the status. The
+    folded cohorts it names (nested, session-spawned) are in the totals, so
+    they are not a gap; unparseable trace files are, and the incomplete form
+    reports them as a clause of their own."""
 
 
 def _count(block: Mapping[str, Any] | None, key: str) -> int:
@@ -39,6 +41,18 @@ def _count(block: Mapping[str, Any] | None, key: str) -> int:
 
 def _plural(n: int, word: str) -> str:
     return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
+def _percent(part: int, whole: int) -> str:
+    """``part`` as a share of ``whole``, one decimal; never rounds a gap to 0% or 100%."""
+    if whole <= 0:
+        return "0%"
+    share = 100 * part / whole
+    if part == whole:
+        return "100%"
+    if part == 0:
+        return "0%"
+    return f"{min(max(share, 0.1), 99.9):.1f}%"
 
 
 def _pricing_clause(pricing: Mapping[str, Any]) -> str | None:
@@ -51,9 +65,11 @@ def _pricing_clause(pricing: Mapping[str, Any]) -> str | None:
         for model_id, tokens in models.items()
         if isinstance(tokens, int)
     )
+    tokens = _count(pricing, "tokens")
     return (
-        f"Pricing: {format_tokens(unpriced)} of {format_tokens(_count(pricing, 'tokens'))} "
-        f"tokens have no price and count as $0. Unpriced tokens by model: {named}."
+        f"Pricing: {format_tokens(unpriced)} of {format_tokens(tokens)} tokens "
+        f"({_percent(unpriced, tokens)}) have no price and count as $0. "
+        f"Unpriced tokens by model: {named}."
     )
 
 
@@ -104,10 +120,23 @@ def _diagnostics_clause(diagnostics: Mapping[str, Any] | None) -> str | None:
             '(see the "k of N" note on each)'
         )
     if unpriced:
-        parts.append(f"{_plural(unpriced, 'estimate')} unavailable because a model has no price")
+        parts.append(
+            f"{_plural(unpriced, 'estimate')} unavailable "
+            "(no priced trace spend for the invocations behind it)"
+        )
     if not parts:
         return None
     return "Diagnostics: " + "; ".join(parts) + "."
+
+
+def _unparseable_clause(trace_coverage: Mapping[str, Any] | None) -> str | None:
+    files = _count((trace_coverage or {}).get("unparseable"), "files")
+    if not files:
+        return None
+    return (
+        f"Subagent traces: {_plural(files, 'trace file')} could not be parsed; "
+        "their spend is unknown and not in any total."
+    )
 
 
 def cost_coverage_footer(
@@ -131,6 +160,7 @@ def cost_coverage_footer(
             _pricing_clause(pricing),
             _invocation_clause(invocations),
             _diagnostics_clause(cost_coverage.get("diagnostics")),
+            _unparseable_clause(trace_coverage),
         )
         if clause is not None
     ]
@@ -139,6 +169,6 @@ def cost_coverage_footer(
 
     headline = (
         f"Cost coverage: full. All {format_tokens(_count(pricing, 'tokens'))} tokens "
-        f"priced; {_invocation_summary(invocations)}."
+        f"(100%) priced; {_invocation_summary(invocations)}."
     )
     return CoverageFooter("full", headline, attribution=attribution)

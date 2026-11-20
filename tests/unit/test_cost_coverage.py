@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -37,7 +38,7 @@ from agentfluent.diagnostics.models import (
     OffloadCandidate,
     SignalType,
 )
-from tests.unit.test_trace_coverage import _UNPRICED_MODEL, _build_session, _tok
+from tests.unit.test_trace_coverage import _NESTED_MAIN, _UNPRICED_MODEL, _build_session, _tok
 
 _PRICED = "claude-haiku-4-5-20251001"
 
@@ -119,6 +120,39 @@ class TestUnpricedTokens:
         assert merged.by_model[0].unpriced_tokens == 9
 
 
+class TestSubagentUnpricedSum:
+    """D7: a subagent row SUMS its unpriced traces (``+=``, not ``=``)."""
+
+    def _metrics(
+        self, monkeypatch: pytest.MonkeyPatch, traces: list[tuple[int, float | None]],
+    ) -> ModelTokenBreakdown:
+        import agentfluent.analytics.tokens as tokens_mod
+
+        fakes = [
+            SimpleNamespace(model="claude-x", tokens=t, cost=c) for t, c in traces
+        ]
+        monkeypatch.setattr(tokens_mod, "trace_counts_as_spend", lambda trace: True)
+        monkeypatch.setattr(
+            tokens_mod, "trace_spend_usage",
+            lambda trace: Usage(input_tokens=trace.tokens, output_tokens=0),
+        )
+        monkeypatch.setattr(tokens_mod, "price_trace", lambda trace, timestamp=None: trace.cost)
+        rows = tokens_mod.compute_subagent_token_metrics(fakes)  # type: ignore[arg-type]
+        assert len(rows) == 1
+        return rows[0]
+
+    def test_two_unpriced_traces_sum(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        row = self._metrics(monkeypatch, [(300, None), (200, None)])
+        assert row.unpriced_tokens == 500
+        assert row.cost == 0.0
+
+    def test_partly_priced_row(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        row = self._metrics(monkeypatch, [(300, None), (200, 1.25), (50, None)])
+        assert row.unpriced_tokens == 350
+        assert 0 < row.unpriced_tokens < row.total_tokens == 550
+        assert row.cost == pytest.approx(1.25)
+
+
 class TestPricingCoverage:
     def test_full_pricing(self) -> None:
         coverage = compute_cost_coverage([_row(_PRICED, 100, unpriced=False)], {}, None)
@@ -179,6 +213,32 @@ class TestInvocationCoverage:
         metrics = compute_agent_metrics([invocation]).by_agent_type["worker"]
         assert (metrics.invocation_count, metrics.linked_invocation_count) == (1, 1)
         assert metrics.spend_invocation_count == 0
+
+    def test_invariant_holds_on_every_row(self, tmp_path: Path) -> None:
+        """``priced <= spend <= linked <= invocation_count`` per agent type."""
+        result = analyze_sessions([_build_session(tmp_path), _NESTED_MAIN])
+        rows = result.agent_metrics.by_agent_type.values()
+        assert rows
+        for m in rows:
+            assert (
+                m.priced_invocation_count <= m.spend_invocation_count
+                <= m.linked_invocation_count <= m.invocation_count
+            ), m.agent_type
+
+    def test_agent_filter_scopes_coverage_like_the_totals(self, tmp_path: Path) -> None:
+        """D8: coverage describes the same scope as the totals it qualifies.
+
+        ``--agent worker`` filters the unpriced session-spawned trace out of
+        ``token_metrics``, so it leaves ``pricing`` too; the unfiltered run
+        reports it.
+        """
+        main = _build_session(tmp_path)
+        unfiltered = analyze_sessions([main]).cost_coverage
+        filtered = analyze_sessions([main], agent_filter="worker").cost_coverage
+        assert unfiltered is not None and filtered is not None
+        assert _UNPRICED_MODEL in unfiltered.pricing.unpriced_models
+        assert filtered.pricing.unpriced_models == {}
+        assert (filtered.invocations.total, filtered.invocations.linked) == (1, 1)
 
     def test_merge_sums_linked_counts(self, tmp_path: Path) -> None:
         main = _build_session(tmp_path)

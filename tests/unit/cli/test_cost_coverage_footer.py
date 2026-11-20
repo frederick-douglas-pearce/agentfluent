@@ -47,7 +47,7 @@ class TestFooterText:
         assert footer.status == "full"
         assert footer.clauses == []
         assert footer.headline == (
-            "Cost coverage: full. All 1,500 tokens priced; "
+            "Cost coverage: full. All 1,500 tokens (100%) priced; "
             "3 of 3 agent invocations linked and trace-priced."
         )
 
@@ -69,7 +69,7 @@ class TestFooterText:
         assert footer.status == "incomplete"
         assert footer.headline == INCOMPLETE_HEADLINE
         assert footer.clauses == [
-            "Pricing: 1,500 of 10,000 tokens have no price and count as $0. "
+            "Pricing: 1,500 of 10,000 tokens (15.0%) have no price and count as $0. "
             "Unpriced tokens by model: claude-a (1,200), claude-b (300)."
         ]
 
@@ -78,7 +78,36 @@ class TestFooterText:
             _coverage(tokens=500, unpriced={"claude-opus-5-5": 500}), None,
         )
         assert footer.status == "incomplete"
-        assert footer.clauses[0].startswith("Pricing: 500 of 500 tokens have no price")
+        assert footer.clauses[0].startswith("Pricing: 500 of 500 tokens (100%) have no price")
+
+    def test_tiny_gap_never_rounds_to_zero_percent(self) -> None:
+        footer = cost_coverage_footer(
+            _coverage(tokens=1_000_000, unpriced={"claude-a": 10}), None,
+        )
+        assert "(0.1%)" in footer.clauses[0]
+
+    def test_near_total_gap_never_rounds_to_hundred_percent(self) -> None:
+        footer = cost_coverage_footer(
+            _coverage(tokens=1_000_000, unpriced={"claude-a": 999_990}), None,
+        )
+        assert "(99.9%)" in footer.clauses[0]
+
+    def test_unparseable_trace_files_are_a_gap(self) -> None:
+        """D1: their spend is in no total, so the footer must not say "full"."""
+        footer = cost_coverage_footer(_coverage(), {"unparseable": {"files": 2}})
+        assert footer.status == "incomplete"
+        assert footer.clauses == [
+            "Subagent traces: 2 trace files could not be parsed; "
+            "their spend is unknown and not in any total."
+        ]
+        assert footer.attribution == "Subagent traces: 2 unparseable (spend unknown)."
+
+    def test_folded_cohorts_alone_are_not_a_gap(self) -> None:
+        footer = cost_coverage_footer(
+            _coverage(), {"nested": {"files": 2, "tokens": 5}, "session_spawned": {"files": 1}},
+        )
+        assert footer.status == "full"
+        assert footer.attribution is not None
 
     def test_partial_link_coverage(self) -> None:
         footer = cost_coverage_footer(_coverage(invocations=(1_347, 1_332, 1_327, 1_327)), None)
@@ -106,8 +135,8 @@ class TestFooterText:
         assert footer.status == "incomplete"
         assert footer.clauses == [
             'Diagnostics: 2 savings figures cover only some of their invocations '
-            '(see the "k of N" note on each); 1 estimate unavailable because a model '
-            "has no price."
+            '(see the "k of N" note on each); 1 estimate unavailable '
+            "(no priced trace spend for the invocations behind it)."
         ]
 
     def test_complete_diagnostics_are_not_a_gap(self) -> None:
@@ -171,6 +200,20 @@ class TestRendered:
             assert clause in analyze
         assert footer.attribution is not None
         assert footer.attribution in report and footer.attribution in analyze
+
+    def test_report_full_coverage_is_a_plain_line_matching_analyze(self) -> None:
+        """D6: the Markdown full branch renders the same headline, not bolded."""
+        result = analyze_sessions([_SDK_MAIN])
+        data = json.loads(result.model_dump_json())
+        footer = cost_coverage_footer(data["cost_coverage"], data["trace_coverage"])
+        assert footer.status == "full"
+        report = render_token_metrics(data)
+        assert footer.headline.startswith("Cost coverage: full.")
+        assert f"\n{footer.headline}\n" in report
+        assert f"**{footer.headline}**" not in report
+        console = Console(record=True, width=400)
+        format_analysis_table(console, result)
+        assert footer.headline in console.export_text()
 
     def test_report_of_legacy_envelope_reads_unknown(self, tmp_path: Path) -> None:
         data = json.loads(analyze_sessions([_build_session(tmp_path)]).model_dump_json())

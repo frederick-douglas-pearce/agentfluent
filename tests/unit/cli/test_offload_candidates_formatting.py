@@ -40,10 +40,12 @@ def _candidate(
     tools_note: str = "",
     dedup_note: str = "",
     matched_agent: str = "",
+    cost_priced: bool | None = True,
 ) -> OffloadCandidate:
     resolved_tools = tools if tools is not None else ["Bash", "Read"]
     return OffloadCandidate(
         name=name,
+        cost_priced=cost_priced,
         description=f"Handles delegations related to: {name}.",
         confidence=confidence,  # type: ignore[arg-type]
         cluster_size=cluster_size,
@@ -184,6 +186,30 @@ class TestOffloadCandidatesSection:
         assert "--show-negative-savings" in text
         for name in ("anti-1", "anti-2", "anti-3"):
             assert name not in text
+
+    def test_unpriced_rows_are_named_by_cause_not_as_negative(self) -> None:
+        """An unpriced candidate's 0.0 savings is "no estimate", not a negative
+        saving, so the hidden-rows footnote counts it separately (#676)."""
+        diag = DiagnosticsResult(
+            offload_candidates=[
+                _candidate(name="anti-1", estimated_savings_usd=-3.40),
+                _candidate(name="nopx-1", estimated_savings_usd=0.0, cost_priced=False),
+                _candidate(name="nopx-2", estimated_savings_usd=0.0, cost_priced=False),
+            ],
+        )
+        text = _render(diag)
+        assert "1 negative-savings and 2 unpriced (no estimate) rows hidden" in text
+
+    def test_only_unpriced_rows_say_nothing_about_negative_savings(self) -> None:
+        diag = DiagnosticsResult(
+            offload_candidates=[
+                _candidate(name="nopx-1", estimated_savings_usd=0.0, cost_priced=False),
+            ],
+        )
+        text = _render(diag)
+        assert "(1 unpriced (no estimate) rows hidden" in text
+        # Only the opt-in flag's name may mention negative savings.
+        assert text.count("negative-savings") == text.count("--show-negative-savings") == 1
 
     def test_show_negative_savings_passthrough_renders_all(self) -> None:
         diag = DiagnosticsResult(

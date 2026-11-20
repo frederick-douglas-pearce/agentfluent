@@ -12,7 +12,7 @@ One run-level block, measured from the run itself (never a static claim):
 - ``diagnostics`` -- dollar figures in diagnostics: model-switch savings
   (``MODEL_MISMATCH``) and offload candidates; how many cover fewer than all their
   invocations (the per-figure "k of N" notes, #675) and how many have no estimate
-  because pricing was missing. ``None`` when diagnostics did not run.
+  at all. ``None`` when diagnostics did not run.
 
 Counts only, no stored percentages, so a consumer can recompute any ratio
 exactly. The #648 trace-file cohorts stay in the sibling ``trace_coverage`` key
@@ -81,9 +81,11 @@ class DiagnosticsCoverage(BaseModel):
     """Model-switch savings priced over fewer than all the signal's invocations."""
 
     unpriced_figures: int = 0
-    """Figures with no estimate because pricing was missing: overspec model-switch
-    signals without savings, and offload candidates priced as unavailable.
-    Underspec signals carry no savings by design and are not counted."""
+    """Figures with no estimate: overspec model-switch signals without savings
+    (no priced trace spend behind them -- a model with no price, or invocations
+    with no trace spend; the two are not told apart here), and offload candidates
+    whose models had no price. Underspec signals carry no savings by design and
+    are not counted."""
 
 
 class CostCoverage(BaseModel):
@@ -152,7 +154,10 @@ def compute_cost_coverage(
 
 def pricing_gap_warning(coverage: CostCoverage | None) -> EnvironmentWarning | None:
     """An environment warning when any token went unpriced, so ``warnings[]`` is
-    never empty on a run whose totals read low because a model had no price."""
+    never empty on a run whose totals read low because a model had no price.
+
+    Appended by the ``analyze`` CLI only; library callers of ``analyze_sessions``
+    read the authoritative signal, ``AnalysisResult.cost_coverage``, directly."""
     if coverage is None or not coverage.pricing.unpriced_tokens:
         return None
     ids = ", ".join(coverage.pricing.unpriced_models)

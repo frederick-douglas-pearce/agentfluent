@@ -1429,3 +1429,24 @@ _Corrected pre-merge — `#664` code review r1. An earlier revision of this head
 **Reference:** `#646` (plan-gate re-measurement, 2026-11-14), `#674`/`#681`, D057(6)/(7), D062(1)/(4), D063(3); ledger `.claude/loop/v0.12.0/issue-646.plan.md` (Value framing table).
 
 ---
+
+## D065: `#676` and `#688` recombined into one cost-coverage disclosure; "% of dollar-weight priced" dropped as ill-defined; `diff` coverage split to its own release-blocking follow-up
+
+**Date:** 2026-11-20
+**Status:** Accepted (maintainer, on SCOPE_AGENT and DESIGN_AGENT rulings)
+
+**Context:** D063(7) split `#676`'s pricing half to `#688` because the spend and link halves were blocked on `#646`/`#648` AC4, which left v0.12.0 with no release-lag cover. Both have since merged. The two issues describe one per-run block and one footer, whose JSON shape D055 freezes at the v0.12 cut.
+
+**Decision:**
+- **(1) SUPERSEDES D063(7): recombined.** `#676` and `#688` ship as one change (PR #712): a measured `AnalysisResult.cost_coverage` block (`pricing`, `invocations`, `diagnostics`) and one `analyze`/`report` footer, closing both issues. The reason for the split no longer holds.
+- **(2) NARROWS D061(7): no "dollar-weight" share.** D061(7) said the disclosure carries "what share of tokens and dollar-weight" unpriced ids carry. An unpriced token has no price, so its dollar weight is undefined unless a rate is imputed, and `#676` AC4 forbids static or imputed claims. The disclosure reports the token count and the percentage of tokens priced, and names the unpriced ids.
+- **(3) Counts are stored; the percentage is rendered.** JSON carries counts only, so any ratio can be recomputed exactly. The footer renders "% of tokens priced" (`#688`'s scope bullet), never rounding a nonzero gap to 0% or 100%.
+- **(4) Coverage follows the totals it qualifies.** `--agent` scopes `cost_coverage` exactly as it scopes `token_metrics`/`by_agent_type`. `--min-severity` (a recommendations display filter) does not.
+- **(5) Legacy envelopes read *unknown*.** `SessionAnalysis.trace_coverage` becomes `TraceCoverage | None = None` before v0.12 ships. A pre-v0.12.0 envelope yields `cost_coverage: null` and the footer "unknown", never "full".
+- **(6) Out of this change:**
+  - `diff`'s two-sided coverage (an unpriced $0 against a priced baseline reads as a cost drop) is a release-blocking v0.12.0 follow-up, sibling to `#543`.
+  - Per-row "$0.00" rendering of unpriced figures, the `no_spend_figures` split, the pricing-warning dedupe items deferred onto `#688` (from `#689`/`#691`), and moving the pricing-gap warning into the pipeline (it stays CLI-only) are follow-ups.
+
+**Reference:** `#676`, `#688`, PR #712, architect issuecomment-7036061638 and the step-8 scope ruling (ledger `.claude/loop/v0.12.0/progress.md`); D055, D029, D057(11), D061(7), D063(7).
+
+---
