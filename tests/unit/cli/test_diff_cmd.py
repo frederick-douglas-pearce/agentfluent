@@ -444,3 +444,169 @@ class TestAxisLabelsInDiffOutput:
         )
         rec_section = result.output[rec_section_start:rec_section_end]
         assert "→" not in rec_section
+
+
+def _agent_data(
+    by_agent: dict[str, dict[str, Any]], *, with_spend: bool,
+) -> dict[str, Any]:
+    data = _data()
+    data["agent_metrics"]["by_agent_type"] = by_agent
+    if with_spend:
+        data["agent_metrics"]["total_agent_spend_tokens"] = sum(
+            e.get("spend_tokens", 0) for e in by_agent.values()
+        )
+    return data
+
+
+def _gp_entry(*, rollup: int, cost: float, spend: int | None) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "invocation_count": 2,
+        "total_tokens": rollup,
+        "estimated_total_cost_usd": cost,
+    }
+    if spend is not None:
+        entry["spend_tokens"] = spend
+        entry["spend_invocation_count"] = 2
+    return entry
+
+
+def _gp_row(section: str) -> str:
+    rows = [line for line in section.splitlines() if " gp " in line]
+    assert len(rows) == 1, section
+    return rows[0]
+
+
+def _cells(row: str) -> list[str]:
+    return [cell.strip() for cell in row.split("│")[1:-1]]
+
+
+def _agent_section(output: str) -> str:
+    assert "Per-Agent Deltas" in output, output
+    return output[output.index("Per-Agent Deltas"):]
+
+
+class TestPerAgentTokensDeltaFromSpend:
+    """#693 -- the Per-Agent Deltas table's Tokens Δ renders trace spend,
+    never the ``toolUseResult.totalTokens`` rollup proxy."""
+
+    def _output(
+        self,
+        runner: CliRunner,
+        cli_app: typer.Typer,
+        tmp_path: Path,
+        baseline: dict[str, Any],
+        current: dict[str, Any],
+        *extra_args: str,
+    ) -> str:
+        b = _write_envelope(tmp_path / "baseline.json", baseline)
+        c = _write_envelope(tmp_path / "current.json", current)
+        result = runner.invoke(
+            cli_app, ["diff", str(b), str(c), "--fail-on", "off", *extra_args],
+        )
+        assert result.exit_code == 0, result.output
+        return result.output
+
+    def _run(
+        self,
+        runner: CliRunner,
+        cli_app: typer.Typer,
+        tmp_path: Path,
+        baseline: dict[str, Any],
+        current: dict[str, Any],
+    ) -> str:
+        return _agent_section(self._output(runner, cli_app, tmp_path, baseline, current))
+
+    def test_renders_spend_delta_not_rollup_delta(
+        self, runner: CliRunner, cli_app: typer.Typer, tmp_path: Path,
+    ) -> None:
+        section = self._run(
+            runner, cli_app, tmp_path,
+            _agent_data({"gp": _gp_entry(rollup=1_000, cost=1.0, spend=2_000)}, with_spend=True),
+            _agent_data(
+                {"gp": _gp_entry(rollup=124_456, cost=13.0, spend=9_502_000)}, with_spend=True,
+            ),
+        )
+        assert "+9,500,000" in section
+        assert "123,456" not in section
+
+    def test_rollup_zero_still_shows_spend_movement(
+        self, runner: CliRunner, cli_app: typer.Typer, tmp_path: Path,
+    ) -> None:
+        # The bug shape: rollup absent (0) on both sides beside a real cost Δ.
+        section = self._run(
+            runner, cli_app, tmp_path,
+            _agent_data({"gp": _gp_entry(rollup=0, cost=1.0, spend=2_000)}, with_spend=True),
+            _agent_data({"gp": _gp_entry(rollup=0, cost=13.0, spend=9_502_000)}, with_spend=True),
+        )
+        row = _gp_row(section)
+        assert "+9,500,000" in row
+        assert "—" not in row
+
+    def test_one_side_legacy_renders_dash(
+        self, runner: CliRunner, cli_app: typer.Typer, tmp_path: Path,
+    ) -> None:
+        section = self._run(
+            runner, cli_app, tmp_path,
+            _agent_data({"gp": _gp_entry(rollup=1_000, cost=1.0, spend=None)}, with_spend=False),
+            _agent_data(
+                {"gp": _gp_entry(rollup=124_456, cost=13.0, spend=9_502_000)}, with_spend=True,
+            ),
+        )
+        assert "—" in section
+        assert "123,456" not in section
+        assert "9,502,000" not in section
+
+    def test_both_sides_legacy_render_dash_in_every_row(
+        self, runner: CliRunner, cli_app: typer.Typer, tmp_path: Path,
+    ) -> None:
+        # Pre-#693 this row showed the rollup delta (+123,456); there is no
+        # rollup fallback by design.
+        section = self._run(
+            runner, cli_app, tmp_path,
+            _agent_data(
+                {
+                    "gp": _gp_entry(rollup=1_000, cost=1.0, spend=None),
+                    "pm": _gp_entry(rollup=500, cost=0.5, spend=None),
+                },
+                with_spend=False,
+            ),
+            _agent_data(
+                {
+                    "gp": _gp_entry(rollup=124_456, cost=13.0, spend=None),
+                    "pm": _gp_entry(rollup=900, cost=0.9, spend=None),
+                },
+                with_spend=False,
+            ),
+        )
+        assert "123,456" not in section
+        assert "+400" not in section
+        rows = [line for line in section.splitlines() if " gp " in line or " pm " in line]
+        assert len(rows) == 2, section
+        assert all("—" in row for row in rows), section
+
+    def test_measured_zero_spend_delta_renders_zero_not_dash(
+        self, runner: CliRunner, cli_app: typer.Typer, tmp_path: Path,
+    ) -> None:
+        # Spend unchanged, cost moved (keeps the row): a measured 0, not unknown.
+        section = self._run(
+            runner, cli_app, tmp_path,
+            _agent_data({"gp": _gp_entry(rollup=0, cost=1.0, spend=5_000)}, with_spend=True),
+            _agent_data({"gp": _gp_entry(rollup=0, cost=3.0, spend=5_000)}, with_spend=True),
+        )
+        row = _gp_row(section)
+        assert "—" not in row
+        assert _cells(row)[2] == "0", row
+
+    def test_rollup_only_change_row_hidden_unless_verbose(
+        self, runner: CliRunner, cli_app: typer.Typer, tmp_path: Path,
+    ) -> None:
+        baseline = _agent_data(
+            {"gp": _gp_entry(rollup=300, cost=1.0, spend=5_000)}, with_spend=True,
+        )
+        current = _agent_data(
+            {"gp": _gp_entry(rollup=700, cost=1.0, spend=5_000)}, with_spend=True,
+        )
+        quiet = self._output(runner, cli_app, tmp_path, baseline, current)
+        assert "Per-Agent Deltas" not in quiet
+        verbose = self._output(runner, cli_app, tmp_path, baseline, current, "--verbose")
+        assert _cells(_gp_row(_agent_section(verbose)))[2] == "0"

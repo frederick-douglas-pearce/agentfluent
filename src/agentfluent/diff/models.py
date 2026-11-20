@@ -138,8 +138,28 @@ class AgentTypeDelta(BaseModel):
     invocation_count_delta: int = 0
 
     baseline_total_tokens: int = 0
+    """Baseline ``toolUseResult.totalTokens`` rollup -- a context-size proxy,
+    not spend (D057(1)), absent on most current invocations (D062(4)). Kept
+    with its original meaning because it is public JSON (D055); not rendered
+    in the Per-Agent Deltas table, whose Tokens Δ shows spend (#693)."""
     current_total_tokens: int = 0
+    """Current-side rollup; see ``baseline_total_tokens``."""
     total_tokens_delta: int = 0
+    """``current_total_tokens - baseline_total_tokens`` (rollup, JSON only)."""
+
+    baseline_spend_tokens: int | None = None
+    """Baseline trace-sourced spend (``AgentTypeMetrics.spend_tokens``,
+    #646). ``None`` means **unknown, never 0**: the side's envelope predates
+    #646 (no ``total_agent_spend_tokens``), or the agent type's entry on that
+    side has no trace-covered invocation (``spend_invocation_count == 0``, no
+    ``spend_tokens`` key, or a null entry). An agent type with no entry on a
+    spend-carrying side is a measured ``0`` there."""
+    current_spend_tokens: int | None = None
+    """Current-side spend; same ``None`` contract as ``baseline_spend_tokens``."""
+
+    spend_tokens_delta: int | None = None
+    """``current_spend_tokens - baseline_spend_tokens``; ``None`` iff either
+    side is ``None`` (#693)."""
 
     baseline_estimated_cost_usd: float = 0.0
     current_estimated_cost_usd: float = 0.0
@@ -161,16 +181,22 @@ class AgentTypeDelta(BaseModel):
 
     @property
     def has_change(self) -> bool:
-        """``True`` iff any tracked metric delta is nonzero.
+        """``True`` iff the invocation, spend, cost or total-model-turns delta
+        is nonzero.
 
-        Centralizes the "is this row worth showing" policy so the diff
-        renderer's zero-row filter stays stable as new metric deltas are
-        added — each new metric extends this one predicate instead of
-        growing an OR-chain at the call site. A plain ``@property`` (not a
-        ``computed_field``) so it stays out of the JSON envelope."""
+        Centralizes the "is this row worth showing" policy for the diff
+        renderer's zero-row filter. The aim is for the predicate to track the
+        table's *rendered* columns: the rollup ``total_tokens_delta`` is
+        deliberately excluded because Tokens Δ renders ``spend_tokens_delta``
+        (#693) -- a rollup-only change would otherwise show a row whose
+        visible cells all read zero. One known exception remains:
+        ``total_model_turns_delta`` still counts although the table renders
+        an avg-turns Δ, so a row can pass with every visible cell at zero
+        (#711). A plain ``@property`` (not a ``computed_field``) so it stays
+        out of the JSON envelope."""
         return bool(
             self.invocation_count_delta
-            or self.total_tokens_delta
+            or self.spend_tokens_delta
             or self.estimated_cost_delta_usd
             or self.total_model_turns_delta,
         )

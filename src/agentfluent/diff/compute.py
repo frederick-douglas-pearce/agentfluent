@@ -378,8 +378,15 @@ def _diff_agent_metrics(
     baseline: dict[str, Any],
     current: dict[str, Any],
 ) -> list[AgentTypeDelta]:
-    baseline_by = (baseline.get("agent_metrics") or {}).get("by_agent_type") or {}
-    current_by = (current.get("agent_metrics") or {}).get("by_agent_type") or {}
+    baseline_am = baseline.get("agent_metrics") or {}
+    current_am = current.get("agent_metrics") or {}
+    baseline_by = baseline_am.get("by_agent_type") or {}
+    current_by = current_am.get("by_agent_type") or {}
+    # Every post-#646 envelope serializes ``total_agent_spend_tokens``
+    # (``AgentMetrics`` field with a default), so its presence marks a side
+    # whose envelope can carry per-agent spend at all.
+    baseline_has_spend = "total_agent_spend_tokens" in baseline_am
+    current_has_spend = "total_agent_spend_tokens" in current_am
 
     types = sorted(set(baseline_by.keys()) | set(current_by.keys()))
     deltas: list[AgentTypeDelta] = []
@@ -393,6 +400,13 @@ def _diff_agent_metrics(
         c_tok = int(c.get("total_tokens", 0) or 0)
         b_cost = float(b.get("estimated_total_cost_usd", 0.0) or 0.0)
         c_cost = float(c.get("estimated_total_cost_usd", 0.0) or 0.0)
+        b_spend = _side_spend_tokens(
+            b if agent_type in baseline_by else None, has_spend=baseline_has_spend,
+        )
+        c_spend = _side_spend_tokens(
+            c if agent_type in current_by else None, has_spend=current_has_spend,
+        )
+        spend_delta = None if b_spend is None or c_spend is None else c_spend - b_spend
 
         # Model-turn totals (#467). Legacy-envelope fallback: pre-turn
         # entries lack both keys and resolve to 0, so the delta shows the
@@ -416,6 +430,9 @@ def _diff_agent_metrics(
                 baseline_total_tokens=b_tok,
                 current_total_tokens=c_tok,
                 total_tokens_delta=c_tok - b_tok,
+                baseline_spend_tokens=b_spend,
+                current_spend_tokens=c_spend,
+                spend_tokens_delta=spend_delta,
                 baseline_estimated_cost_usd=b_cost,
                 current_estimated_cost_usd=c_cost,
                 estimated_cost_delta_usd=c_cost - b_cost,
@@ -427,3 +444,24 @@ def _diff_agent_metrics(
             ),
         )
     return deltas
+
+
+def _side_spend_tokens(entry: dict[str, Any] | None, *, has_spend: bool) -> int | None:
+    """One side's trace spend for an agent type (#693); ``None`` = unknown.
+
+    - envelope predates #646 (``has_spend`` false) -> ``None``;
+    - agent type has no entry on this side (``entry is None``, decided by key
+      membership by the caller) -> ``0`` (it did not run: a measured zero);
+    - entry present but no trace-covered invocation (``spend_invocation_count
+      == 0``, no ``spend_tokens`` key, or a null entry the caller passed as
+      ``{}``) -> ``None``, matching ``analyze``'s "—"
+      (``report_renderers``) -- unknown, never a measured 0;
+    - otherwise -> ``spend_tokens`` (partial coverage stays numeric).
+    """
+    if not has_spend:
+        return None
+    if entry is None:
+        return 0
+    if "spend_tokens" not in entry or not int(entry.get("spend_invocation_count", 0) or 0):
+        return None
+    return int(entry.get("spend_tokens", 0) or 0)
