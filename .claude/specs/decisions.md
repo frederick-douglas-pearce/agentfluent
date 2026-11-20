@@ -1444,8 +1444,8 @@ _Corrected pre-merge — `#664` code review r1. An earlier revision of this head
 - **(4) Coverage follows the totals it qualifies.** `--agent` scopes `cost_coverage` exactly as it scopes `token_metrics`/`by_agent_type`. `--min-severity` (a recommendations display filter) does not.
 - **(5) Legacy envelopes read *unknown*.** `SessionAnalysis.trace_coverage` becomes `TraceCoverage | None = None` before v0.12 ships. A pre-v0.12.0 envelope yields `cost_coverage: null` and the footer "unknown", never "full".
 - **(6) Out of this change:**
-  - `diff`'s two-sided coverage (an unpriced $0 against a priced baseline reads as a cost drop) is a release-blocking v0.12.0 follow-up, sibling to `#543`.
-  - Per-row "$0.00" rendering of unpriced figures, the `no_spend_figures` split, the pricing-warning dedupe items deferred onto `#688` (from `#689`/`#691`), and moving the pricing-gap warning into the pipeline (it stays CLI-only) are follow-ups.
+  - `diff`'s two-sided coverage (an unpriced $0 against a priced baseline reads as a cost drop) is a release-blocking v0.12.0 follow-up (`#713`), sibling to `#543`.
+  - Per-row "$0.00" rendering of unpriced figures (`#715`), the `no_spend_figures` split (`#716`), the pricing-warning dedupe items deferred onto `#688` from `#689`/`#691` (`#714`), and moving the pricing-gap warning into the pipeline, where it stays CLI-only for now (`#717`), are follow-ups.
 
 **Reference:** `#676`, `#688`, PR #712, architect issuecomment-7036061638 and the step-8 scope ruling (ledger `.claude/loop/v0.12.0/progress.md`); D055, D029, D057(11), D061(7), D063(7).
 

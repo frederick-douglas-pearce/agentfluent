@@ -66,10 +66,11 @@ def _pricing_clause(pricing: Mapping[str, Any]) -> str | None:
         if isinstance(tokens, int)
     )
     tokens = _count(pricing, "tokens")
+    # The priced share, the same metric the full headline shows "(100%)" of.
     return (
-        f"Pricing: {format_tokens(unpriced)} of {format_tokens(tokens)} tokens "
-        f"({_percent(unpriced, tokens)}) have no price and count as $0. "
-        f"Unpriced tokens by model: {named}."
+        f"Pricing: {_percent(tokens - unpriced, tokens)} of tokens priced; "
+        f"{format_tokens(unpriced)} of {format_tokens(tokens)} tokens have no price "
+        f"and count as $0. Unpriced tokens by model: {named}."
     )
 
 
@@ -121,8 +122,8 @@ def _diagnostics_clause(diagnostics: Mapping[str, Any] | None) -> str | None:
         )
     if unpriced:
         parts.append(
-            f"{_plural(unpriced, 'estimate')} unavailable "
-            "(no priced trace spend for the invocations behind it)"
+            f"{_plural(unpriced, 'estimate')} unavailable (a model involved has no "
+            "price, or the invocations behind the figure have no trace spend)"
         )
     if not parts:
         return None

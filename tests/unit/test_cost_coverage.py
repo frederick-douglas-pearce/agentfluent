@@ -38,7 +38,18 @@ from agentfluent.diagnostics.models import (
     OffloadCandidate,
     SignalType,
 )
-from tests.unit.test_trace_coverage import _NESTED_MAIN, _UNPRICED_MODEL, _build_session, _tok
+from tests.unit.test_trace_coverage import (
+    _NESTED_MAIN,
+    _UNPRICED_MODEL,
+    _build_session,
+    _result,
+    _spawn,
+    _tok,
+    _write,
+)
+from tests.unit.test_trace_coverage import (
+    _assistant as _trace_assistant,
+)
 
 _PRICED = "claude-haiku-4-5-20251001"
 
@@ -224,6 +235,44 @@ class TestInvocationCoverage:
                 m.priced_invocation_count <= m.spend_invocation_count
                 <= m.linked_invocation_count <= m.invocation_count
             ), m.agent_type
+
+    def test_strict_chain_on_a_row_with_every_gap(self, tmp_path: Path) -> None:
+        """r2.recheck.3: each link of ``priced < spend < linked < total`` is strict
+        on one row, so a counter that ignores price, ignores the model response,
+        or ignores the link fails here."""
+        main = tmp_path / "chain.jsonl"
+        _write(main, [
+            {"type": "user", "message": {"role": "user", "content": "go"},
+             "timestamp": "2026-11-01T00:00:00Z"},
+            _trace_assistant("msg_main", "main1", [
+                *_spawn("toolu_p", "worker"), *_spawn("toolu_u", "worker"),
+                *_spawn("toolu_n", "worker"), *_spawn("toolu_m", "worker"),
+            ], sidechain=False),
+            _result("toolu_p", "p1", "worker"),
+            _result("toolu_u", "u1", "worker"),
+            _result("toolu_n", "n1", "worker"),
+            # toolu_m never returns: that invocation has no linked trace.
+        ])
+        subagents = tmp_path / "chain" / "subagents"
+        subagents.mkdir(parents=True)
+        traces = {
+            "p1": [_trace_assistant("msg_p1", "w1")],
+            "u1": [_trace_assistant("msg_u1", "fA", model=_UNPRICED_MODEL)],
+            # No assistant turn: linked, but no model response, so no spend.
+            "n1": [{"type": "user", "isSidechain": True,
+                    "message": {"role": "user", "content": "task"},
+                    "timestamp": "2026-11-01T00:00:01Z"}],
+        }
+        for agent_id, lines in traces.items():
+            _write(subagents / f"agent-{agent_id}.jsonl", lines)
+            (subagents / f"agent-{agent_id}.meta.json").write_text(json.dumps({
+                "agentType": "worker", "toolUseId": f"toolu_{agent_id[0]}",
+            }))
+        row = analyze_sessions([main]).agent_metrics.by_agent_type["worker"]
+        assert (
+            row.priced_invocation_count, row.spend_invocation_count,
+            row.linked_invocation_count, row.invocation_count,
+        ) == (1, 2, 3, 4)
 
     def test_agent_filter_scopes_coverage_like_the_totals(self, tmp_path: Path) -> None:
         """D8: coverage describes the same scope as the totals it qualifies.

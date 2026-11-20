@@ -1818,7 +1818,7 @@ otherwise. A pricing gap also adds an `unpriced_tokens` entry to
 
 ```
 Cost coverage: INCOMPLETE. Dollar figures leave out the following:
-  - Pricing: 1.2M of 40.0M tokens (3.0%) have no price and count as $0. Unpriced tokens by model: claude-new-model (1.2M).
+  - Pricing: 97.0% of tokens priced; 1.2M of 40.0M tokens have no price and count as $0. Unpriced tokens by model: claude-new-model (1.2M).
   - Agent cost: per-agent cost covers 1,327 of 1,347 agent invocations; 15 with no linked trace (spend unknown); 5 whose trace has no model response (no spend).
 ```
 

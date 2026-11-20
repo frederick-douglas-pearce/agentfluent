@@ -69,7 +69,8 @@ class TestFooterText:
         assert footer.status == "incomplete"
         assert footer.headline == INCOMPLETE_HEADLINE
         assert footer.clauses == [
-            "Pricing: 1,500 of 10,000 tokens (15.0%) have no price and count as $0. "
+            "Pricing: 85.0% of tokens priced; 1,500 of 10,000 tokens have no price "
+            "and count as $0. "
             "Unpriced tokens by model: claude-a (1,200), claude-b (300)."
         ]
 
@@ -78,19 +79,41 @@ class TestFooterText:
             _coverage(tokens=500, unpriced={"claude-opus-5-5": 500}), None,
         )
         assert footer.status == "incomplete"
-        assert footer.clauses[0].startswith("Pricing: 500 of 500 tokens (100%) have no price")
-
-    def test_tiny_gap_never_rounds_to_zero_percent(self) -> None:
-        footer = cost_coverage_footer(
-            _coverage(tokens=1_000_000, unpriced={"claude-a": 10}), None,
+        assert footer.clauses[0].startswith(
+            "Pricing: 0% of tokens priced; 500 of 500 tokens have no price",
         )
-        assert "(0.1%)" in footer.clauses[0]
 
-    def test_near_total_gap_never_rounds_to_hundred_percent(self) -> None:
+    def test_tiny_gap_never_reads_as_fully_priced(self) -> None:
+        footer = cost_coverage_footer(
+            _coverage(tokens=100_000, unpriced={"claude-a": 1}), None,
+        )
+        assert footer.clauses[0].startswith("Pricing: 99.9% of tokens priced;")
+        assert "100%" not in footer.clauses[0]
+
+    def test_near_total_gap_never_reads_as_unpriced_entirely(self) -> None:
         footer = cost_coverage_footer(
             _coverage(tokens=1_000_000, unpriced={"claude-a": 999_990}), None,
         )
-        assert "(99.9%)" in footer.clauses[0]
+        assert footer.clauses[0].startswith("Pricing: 0.1% of tokens priced;")
+
+    def test_unpriced_offload_estimate_names_both_causes(self) -> None:
+        """r2.recheck.1: an unpriced offload candidate has no trace spend behind
+        it, so the clause must not attribute its missing estimate to traces alone."""
+        from agentfluent.analytics.cost_coverage import compute_cost_coverage
+        from agentfluent.diagnostics.models import DiagnosticsResult, OffloadCandidate
+
+        candidate = OffloadCandidate(
+            name="n", description="d", confidence="low", cluster_size=5,
+            cohesion_score=0.5, alternative_model="claude-sonnet-4-6", cost_priced=False,
+        )
+        block = compute_cost_coverage(
+            [], {}, DiagnosticsResult(offload_candidates=[candidate]),
+        ).model_dump()
+        footer = cost_coverage_footer(block, None)
+        assert footer.clauses == [
+            "Diagnostics: 1 estimate unavailable (a model involved has no price, "
+            "or the invocations behind the figure have no trace spend)."
+        ]
 
     def test_unparseable_trace_files_are_a_gap(self) -> None:
         """D1: their spend is in no total, so the footer must not say "full"."""
@@ -135,8 +158,9 @@ class TestFooterText:
         assert footer.status == "incomplete"
         assert footer.clauses == [
             'Diagnostics: 2 savings figures cover only some of their invocations '
-            '(see the "k of N" note on each); 1 estimate unavailable '
-            "(no priced trace spend for the invocations behind it)."
+            '(see the "k of N" note on each); 1 estimate unavailable (a model '
+            "involved has no price, or the invocations behind the figure have no "
+            "trace spend)."
         ]
 
     def test_complete_diagnostics_are_not_a_gap(self) -> None:
