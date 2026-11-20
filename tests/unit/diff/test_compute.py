@@ -396,6 +396,197 @@ class TestAgentTypeDeltaHasChange:
         assert delta.invocation_count_delta == 0
         assert delta.has_change is True
 
+    def test_spend_only_delta_counts_as_change(self) -> None:
+        # Rollup, cost, invocations and turns identical; only trace spend moved.
+        result = compute_diff(
+            _spend_envelope({"pm": _spend_entry(spend_tokens=1_000)}),
+            _spend_envelope({"pm": _spend_entry(spend_tokens=5_000)}),
+        )
+        delta = next(d for d in result.by_agent_type if d.agent_type == "pm")
+        assert delta.total_tokens_delta == 0
+        assert delta.estimated_cost_delta_usd == 0
+        assert delta.spend_tokens_delta == 4_000
+        assert delta.has_change is True
+
+
+def _spend_entry(
+    *,
+    spend_tokens: int,
+    spend_invocation_count: int = 1,
+    invocation_count: int = 1,
+    total_tokens: int = 0,
+    cost: float = 0.10,
+) -> dict[str, Any]:
+    """A post-#646 ``by_agent_type`` entry carrying trace spend."""
+    return {
+        "invocation_count": invocation_count,
+        "total_tokens": total_tokens,
+        "estimated_total_cost_usd": cost,
+        "spend_tokens": spend_tokens,
+        "spend_invocation_count": spend_invocation_count,
+    }
+
+
+def _spend_envelope(by_agent: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """A post-#646 envelope: ``agent_metrics`` serializes
+    ``total_agent_spend_tokens``, the marker ``compute`` keys on."""
+    envelope = _envelope(by_agent=by_agent)
+    envelope["agent_metrics"]["total_agent_spend_tokens"] = sum(
+        e.get("spend_tokens", 0) for e in by_agent.values()
+    )
+    return envelope
+
+
+def _agent_delta(result: DiffResult, agent_type: str) -> Any:
+    return next(d for d in result.by_agent_type if d.agent_type == agent_type)
+
+
+class TestAgentSpendDeltas:
+    """#693 -- per-agent spend deltas, additive beside the rollup fields."""
+
+    def test_both_sides_carry_spend(self) -> None:
+        # Rollup is 0 on both sides (the current-format norm, D062(4)); the
+        # spend delta is the real movement and the rollup fields are untouched.
+        result = compute_diff(
+            _spend_envelope({"gp": _spend_entry(spend_tokens=2_000, total_tokens=0)}),
+            _spend_envelope({"gp": _spend_entry(spend_tokens=9_500, total_tokens=0)}),
+        )
+        delta = _agent_delta(result, "gp")
+        assert delta.baseline_spend_tokens == 2_000
+        assert delta.current_spend_tokens == 9_500
+        assert delta.spend_tokens_delta == 7_500
+        assert delta.baseline_total_tokens == 0
+        assert delta.total_tokens_delta == 0
+
+    def test_rollup_fields_keep_rollup_meaning(self) -> None:
+        result = compute_diff(
+            _spend_envelope({"gp": _spend_entry(spend_tokens=2_000, total_tokens=300)}),
+            _spend_envelope({"gp": _spend_entry(spend_tokens=9_500, total_tokens=700)}),
+        )
+        delta = _agent_delta(result, "gp")
+        assert delta.baseline_total_tokens == 300
+        assert delta.current_total_tokens == 700
+        assert delta.total_tokens_delta == 400
+        assert delta.spend_tokens_delta == 7_500
+
+    def test_legacy_baseline_yields_none_delta(self) -> None:
+        legacy = _envelope(by_agent={"gp": _agent_entry()})
+        result = compute_diff(legacy, _spend_envelope({"gp": _spend_entry(spend_tokens=9_500)}))
+        delta = _agent_delta(result, "gp")
+        assert delta.baseline_spend_tokens is None
+        assert delta.current_spend_tokens == 9_500
+        assert delta.spend_tokens_delta is None
+
+    def test_legacy_current_yields_none_delta(self) -> None:
+        legacy = _envelope(by_agent={"gp": _agent_entry()})
+        result = compute_diff(_spend_envelope({"gp": _spend_entry(spend_tokens=2_000)}), legacy)
+        delta = _agent_delta(result, "gp")
+        assert delta.baseline_spend_tokens == 2_000
+        assert delta.current_spend_tokens is None
+        assert delta.spend_tokens_delta is None
+
+    def test_both_sides_legacy_all_spend_fields_none(self) -> None:
+        result = compute_diff(
+            _envelope(by_agent={"gp": _agent_entry()}),
+            _envelope(by_agent={"gp": _agent_entry(invocation_count=3)}),
+        )
+        delta = _agent_delta(result, "gp")
+        assert delta.baseline_spend_tokens is None
+        assert delta.current_spend_tokens is None
+        assert delta.spend_tokens_delta is None
+
+    def test_type_absent_on_one_side_is_measured_zero(self) -> None:
+        # Both envelopes carry spend; ``explore`` only ran in current.
+        result = compute_diff(
+            _spend_envelope({"gp": _spend_entry(spend_tokens=1_000)}),
+            _spend_envelope({
+                "gp": _spend_entry(spend_tokens=1_000),
+                "explore": _spend_entry(spend_tokens=4_200),
+            }),
+        )
+        new_type = _agent_delta(result, "explore")
+        assert new_type.baseline_spend_tokens == 0
+        assert new_type.spend_tokens_delta == 4_200
+
+        gone = compute_diff(
+            _spend_envelope({"explore": _spend_entry(spend_tokens=4_200)}),
+            _spend_envelope({}),
+        )
+        assert _agent_delta(gone, "explore").current_spend_tokens == 0
+        assert _agent_delta(gone, "explore").spend_tokens_delta == -4_200
+
+    def test_zero_coverage_entry_is_unknown_not_zero(self) -> None:
+        # Ran on the baseline side with no trace-covered invocation: its 0
+        # ``spend_tokens`` is unknown, so the delta must not read as +9,500.
+        uncovered = _spend_entry(spend_tokens=0, spend_invocation_count=0, invocation_count=4)
+        result = compute_diff(
+            _spend_envelope({"gp": uncovered}),
+            _spend_envelope({"gp": _spend_entry(spend_tokens=9_500)}),
+        )
+        delta = _agent_delta(result, "gp")
+        assert delta.baseline_spend_tokens is None
+        assert delta.current_spend_tokens == 9_500
+        assert delta.spend_tokens_delta is None
+
+    def test_entry_without_spend_key_in_spend_envelope_is_unknown(self) -> None:
+        entry = _spend_entry(spend_tokens=5)
+        del entry["spend_tokens"]
+        result = compute_diff(
+            _spend_envelope({"gp": entry}),
+            _spend_envelope({"gp": _spend_entry(spend_tokens=9_500)}),
+        )
+        assert _agent_delta(result, "gp").baseline_spend_tokens is None
+
+    def test_partial_coverage_stays_numeric(self) -> None:
+        partial = _spend_entry(spend_tokens=3_000, spend_invocation_count=1, invocation_count=5)
+        result = compute_diff(
+            _spend_envelope({"gp": partial}),
+            _spend_envelope({"gp": _spend_entry(spend_tokens=4_000)}),
+        )
+        assert _agent_delta(result, "gp").spend_tokens_delta == 1_000
+
+    @pytest.mark.parametrize(
+        ("baseline_spend", "current_spend"),
+        [(None, None), (None, 7), (7, None), (3, 10), (0, 0)],
+    )
+    def test_delta_is_none_iff_either_side_is_none(
+        self, baseline_spend: int | None, current_spend: int | None,
+    ) -> None:
+        def side(spend: int | None) -> dict[str, Any]:
+            if spend is None:
+                return _envelope(by_agent={"gp": _agent_entry()})
+            return _spend_envelope({"gp": _spend_entry(spend_tokens=spend)})
+
+        delta = _agent_delta(compute_diff(side(baseline_spend), side(current_spend)), "gp")
+        if baseline_spend is None or current_spend is None:
+            assert delta.spend_tokens_delta is None
+        else:
+            assert delta.spend_tokens_delta == current_spend - baseline_spend
+
+    def test_json_shape_is_additive(self) -> None:
+        pre_693_keys = {
+            "agent_type", "is_builtin",
+            "baseline_invocation_count", "current_invocation_count", "invocation_count_delta",
+            "baseline_total_tokens", "current_total_tokens", "total_tokens_delta",
+            "baseline_estimated_cost_usd", "current_estimated_cost_usd",
+            "estimated_cost_delta_usd",
+            "baseline_total_model_turns", "current_total_model_turns",
+            "total_model_turns_delta",
+            "baseline_invocations_with_turns", "current_invocations_with_turns",
+        }
+        result = compute_diff(
+            _envelope(by_agent={"gp": _agent_entry()}),
+            _spend_envelope({"gp": _spend_entry(spend_tokens=9_500, total_tokens=1_000)}),
+        )
+        dumped = result.model_dump(mode="json")["by_agent_type"][0]
+        assert set(dumped) == pre_693_keys | {
+            "baseline_spend_tokens", "current_spend_tokens", "spend_tokens_delta",
+        }
+        assert dumped["total_tokens_delta"] == 0  # rollup 1000 - 1000, unchanged meaning
+        assert dumped["baseline_spend_tokens"] is None
+        assert dumped["spend_tokens_delta"] is None
+        assert dumped["current_spend_tokens"] == 9_500
+
 
 def _agent_entry(
     *,

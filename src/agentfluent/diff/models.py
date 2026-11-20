@@ -140,6 +140,22 @@ class AgentTypeDelta(BaseModel):
     baseline_total_tokens: int = 0
     current_total_tokens: int = 0
     total_tokens_delta: int = 0
+    """The ``toolUseResult.totalTokens`` rollup -- a context-size proxy, not
+    spend (D057(1)), absent on most current invocations (D062(4)). Kept with
+    its original meaning because it is public JSON (D055); the table's
+    Tokens Δ renders ``spend_tokens_delta`` instead (#693)."""
+
+    baseline_spend_tokens: int | None = None
+    current_spend_tokens: int | None = None
+    """Trace-sourced spend (``AgentTypeMetrics.spend_tokens``, #646) on each
+    side. ``None`` means **unknown, never 0**: the side's envelope predates
+    #646 (no ``total_agent_spend_tokens``), or the agent type ran on that
+    side with no trace-covered invocation (``spend_invocation_count == 0``).
+    An agent type absent from one side's envelope is a measured ``0`` there."""
+
+    spend_tokens_delta: int | None = None
+    """``current_spend_tokens - baseline_spend_tokens``; ``None`` iff either
+    side is ``None`` (#693)."""
 
     baseline_estimated_cost_usd: float = 0.0
     current_estimated_cost_usd: float = 0.0
@@ -171,6 +187,7 @@ class AgentTypeDelta(BaseModel):
         return bool(
             self.invocation_count_delta
             or self.total_tokens_delta
+            or self.spend_tokens_delta
             or self.estimated_cost_delta_usd
             or self.total_model_turns_delta,
         )

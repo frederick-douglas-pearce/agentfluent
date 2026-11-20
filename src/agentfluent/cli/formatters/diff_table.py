@@ -339,7 +339,7 @@ def _render_agent_metrics(
         table.add_row(
             row.agent_type,
             _signed_int(row.invocation_count_delta),
-            _signed_int(row.total_tokens_delta),
+            _spend_delta_cell(row.spend_tokens_delta),
             _signed_cost(row.estimated_cost_delta_usd),
             _signed_float(avg_turns_delta, precision=2),
         )
@@ -424,6 +424,12 @@ def _signed(
 
 def _signed_int(value: int) -> str:
     return _signed(value, f"{abs(value):,}")
+
+
+def _spend_delta_cell(value: int | None) -> str:
+    """Per-agent Tokens Δ from trace spend (#693). ``None`` (either side's
+    spend unknown) renders "—", never ``+0`` and never the rollup delta."""
+    return "—" if value is None else _signed_int(value)
 
 
 def _signed_cost(value: float) -> str:
