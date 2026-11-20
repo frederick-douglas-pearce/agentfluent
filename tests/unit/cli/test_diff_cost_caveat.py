@@ -41,18 +41,24 @@ class TestCostCaveatLines:
         assert "cost method 1 → 2" in lines[1]
         assert "genai-prices" not in lines[1]
 
+    def test_both_components_named_when_both_change(self) -> None:
+        lines = _cost_caveat_lines(
+            _result(_stamp(pin="0.1.4", method=1), _stamp(method=2)),
+        )
+        assert "genai-prices 0.1.4 → 0.2.3; cost method 1 → 2" in lines[1]
+
     def test_unknown_baseline_names_the_side(self) -> None:
         lines = _cost_caveat_lines(_result(None, _stamp()))
         assert "cost model unknown" in lines[1]
-        assert "baseline snapshot predates the cost-model stamp" in lines[1]
+        assert "baseline snapshot has no readable cost-model stamp" in lines[1]
 
     def test_unknown_current_names_the_side(self) -> None:
         lines = _cost_caveat_lines(_result(_stamp(), None))
-        assert "current snapshot predates the cost-model stamp" in lines[1]
+        assert "current snapshot has no readable cost-model stamp" in lines[1]
 
     def test_both_unstamped(self) -> None:
         lines = _cost_caveat_lines(_result(None, None))
-        assert "neither snapshot records its cost model" in lines[1]
+        assert "neither snapshot has a readable cost-model stamp" in lines[1]
 
     def test_incomplete_stamp(self) -> None:
         lines = _cost_caveat_lines(_result(_stamp(pin=None), _stamp()))

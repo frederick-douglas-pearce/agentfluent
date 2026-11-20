@@ -25,27 +25,17 @@ def _components(stamp: CostModelStamp) -> dict[CostModelChange, object]:
 def cost_model_status(
     baseline: CostModelStamp | None,
     current: CostModelStamp | None,
-    *,
-    baseline_diagnostics_version: str | None,
-    current_diagnostics_version: str | None,
 ) -> CostModelStatus:
     """Classify whether two envelopes were priced by the same cost model.
 
     - Both stamped: ``mismatch`` if any component differs; ``unknown`` if no component differs
       but one is ``None`` on either side (a missing value is never equal to anything);
       otherwise ``match``.
-    - Neither stamped: ``match`` when both ``diagnostics_version`` values are present and
-      equal -- the same AgentFluent release prices with the same exactly-pinned rate table and
-      the same code -- otherwise ``unknown``.
-    - Exactly one stamped: ``unknown``.
+    - Either side without a readable stamp (absent, null or malformed): ``unknown``. This
+      holds even when both sides are unstamped and share a ``diagnostics_version``: the
+      package version does not identify the cost model, because unreleased builds keep the
+      last release's version string while their pin and cost method move.
     """
-    if baseline is None and current is None:
-        if (
-            baseline_diagnostics_version is not None
-            and baseline_diagnostics_version == current_diagnostics_version
-        ):
-            return "match"
-        return "unknown"
     if baseline is None or current is None:
         return "unknown"
     if cost_model_changes(baseline, current):

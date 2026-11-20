@@ -24,8 +24,12 @@ unchanged session while the genai-prices pin stays put:
 
 Additive curation (an id that was unpriced becomes priced) needs no bump: the run's cost
 coverage already discloses unpriced tokens. A change that is provably price-neutral needs none
-either. ``tests/unit/test_cost_model.py::test_cost_method_tripwire`` pins fixture costs against
-this constant and fails when they move without a bump.
+either. Bumping is a review-time rule: no test can force it.
+``tests/unit/test_cost_model.py::test_cost_method_tripwire`` pins fixture costs together with this
+constant, so it fails when costs move on the code paths its fixtures exercise and prompts the
+bump decision; re-pinning the costs without bumping still passes. Its fixtures carry no 1h cache
+writes, fast mode (``speed``), ``service_tier``, server-tool use, ``inference_geo``, or
+fork-duplicated message ids, so changes to those levers move no pinned cost.
 
 Version history:
 

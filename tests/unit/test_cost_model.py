@@ -68,9 +68,21 @@ def test_cost_method_tripwire() -> None:
 
 
 class TestCurrentStamp:
-    def test_carries_installed_pin_and_method_version(self) -> None:
+    def test_reads_pin_from_installed_metadata(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The pin comes from the installed distribution, never a literal, so a pin bump
+        is detected without a manual step."""
+        looked_up: list[str] = []
+
+        def _sentinel(name: str) -> str:
+            looked_up.append(name)
+            return "9.9.9-sentinel"
+
+        monkeypatch.setattr(_genai_source, "_dist_version", _sentinel)
         stamp = current_cost_model_stamp()
-        assert stamp.genai_prices_version == "0.2.3"
+        assert stamp.genai_prices_version == "9.9.9-sentinel"
+        assert looked_up == ["genai-prices"]
         assert stamp.cost_method_version == COST_METHOD_VERSION
 
     def test_unknown_pin_when_distribution_metadata_missing(
@@ -80,7 +92,9 @@ class TestCurrentStamp:
             raise PackageNotFoundError("genai-prices")
 
         monkeypatch.setattr(_genai_source, "_dist_version", _missing)
-        assert _genai_source.installed_version() is None
+        stamp = current_cost_model_stamp()
+        assert stamp.genai_prices_version is None
+        assert stamp.cost_method_version == COST_METHOD_VERSION
 
 
 class TestLegacyRehydration:

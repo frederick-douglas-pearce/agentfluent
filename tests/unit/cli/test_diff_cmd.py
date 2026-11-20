@@ -679,6 +679,23 @@ class TestCostModelStampOutput:
         paths = self._paths(tmp_path, self._STAMP, self._STAMP)
         assert "cost model" not in self._quiet(runner, cli_app, paths)
 
+    @pytest.mark.parametrize(
+        "baseline_stamp",
+        [{"genai_prices_version": "0.2.3", "cost_method_version": 2}, None],
+    )
+    def test_default_fail_on_exit_code_ignores_cost_model(
+        self, runner: CliRunner, cli_app: typer.Typer, tmp_path: Path,
+        baseline_stamp: Any,
+    ) -> None:
+        """Under the default ``--fail-on warning``, a cost-model mismatch or an unknown
+        cost model with no new recommendation exits 0."""
+        paths = self._paths(tmp_path, baseline_stamp, self._STAMP)
+        result = runner.invoke(cli_app, ["diff", str(paths[0]), str(paths[1]), "--json"])
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload["data"]["cost_model_status"] != "match"
+        assert payload["data"]["regression_detected"] is False
+
     def test_table_output_shows_caveat(
         self, runner: CliRunner, cli_app: typer.Typer, tmp_path: Path,
     ) -> None:

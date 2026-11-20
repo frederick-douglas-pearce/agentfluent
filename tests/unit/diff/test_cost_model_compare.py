@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from agentfluent.analytics.cost_model import CostModelStamp
+from agentfluent.config.models import Severity
 from agentfluent.diff import compute_diff
 from agentfluent.diff.models import DiffResult
 
@@ -75,19 +76,17 @@ class TestCompare:
 
     @pytest.mark.parametrize(
         ("baseline_version", "current_version"),
-        [(None, None), ("0.11.0", None), (None, "0.11.0"), ("0.10.0", "0.11.0")],
+        [(None, None), ("0.11.0", None), ("0.10.0", "0.11.0"), ("0.11.0", "0.11.0")],
     )
-    def test_both_unstamped_unknown_unless_same_release(
+    def test_both_unstamped_is_unknown_whatever_the_version(
         self, baseline_version: str | None, current_version: str | None,
     ) -> None:
+        """An unreleased build keeps the last release's version string while its pin and
+        cost method move, so even an equal ``diagnostics_version`` proves nothing."""
         result = compute_diff(
             _env(version=baseline_version), _env(version=current_version),
         )
         assert result.cost_model_status == "unknown"
-
-    def test_both_unstamped_same_release_matches(self) -> None:
-        result = compute_diff(_env(version="0.11.0"), _env(version="0.11.0"))
-        assert result.cost_model_status == "match"
 
     @pytest.mark.parametrize(
         ("baseline", "current"),
@@ -126,10 +125,21 @@ class TestCompare:
         result = compute_diff(baseline, _env(stamp=_stamp()))
         assert result.cost_model_status == "unknown"
 
-    def test_cost_model_never_sets_regression(self) -> None:
+    @pytest.mark.parametrize("fail_on", [None, Severity.INFO, Severity.WARNING])
+    @pytest.mark.parametrize(
+        ("baseline", "current"),
+        [
+            (_stamp(method=1), _stamp(method=2)),
+            (None, _stamp()),
+        ],
+    )
+    def test_cost_model_never_sets_regression(
+        self, fail_on: Severity | None, baseline: Any, current: Any,
+    ) -> None:
         result = compute_diff(
-            _env(stamp=_stamp(method=1)), _env(stamp=_stamp(method=2)),
+            _env(stamp=baseline), _env(stamp=current), fail_on=fail_on,
         )
+        assert result.cost_model_status != "match"
         assert result.regression_detected is False
 
     def test_json_round_trip_keeps_stamps_and_status(self) -> None:

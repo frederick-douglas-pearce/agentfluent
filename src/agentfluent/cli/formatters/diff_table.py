@@ -285,11 +285,17 @@ def _cost_model_reason(result: DiffResult) -> str | None:
     if baseline is not None and current is not None:
         subject = "a snapshot's cost-model stamp is incomplete"
     elif baseline is None and current is None:
-        subject = "neither snapshot records its cost model (both predate the stamp)"
+        subject = (
+            "neither snapshot has a readable cost-model stamp (missing or malformed)"
+        )
     elif baseline is None:
-        subject = "the baseline snapshot predates the cost-model stamp"
+        subject = (
+            "the baseline snapshot has no readable cost-model stamp (missing or malformed)"
+        )
     else:
-        subject = "the current snapshot predates the cost-model stamp"
+        subject = (
+            "the current snapshot has no readable cost-model stamp (missing or malformed)"
+        )
     return (
         f"cost model unknown: {subject}, so cost deltas may include pricing "
         "or cost-method changes, not only agent behavior."

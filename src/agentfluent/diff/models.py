@@ -263,8 +263,9 @@ class DiffResult(BaseModel):
     baseline_cost_model: CostModelStamp | None = None
     current_cost_model: CostModelStamp | None = None
     """Cost-model stamp copied from each input envelope (#543): the genai-prices
-    version and cost-method version that priced its dollar figures. ``None`` for
-    envelopes from before v0.12.0."""
+    version and cost-method version that priced its dollar figures. ``None`` when
+    the envelope has no readable stamp: absent (envelopes from before v0.12.0),
+    null, or malformed."""
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -272,13 +273,12 @@ class DiffResult(BaseModel):
         """``match`` / ``mismatch`` / ``unknown`` -- whether both sides' dollar
         figures come from the same cost model (rules in
         :func:`agentfluent.diff.cost_model.cost_model_status`). Unlike
-        ``diagnostics_version_drift``, an unstamped side is ``unknown`` and raises
-        the cost caveat. Never affects ``regression_detected``."""
+        ``diagnostics_version_drift``, a side with no readable stamp is ``unknown``
+        and raises the cost caveat, even when both sides lack one. Never affects
+        ``regression_detected``."""
         return cost_model_status(
             self.baseline_cost_model,
             self.current_cost_model,
-            baseline_diagnostics_version=self.baseline_diagnostics_version,
-            current_diagnostics_version=self.current_diagnostics_version,
         )
 
     @computed_field  # type: ignore[prop-decorator]
