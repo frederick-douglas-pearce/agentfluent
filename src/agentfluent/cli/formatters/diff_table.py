@@ -428,7 +428,8 @@ def _signed_int(value: int) -> str:
 
 def _spend_delta_cell(value: int | None) -> str:
     """Per-agent Tokens Δ from trace spend (#693). ``None`` (either side's
-    spend unknown) renders "—", never ``+0`` and never the rollup delta."""
+    spend unknown) renders "—"; a measured zero renders ``0``. Never the
+    rollup delta."""
     return "—" if value is None else _signed_int(value)
 
 

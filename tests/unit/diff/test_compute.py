@@ -408,6 +408,33 @@ class TestAgentTypeDeltaHasChange:
         assert delta.spend_tokens_delta == 4_000
         assert delta.has_change is True
 
+    def test_rollup_only_change_is_not_a_change_post_646(self) -> None:
+        # The rollup is not rendered (Tokens Δ shows spend, #693), so a
+        # rollup-only movement must not surface an all-zero row.
+        def entry(rollup: int) -> dict[str, Any]:
+            return _spend_entry(spend_tokens=5_000, total_tokens=rollup)
+
+        result = compute_diff(
+            _spend_envelope({"gp": entry(300)}), _spend_envelope({"gp": entry(700)}),
+        )
+        delta = _agent_delta(result, "gp")
+        assert delta.total_tokens_delta == 400
+        assert delta.spend_tokens_delta == 0
+        assert delta.has_change is False
+
+    def test_rollup_only_change_is_not_a_change_pre_646(self) -> None:
+        def entry(rollup: int) -> dict[str, Any]:
+            return {"invocation_count": 2, "total_tokens": rollup,
+                    "estimated_total_cost_usd": 1.0}
+
+        result = compute_diff(
+            _envelope(by_agent={"gp": entry(300)}), _envelope(by_agent={"gp": entry(700)}),
+        )
+        delta = _agent_delta(result, "gp")
+        assert delta.total_tokens_delta == 400
+        assert delta.spend_tokens_delta is None
+        assert delta.has_change is False
+
 
 def _spend_entry(
     *,
@@ -536,6 +563,39 @@ class TestAgentSpendDeltas:
             _spend_envelope({"gp": _spend_entry(spend_tokens=9_500)}),
         )
         assert _agent_delta(result, "gp").baseline_spend_tokens is None
+
+    def test_type_absent_on_legacy_baseline_is_unknown(self) -> None:
+        # Absent means a measured 0 only on a spend-carrying side.
+        result = compute_diff(
+            _envelope(by_agent={}),
+            _spend_envelope({"explore": _spend_entry(spend_tokens=4_200)}),
+        )
+        delta = _agent_delta(result, "explore")
+        assert delta.baseline_spend_tokens is None
+        assert delta.current_spend_tokens == 4_200
+        assert delta.spend_tokens_delta is None
+
+    def test_type_absent_on_legacy_current_is_unknown(self) -> None:
+        result = compute_diff(
+            _spend_envelope({"explore": _spend_entry(spend_tokens=4_200)}),
+            _envelope(by_agent={}),
+        )
+        delta = _agent_delta(result, "explore")
+        assert delta.baseline_spend_tokens == 4_200
+        assert delta.current_spend_tokens is None
+        assert delta.spend_tokens_delta is None
+
+    def test_null_entry_is_unknown_not_absent(self) -> None:
+        # A present-but-null entry is decided by key membership: unknown,
+        # never the measured 0 an absent type gets.
+        baseline = _spend_envelope({})
+        baseline["agent_metrics"]["by_agent_type"] = {"gp": None}
+        result = compute_diff(
+            baseline, _spend_envelope({"gp": _spend_entry(spend_tokens=9_500)}),
+        )
+        delta = _agent_delta(result, "gp")
+        assert delta.baseline_spend_tokens is None
+        assert delta.spend_tokens_delta is None
 
     def test_partial_coverage_stays_numeric(self) -> None:
         partial = _spend_entry(spend_tokens=3_000, spend_invocation_count=1, invocation_count=5)

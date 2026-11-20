@@ -400,8 +400,12 @@ def _diff_agent_metrics(
         c_tok = int(c.get("total_tokens", 0) or 0)
         b_cost = float(b.get("estimated_total_cost_usd", 0.0) or 0.0)
         c_cost = float(c.get("estimated_total_cost_usd", 0.0) or 0.0)
-        b_spend = _side_spend_tokens(baseline_by.get(agent_type), has_spend=baseline_has_spend)
-        c_spend = _side_spend_tokens(current_by.get(agent_type), has_spend=current_has_spend)
+        b_spend = _side_spend_tokens(
+            b if agent_type in baseline_by else None, has_spend=baseline_has_spend,
+        )
+        c_spend = _side_spend_tokens(
+            c if agent_type in current_by else None, has_spend=current_has_spend,
+        )
         spend_delta = None if b_spend is None or c_spend is None else c_spend - b_spend
 
         # Model-turn totals (#467). Legacy-envelope fallback: pre-turn
@@ -446,9 +450,11 @@ def _side_spend_tokens(entry: dict[str, Any] | None, *, has_spend: bool) -> int 
     """One side's trace spend for an agent type (#693); ``None`` = unknown.
 
     - envelope predates #646 (``has_spend`` false) -> ``None``;
-    - agent type absent on this side -> ``0`` (it did not run: a measured zero);
-    - present but no trace-covered invocation (``spend_invocation_count == 0``
-      or no ``spend_tokens`` key) -> ``None``, matching ``analyze``'s "—"
+    - agent type has no entry on this side (``entry is None``, decided by key
+      membership by the caller) -> ``0`` (it did not run: a measured zero);
+    - entry present but no trace-covered invocation (``spend_invocation_count
+      == 0``, no ``spend_tokens`` key, or a null entry the caller passed as
+      ``{}``) -> ``None``, matching ``analyze``'s "—"
       (``report_renderers``) -- unknown, never a measured 0;
     - otherwise -> ``spend_tokens`` (partial coverage stays numeric).
     """
