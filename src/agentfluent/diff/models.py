@@ -181,16 +181,19 @@ class AgentTypeDelta(BaseModel):
 
     @property
     def has_change(self) -> bool:
-        """``True`` iff any delta the Per-Agent Deltas table renders is nonzero.
+        """``True`` iff the invocation, spend, cost or total-model-turns delta
+        is nonzero.
 
         Centralizes the "is this row worth showing" policy for the diff
-        renderer's zero-row filter. The predicate tracks the table's
-        *rendered* columns, so a column swap updates it in the same change:
-        the rollup ``total_tokens_delta`` is deliberately excluded because
-        Tokens Δ renders ``spend_tokens_delta`` (#693) -- a rollup-only change
-        would otherwise show a row whose visible cells all read zero. A plain
-        ``@property`` (not a ``computed_field``) so it stays out of the JSON
-        envelope."""
+        renderer's zero-row filter. The aim is for the predicate to track the
+        table's *rendered* columns: the rollup ``total_tokens_delta`` is
+        deliberately excluded because Tokens Δ renders ``spend_tokens_delta``
+        (#693) -- a rollup-only change would otherwise show a row whose
+        visible cells all read zero. One known exception remains:
+        ``total_model_turns_delta`` still counts although the table renders
+        an avg-turns Δ, so a row can pass with every visible cell at zero
+        (#711). A plain ``@property`` (not a ``computed_field``) so it stays
+        out of the JSON envelope."""
         return bool(
             self.invocation_count_delta
             or self.spend_tokens_delta
