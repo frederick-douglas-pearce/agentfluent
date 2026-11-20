@@ -610,3 +610,81 @@ class TestPerAgentTokensDeltaFromSpend:
         assert "Per-Agent Deltas" not in quiet
         verbose = self._output(runner, cli_app, tmp_path, baseline, current, "--verbose")
         assert _cells(_gp_row(_agent_section(verbose)))[2] == "0"
+
+
+class TestCostModelStampOutput:
+    """#543: quiet outputs carry the cost-model status, not a bare cost delta."""
+
+    _STAMP = {"genai_prices_version": "0.2.3", "cost_method_version": 1}
+
+    def _paths(
+        self, tmp_path: Path, baseline_stamp: Any, current_stamp: Any,
+    ) -> tuple[Path, Path]:
+        baseline = _data(total_cost=1.0)
+        current = _data(total_cost=2.0)
+        if baseline_stamp is not None:
+            baseline["cost_model"] = baseline_stamp
+        if current_stamp is not None:
+            current["cost_model"] = current_stamp
+        return (
+            _write_envelope(tmp_path / "baseline.json", baseline),
+            _write_envelope(tmp_path / "current.json", current),
+        )
+
+    def _quiet(
+        self, runner: CliRunner, cli_app: typer.Typer, paths: tuple[Path, Path],
+        *extra: str,
+    ) -> str:
+        result = runner.invoke(
+            cli_app,
+            ["diff", str(paths[0]), str(paths[1]), "--quiet", "--fail-on", "off", *extra],
+        )
+        assert result.exit_code == 0, result.output
+        return result.output
+
+    @pytest.mark.parametrize(
+        ("baseline_stamp", "expected"),
+        [
+            ({"genai_prices_version": "0.2.3", "cost_method_version": 1}, "match"),
+            ({"genai_prices_version": "0.1.4", "cost_method_version": 1}, "mismatch"),
+            (None, "unknown"),
+        ],
+    )
+    def test_quiet_json_carries_status(
+        self, runner: CliRunner, cli_app: typer.Typer, tmp_path: Path,
+        baseline_stamp: Any, expected: str,
+    ) -> None:
+        paths = self._paths(tmp_path, baseline_stamp, self._STAMP)
+        payload = json.loads(self._quiet(runner, cli_app, paths, "--json"))
+        assert payload["data"]["cost_model_status"] == expected
+
+    def test_quiet_text_marks_mismatch(
+        self, runner: CliRunner, cli_app: typer.Typer, tmp_path: Path,
+    ) -> None:
+        paths = self._paths(
+            tmp_path, {"genai_prices_version": "0.1.4", "cost_method_version": 1},
+            self._STAMP,
+        )
+        assert "(cost model differs)" in self._quiet(runner, cli_app, paths)
+
+    def test_quiet_text_marks_unknown(
+        self, runner: CliRunner, cli_app: typer.Typer, tmp_path: Path,
+    ) -> None:
+        paths = self._paths(tmp_path, None, self._STAMP)
+        assert "(cost model unknown)" in self._quiet(runner, cli_app, paths)
+
+    def test_quiet_text_unmarked_on_match(
+        self, runner: CliRunner, cli_app: typer.Typer, tmp_path: Path,
+    ) -> None:
+        paths = self._paths(tmp_path, self._STAMP, self._STAMP)
+        assert "cost model" not in self._quiet(runner, cli_app, paths)
+
+    def test_table_output_shows_caveat(
+        self, runner: CliRunner, cli_app: typer.Typer, tmp_path: Path,
+    ) -> None:
+        paths = self._paths(tmp_path, None, self._STAMP)
+        result = runner.invoke(
+            cli_app, ["diff", str(paths[0]), str(paths[1]), "--fail-on", "off"],
+        )
+        assert result.exit_code == 0, result.output
+        assert "Cost deltas below may not reflect agent behavior" in result.output

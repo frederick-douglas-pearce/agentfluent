@@ -12,10 +12,17 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, computed_field
 
+from agentfluent.analytics.cost_model import CostModelStamp
 from agentfluent.analytics.tokens import Origin
 from agentfluent.config.models import Severity
 from agentfluent.core.filtering import WindowMetadata
 from agentfluent.diagnostics.models import Axis, SignalType
+from agentfluent.diff.cost_model import (
+    CostModelChange,
+    CostModelStatus,
+    cost_model_changes,
+    cost_model_status,
+)
 
 DeltaStatus = Literal["new", "resolved", "persisting"]
 
@@ -252,6 +259,34 @@ class DiffResult(BaseModel):
         if baseline is None or current is None:
             return False
         return baseline != current
+
+    baseline_cost_model: CostModelStamp | None = None
+    current_cost_model: CostModelStamp | None = None
+    """Cost-model stamp copied from each input envelope (#543): the genai-prices
+    version and cost-method version that priced its dollar figures. ``None`` for
+    envelopes from before v0.12.0."""
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def cost_model_status(self) -> CostModelStatus:
+        """``match`` / ``mismatch`` / ``unknown`` -- whether both sides' dollar
+        figures come from the same cost model (rules in
+        :func:`agentfluent.diff.cost_model.cost_model_status`). Unlike
+        ``diagnostics_version_drift``, an unstamped side is ``unknown`` and raises
+        the cost caveat. Never affects ``regression_detected``."""
+        return cost_model_status(
+            self.baseline_cost_model,
+            self.current_cost_model,
+            baseline_diagnostics_version=self.baseline_diagnostics_version,
+            current_diagnostics_version=self.current_diagnostics_version,
+        )
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def cost_model_changes(self) -> list[CostModelChange]:
+        """Which stamp components differ between the two sides
+        (``pricing_table`` and/or ``cost_method``)."""
+        return cost_model_changes(self.baseline_cost_model, self.current_cost_model)
 
     fail_on: Severity | None = None
     """The severity threshold the diff was evaluated against (``None``

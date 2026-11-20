@@ -12,6 +12,7 @@ from rich.console import Console
 
 from agentfluent import __version__
 from agentfluent.analytics.cost_coverage import pricing_gap_warning
+from agentfluent.analytics.cost_model import current_cost_model_stamp
 from agentfluent.analytics.pipeline import AnalysisResult, analyze_sessions
 from agentfluent.cli._time_args import parse_time_window
 from agentfluent.cli.exit_codes import EXIT_NO_DATA, EXIT_USER_ERROR
@@ -577,6 +578,7 @@ def analyze(
 
     result.window = window_metadata
     result.diagnostics_version = __version__
+    result.cost_model = current_cost_model_stamp()
     result.project_name = project_info.display_name
     result.scope_session = session
 

@@ -271,3 +271,20 @@ class TestDiagnosticsVersionStamp:
         data = parse_json_output(result.stdout, expected_command="analyze")
         assert isinstance(data, dict)
         assert data.get("diagnostics_version") == __version__
+
+    def test_envelope_includes_cost_model_stamp(
+        self, runner: CliRunner, cli_app: typer.Typer, populated_home: Path,
+    ) -> None:
+        """#543: the envelope records which cost model priced it."""
+        from agentfluent.analytics.cost_model import COST_METHOD_VERSION
+
+        result = runner.invoke(
+            cli_app, ["analyze", "--project", "project", "--json"],
+        )
+        assert result.exit_code == EXIT_OK
+        data = parse_json_output(result.stdout, expected_command="analyze")
+        assert isinstance(data, dict)
+        assert data.get("cost_model") == {
+            "genai_prices_version": "0.2.3",
+            "cost_method_version": COST_METHOD_VERSION,
+        }
