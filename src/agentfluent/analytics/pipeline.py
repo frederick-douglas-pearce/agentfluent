@@ -20,6 +20,7 @@ from agentfluent.analytics.agent_metrics import (
     agent_token_percentage,
     compute_agent_metrics,
 )
+from agentfluent.analytics.cost_coverage import CostCoverage, compute_cost_coverage
 from agentfluent.analytics.pricing import SYNTHETIC_MODELS
 from agentfluent.analytics.tokens import (
     ModelTokenBreakdown,
@@ -103,9 +104,11 @@ class SessionAnalysis(BaseModel):
     drift (``prd-v0.11.md`` §9) into a self-describing report rather than a
     dead end. Do not "simplify" it away."""
     invocations: list[AgentInvocation] = Field(default_factory=list)
-    trace_coverage: TraceCoverage = Field(default_factory=TraceCoverage)
+    trace_coverage: TraceCoverage | None = None
     """Subagent trace spend by cohort -- linked, nested, session-spawned,
-    filtered, unparseable (#648 AC4). Stored, not computed: kept linked traces
+    filtered, unparseable (#648 AC4). ``analyze_session`` always sets it;
+    ``None`` means an envelope written before v0.12.0 -- unknown, which zero
+    cohorts could not say (#676). Stored, not computed: kept linked traces
     and the depth-2 children attached to them are serialized
     (``invocations[].trace``, ``children``), but session-spawned traces and
     every nested trace not attached as a child (descendants of session-spawned
@@ -226,13 +229,35 @@ class AnalysisResult(BaseModel):
 
     @computed_field  # type: ignore[prop-decorator]
     @property
-    def trace_coverage(self) -> TraceCoverage:
+    def trace_coverage(self) -> TraceCoverage | None:
         """Run-level ``trace_coverage``: each session's coverage summed (#648 AC4).
 
         Recomputed from ``self.sessions`` like ``total_model_turns``, so it
-        survives JSON rehydration. This is the link-coverage count #676
-        consumes."""
-        return merge_trace_coverage([s.trace_coverage for s in self.sessions])
+        survives JSON rehydration. ``None`` when any session predates the field
+        (a pre-v0.12.0 envelope): a partial sum would understate silently."""
+        per_session = [s.trace_coverage for s in self.sessions]
+        if any(coverage is None for coverage in per_session):
+            return None
+        return merge_trace_coverage([c for c in per_session if c is not None])
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def cost_coverage(self) -> CostCoverage | None:
+        """What the run's dollar figures cover: pricing, agent invocations,
+        diagnostics (#676, #688). Measured from this result, so it survives
+        JSON rehydration.
+
+        ``None`` -- unknown, never full -- when ``trace_coverage`` is ``None``:
+        every input here (``unpriced_tokens``, ``linked_invocation_count``,
+        ``cost_priced``) first ships in v0.12.0 with ``trace_coverage``, so a
+        result without it cannot be measured."""
+        if self.trace_coverage is None:
+            return None
+        return compute_cost_coverage(
+            self.token_metrics.by_model,
+            self.agent_metrics.by_agent_type,
+            self.diagnostics,
+        )
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -395,6 +420,7 @@ def _merge_token_metrics(metrics_list: list[TokenMetrics]) -> TokenMetrics:
                     cache_creation_1h_tokens=breakdown.cache_creation_1h_tokens,
                     cost=breakdown.cost,
                     origin=breakdown.origin,
+                    unpriced_tokens=breakdown.unpriced_tokens,
                 )
             else:
                 existing.input_tokens += breakdown.input_tokens
@@ -404,6 +430,7 @@ def _merge_token_metrics(metrics_list: list[TokenMetrics]) -> TokenMetrics:
                 existing.cache_creation_5m_tokens += breakdown.cache_creation_5m_tokens
                 existing.cache_creation_1h_tokens += breakdown.cache_creation_1h_tokens
                 existing.cost += breakdown.cost
+                existing.unpriced_tokens += breakdown.unpriced_tokens
 
     rows = list(merged_models.values())
     (
@@ -488,6 +515,7 @@ def _merge_agent_metrics(
                     active_duration_invocation_count=m.active_duration_invocation_count,
                     spend_tokens=m.spend_tokens,
                     spend_invocation_count=m.spend_invocation_count,
+                    linked_invocation_count=m.linked_invocation_count,
                     priced_invocation_count=m.priced_invocation_count,
                     priced_model_turns=m.priced_model_turns,
                 )
@@ -513,6 +541,7 @@ def _merge_agent_metrics(
                 )
                 existing.spend_tokens += m.spend_tokens
                 existing.spend_invocation_count += m.spend_invocation_count
+                existing.linked_invocation_count += m.linked_invocation_count
                 existing.priced_invocation_count += m.priced_invocation_count
                 existing.priced_model_turns += m.priced_model_turns
 

@@ -726,6 +726,7 @@ def generate_offload_candidate(
         estimated_parent_tokens=parent_tokens,
         estimated_parent_cost_usd=parent_cost_total,
         estimated_savings_usd=savings_total,
+        cost_priced=parent_pricing is not None and alt_pricing is not None,
         parent_model=parent_model,
         alternative_model=alt_model,
         cost_note=cost_note,

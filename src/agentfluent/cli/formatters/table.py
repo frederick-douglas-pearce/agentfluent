@@ -16,6 +16,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from agentfluent.analytics.tokens import trace_counts_as_spend, trace_spend_usage
+from agentfluent.cli.formatters.coverage import CoverageFooter, cost_coverage_footer
 from agentfluent.cli.formatters.helpers import (
     CONFIDENCE_COLORS,
     GLOBAL_AGENT_LABEL,
@@ -33,7 +34,6 @@ from agentfluent.cli.formatters.helpers import (
     score_color,
     session_kind_label,
     severity_cell,
-    trace_coverage_line,
     truncate,
 )
 from agentfluent.diagnostics.models import Axis, SignalType
@@ -131,6 +131,18 @@ def format_sessions_table(
     console.print(table)
 
 
+def _print_cost_coverage(console: Console, footer: CoverageFooter) -> None:
+    """Render the cost-coverage footer (#676): quiet when full, unmistakable when not."""
+    if footer.status == "full":
+        console.print(f"[dim]{escape(footer.headline)}[/dim]")
+    else:
+        console.print(f"[bold yellow]{escape(footer.headline)}[/bold yellow]")
+        for clause in footer.clauses:
+            console.print(f"[yellow]  - {escape(clause)}[/yellow]")
+    if footer.attribution is not None:
+        console.print(f"[dim]{escape(footer.attribution)}[/dim]")
+
+
 def format_analysis_table(
     console: Console,
     result: AnalysisResult,
@@ -178,9 +190,15 @@ def format_analysis_table(
         f"[dim]{result.total_synthetic_messages}[/dim]",
     )
     console.print(token_table)
-    coverage_line = trace_coverage_line(result.trace_coverage.model_dump())
-    if coverage_line is not None:
-        console.print(f"[dim]{escape(coverage_line)}[/dim]")
+    cost_coverage = result.cost_coverage
+    trace_coverage = result.trace_coverage
+    _print_cost_coverage(
+        console,
+        cost_coverage_footer(
+            cost_coverage.model_dump() if cost_coverage is not None else None,
+            trace_coverage.model_dump() if trace_coverage is not None else None,
+        ),
+    )
 
     if tm.by_model and (verbose or len(tm.by_model) > 1):
         model_table = Table(
@@ -779,10 +797,18 @@ def _format_offload_candidates(
 
     console.print("\n[bold]Offload Candidates[/bold]")
     if not visible:
+        # Name hidden rows by cause: an unpriced candidate's 0.0 savings is
+        # "no estimate", not a negative saving (#676).
+        unpriced = sum(1 for c in candidates if c.cost_priced is False)
+        negative = len(candidates) - unpriced
+        hidden = []
+        if negative:
+            hidden.append(f"{negative} negative-savings")
+        if unpriced:
+            hidden.append(f"{unpriced} unpriced (no estimate)")
         console.print(
-            f"[dim]No offload candidates surfaced ({len(candidates)} "
-            "negative-savings rows hidden — pass --show-negative-savings "
-            "to inspect).[/dim]",
+            f"[dim]No offload candidates surfaced ({' and '.join(hidden)} "
+            "rows hidden — pass --show-negative-savings to inspect).[/dim]",
         )
         return
 

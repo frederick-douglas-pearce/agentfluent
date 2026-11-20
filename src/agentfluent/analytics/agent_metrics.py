@@ -197,6 +197,13 @@ class AgentTypeMetrics:
     """Invocations contributing to ``spend_tokens``. Against
     ``invocation_count`` this is the spend-coverage figure."""
 
+    linked_invocation_count: int = 0
+    """Invocations with a linked subagent trace, whether or not it counts as
+    spend -- the link-coverage figure against ``invocation_count`` (#676).
+    Counts invocations, not trace files: two invocations sharing an
+    ``agent_id`` count twice here and once in ``trace_coverage.linked.files``
+    (#705). ``priced <= spend <= linked <= invocation_count``."""
+
     priced_invocation_count: int = 0
     """Spend invocations whose trace model was priced -- the denominator of
     ``estimated_avg_cost_per_invocation_usd``."""
@@ -384,6 +391,8 @@ def compute_agent_metrics(
         # Trace-sourced spend and cost (#646). Trace-missing invocations add
         # nothing here -- no blended fill-in (#646 AC4).
         trace = inv.trace
+        if trace is not None:
+            metrics.linked_invocation_count += 1
         if trace is not None and trace_counts_as_spend(trace):
             metrics.spend_tokens += trace_spend_usage(trace).total_tokens
             metrics.spend_invocation_count += 1

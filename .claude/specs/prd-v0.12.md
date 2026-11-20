@@ -30,7 +30,7 @@ D057(10) named `#646` the headline of v0.12.0 explicitly: v0.11 deliberately shi
 4. **Complete cost-lever coverage (`#535` Phase 2).** Land all four remaining overlay levers on the #547 seam: fast mode (`#536`), server-side tool surcharges (`#539`), batch/priority service tier (`#537`), data residency (`#538`). Close epic `#535`.
 5. **Land the pricing-adjacent items unblocked by Phase 1** (`#543` diff pricing-version stamp, `#82` genai-prices pin currency + upstream-coverage detection).
 6. **Hold the line on hygiene/infra** (`#649` streaming-snapshot dedup regression lock, `#652` demo-svg path scrub, `#653` uv.lock self-version sync).
-7. **Ship catch-up docs (`#548`) LAST**, updating the v0.11 caveat once #646/#648 land and adding the v0.12.0 runtime cost caveat (D057(11): the CLI/JSON runtime caveat was deliberately deferred from v0.11 to v0.12).
+7. **Ship catch-up docs (`#548`) LAST**, updating the v0.11 caveat once #646/#648 land and documenting the v0.12.0 runtime cost caveat (D057(11): the CLI/JSON runtime caveat was deliberately deferred from v0.11 to v0.12; the caveat itself ships as code in #676 + #688).
 
 ## 3. Non-Goals
 
@@ -95,9 +95,9 @@ Phase 1 (`#545`/`#546`/`#547`) shipped in v0.11, so the base⊕overlay seam #547
 
 | # | Title | Type | Commit scope | Deps |
 |---|-------|------|--------------|------|
-| #548 | catch up README + GLOSSARY + CHANGELOG for v0.12.0 | docs | `docs:` | **#646 + #648 landed** (updates the v0.11 caveat #549 shipped); reflects WS2 lever coverage |
+| #548 | catch up README + GLOSSARY + CHANGELOG for v0.12.0 | docs | `docs:` | **#646 + #648 + #676/#688 landed** (updates the v0.11 caveat #549 shipped; documents the runtime caveat #676/#688 ship); reflects WS2 lever coverage |
 
-**Critical docs delta:** v0.11 shipped a cost caveat (D057(11)) stating the composite cost is no more accurate than v0.10. Once #646/#648 land, #548 must **update** that caveat (`COST_MODEL.md`, README, GLOSSARY, CHANGELOG) to reflect the corrected quantity, and add the **v0.12.0 CLI/JSON runtime cost caveat** D057(11) deferred from v0.11 (state the corrected value and its coverage). #548 rides the loop's **`docs` graduated route** (D047).
+**Critical docs delta:** v0.11 shipped a cost caveat (D057(11)) stating the composite cost is no more accurate than v0.10. Once #646/#648 land, #548 must **update** that caveat (`COST_MODEL.md`, README, GLOSSARY, CHANGELOG) to reflect the corrected quantity, and **document** the v0.12.0 CLI/JSON runtime cost caveat D057(11) deferred from v0.11. The caveat itself is code, not docs: a `docs:` PR cannot change CLI or JSON rendering, so it ships in **#676 + #688** (recombined 2026-11-20) as the measured `cost_coverage` block and its CLI/report footer (pricing, agent-invocation and diagnostics coverage). #548 documents what that ships. #548 rides the loop's **`docs` graduated route** (D047).
 
 ## 5. Sizing Sanity Check
 
@@ -137,12 +137,12 @@ WS4 -- HYGIENE / INFRA (independent, parallel)
   12. #653 (uv.lock self-version sync in release PR)
 
 WS5 -- DOCS (LAST)
-  13. #548 (README + GLOSSARY + CHANGELOG catch-up)  -- HARD-BLOCKED by #646 + #648; docs graduated route (D047)
+  13. #548 (README + GLOSSARY + CHANGELOG catch-up)  -- HARD-BLOCKED by #646 + #648 + #676/#688; docs graduated route (D047)
 ```
 
 **Hard blocks (the only two the loop must respect):**
 - `#648` (AC2) <- `#595` PR B
-- `#548` <- `#646` **and** `#648`
+- `#548` <- `#646` **and** `#648` **and** `#676`/`#688` (recombined; docs describe the runtime caveat they ship)
 
 **Soft/merge-ordering (advisory, not blocks):** within WS1 sequence `#595` PR B -> `#646` -> `#648` to avoid three-way churn on `analytics/pipeline.py`; sequence `#543` after WS2 if contention forces a choice.
 
@@ -170,7 +170,7 @@ WS5 -- DOCS (LAST)
 | WS1 three-way churn on `analytics/pipeline.py` (#595/#646/#648 all touch the cost path) | Merge conflicts, rework | Sequence #595 PR B -> #646 -> #648 (§6 soft-ordering); #648 AC1 (decompose) is analysis-only and can start in parallel |
 | The quantity movement (magnitude pending re-measurement -- D062(1)) is unattributable if bundled with a rate change | Cannot validate against Admin API | D057(10) already isolated the rate half in v0.11; v0.12's WS2 levers are $0/near-$0 in our corpus, so the *dogfood* composite delta is dominated by the #646/#648 quantity fix and stays attributable. Keep the Admin-API reconciliation (D057(15)) a one-time manual check recorded on #646 |
 | `#648` orphan cohort never fully resolves | A residual % stays unattributable | By design a *disclosure* deliverable (AC3/AC4): report coverage explicitly rather than silently drop; do not blend attributed + unattributed |
-| v0.11 cost caveat left stale after #646/#648 land | Docs contradict shipped behavior | #548 hard-blocked on #646+#648; explicit AC to update the caveat + add the deferred runtime caveat (§4 WS5) |
+| v0.11 cost caveat left stale after #646/#648 land | Docs contradict shipped behavior | #548 hard-blocked on #646+#648+#676/#688; explicit AC to update the caveat + document the deferred runtime caveat, which ships as code in #676/#688 (§4 WS5) |
 | A lever multiplier double-applies a factor already in the token counts | Over-statement | `COST_MODEL.md` Sections E--G already flag which effects are in counts (thinking/tool tokens) and must NOT be applied as multipliers; each lever PR checks against that catalog |
 | `#82` pin bump crosses the chore/feat boundary | Mis-scoped commit / spurious version bump | Pin currency is `chore(ci)`; only a genai-prices bump that changes *shipped* rates is `fix`/`feat` -- decide per bump against the CLAUDE.md scope convention |
 
@@ -182,7 +182,7 @@ WS5 -- DOCS (LAST)
 4. `#535` Phase 2: all four overlay levers (#536/#537/#538/#539) implemented and tested; `docs/COST_MODEL.md` updated; consolidated upstream request filed/linked; epic closed.
 5. `#543` diff pricing-version stamp; `#82` pin-currency + coverage detection land.
 6. `#649` dedup regression test + CLAUDE.md trap doc; `#652` svg path scrubbed; `#653` uv.lock self-version sync land.
-7. `#548`: docs reflect corrected quantity; v0.11 caveat updated; v0.12.0 runtime cost caveat added.
+7. `#548`: docs reflect corrected quantity; v0.11 caveat updated; v0.12.0 runtime cost caveat (shipped by #676/#688) documented.
 8. All new production code >80% coverage; no regressions; `ruff` clean; `mypy` clean; version bump to 0.12.0.
 
 ## 10. Release Checklist
@@ -197,7 +197,8 @@ WS5 -- DOCS (LAST)
 - [ ] #649 merged: dedup regression lock + CLAUDE.md 1.99x trap doc
 - [ ] #652 merged: demo-diff.svg path scrub
 - [ ] #653 merged: uv.lock self-version sync in release PR
-- [ ] #548 merged LAST: docs catch-up; v0.11 caveat updated + v0.12.0 runtime caveat added
+- [ ] #676/#688 merged: runtime cost-coverage caveat (`cost_coverage` block + footer)
+- [ ] #548 merged LAST: docs catch-up; v0.11 caveat updated + v0.12.0 runtime caveat (from #676/#688) documented
 - [ ] Confirmed NOT pulled in: #639 (tier gap), and dogfood re-measurement #513/#469/#558/#600/#601/#637 (D058)
 - [ ] D059 appended to `decisions.md`
 - [ ] `pytest --cov` >80%; `ruff` clean; `mypy` clean; version bump to 0.12.0

@@ -18,6 +18,8 @@
 | claude-opus-4-7 | subagent | 6,300 | 2,100 | 96,100 | $1.62 |
 | **Total** |  | **24,500** | **8,200** | **430,300** | **$7.84** |
 
+**Cost coverage: unknown (envelope predates v0.12.0).**
+
 ## Agent Metrics
 
 | Agent Type | Count | Tokens | Avg Tokens/Call | Avg Duration/Call |

@@ -60,10 +60,15 @@ class EnvironmentWarning(BaseModel):
     *agent's* config) — this flags problems with the host Claude Code
     install or filesystem state that bound or distort what AgentFluent
     can analyze (e.g., a low ``cleanupPeriodDays`` silently truncating
-    the session corpus). Surfaced at discovery time, attached to
-    ``AnalysisResult.warnings``, and rendered as a banner above the
-    normal output. A generic shape so future discovery-time warnings
-    reuse it rather than each adding a bespoke field.
+    the session corpus), or a run-level gap in what AgentFluent could
+    measure (``unpriced_tokens``: tokens whose model had no price, #688).
+    Attached to ``AnalysisResult.warnings`` by the ``analyze`` CLI -- the
+    retention check at discovery time, the pricing gap after analysis --
+    and rendered as a banner above the normal output. Library callers of
+    ``analyze_sessions`` get none of these appended; the pricing gap's
+    authoritative signal for them is ``AnalysisResult.cost_coverage``. A
+    generic shape so future warnings reuse it rather than each adding a
+    bespoke field.
     """
 
     code: str

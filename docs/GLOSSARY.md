@@ -1612,6 +1612,18 @@ cleanly and skips the warning.
 
 **Related:** [`scope_session`](#scope_session), [`window`](#window)
 
+### `cost_priced`
+
+**Short:** Whether an offload candidate's cost and savings figures were priced.
+
+**Detail:** Added in v0.12 (#676). `false` when the parent or alternative model
+had no price, so the candidate's `0.0` figures mean "no estimate",
+not "free". `null` on candidates from envelopes written before this
+field existed. Counted in [`cost_coverage`](#cost_coverage)'s
+`unpriced_figures`.
+
+**Related:** [`offload_candidate`](#offload_candidate), [`cost_coverage`](#cost_coverage)
+
 
 ---
 
@@ -1753,20 +1765,93 @@ them (fork agents replay context). They are counted before `--agent`
 is applied, so they include turns from `filtered` traces.
 
 In `analyze --format json` it appears per session and summed at the
-top level. `analyze` (under the Token Usage table) and `report`
-(under Token Metrics) print one line when any cohort other than
-`linked` is non-empty, and nothing at full coverage.
+top level. It is `null` in an envelope written before v0.12.0, which
+makes [`cost_coverage`](#cost_coverage) `null` too -- unknown, never
+full. `analyze` (under the Token Usage table) and `report` (under
+Token Metrics) print one line below the cost-coverage footer when any
+cohort other than `linked` is non-empty. Unparseable files are also a
+gap in the footer itself, since their spend is in no total.
 
 **Example:**
 
 ```
 Token Usage
   ...
+Cost coverage: full. All 1.3M tokens (100%) priced; 4 of 4 agent invocations linked and trace-priced.
 Subagent traces: 3 nested (1,234 tokens) and 2 session-spawned (56 tokens)
 included in totals, not in per-agent rows; 5 excluded by --agent.
 ```
 
-**Related:** [`session_spawned`](#session_spawned), [`total_cost`](#total_cost)
+**Related:** [`session_spawned`](#session_spawned), [`total_cost`](#total_cost), [`cost_coverage`](#cost_coverage)
+
+### `cost_coverage`
+
+**Short:** What the run's dollar figures cover: tokens priced, agent invocations
+with trace-priced spend, and diagnostics figures that are partial or
+have no estimate.
+
+**Detail:** Added in v0.12 (#676, #688). A run-level block in `analyze --format
+json`, measured from the run itself, never a fixed claim. All values
+are counts, so any percentage can be recomputed exactly:
+
+- **pricing** -- `tokens`, `unpriced_tokens` (see
+  [`unpriced_tokens`](#unpriced_tokens)) and `unpriced_models`, a map
+  from model id to its unpriced tokens.
+- **invocations** -- `total`, `linked` (see
+  [`linked_invocation_count`](#linked_invocation_count)), `spend` (the
+  trace has a model response) and `priced` (that model had a price).
+  Per-agent cost covers `priced` of `total`.
+- **diagnostics** -- `savings_figures`, `partial_figures` (model-switch
+  savings priced over only some invocations; each shows a "k of N"
+  note) and `unpriced_figures` (no estimate at all, including offload
+  candidates with [`cost_priced`](#cost_priced) false). `null` when
+  diagnostics did not run.
+
+It follows `--agent` like the totals it qualifies. It is `null` in an
+envelope written before v0.12.0 (unknown, never full). `analyze` and
+`report` print it as a footer under the token table: one quiet line at
+full coverage, and an `INCOMPLETE` header with one line per gap
+otherwise. A pricing gap also adds an `unpriced_tokens` entry to
+`warnings[]`.
+
+**Example:**
+
+```
+Cost coverage: INCOMPLETE. Dollar figures leave out the following:
+  - Pricing: 97.0% of tokens priced; 1.2M of 40.0M tokens have no price and count as $0. Unpriced tokens by model: claude-new-model (1.2M).
+  - Agent cost: per-agent cost covers 1,327 of 1,347 agent invocations; 15 with no linked trace (spend unknown); 5 whose trace has no model response (no spend).
+```
+
+**Related:** [`unpriced_tokens`](#unpriced_tokens), [`linked_invocation_count`](#linked_invocation_count), [`trace_coverage`](#trace_coverage), [`total_cost`](#total_cost)
+
+### `unpriced_tokens`
+
+**Short:** Tokens counted in a `by_model` row whose model had no price, so they
+are in the token totals and not in any cost.
+
+**Detail:** Added in v0.12 (#688). An unpriced row's `cost` stays `0.0`, so this
+field is the only way to tell "unpriced" from "free". It is set on
+every `token_metrics.by_model` row and summed into
+[`cost_coverage`](#cost_coverage). Prices are looked up by session
+date, so one model id can be priced in one session and unpriced in
+another. A merged row can therefore be partly unpriced. Upgrading
+agentfluent usually adds the missing price.
+
+**Related:** [`cost_coverage`](#cost_coverage), [`total_cost`](#total_cost)
+
+### `linked_invocation_count`
+
+**Short:** Agent invocations of a type that have a linked subagent trace.
+
+**Detail:** Added in v0.12 (#676). A field on each `by_agent_type` row. Against
+`invocation_count` it measures link coverage: an invocation with no
+linked trace has unknown spend. It counts invocations, not trace
+files, so two invocations sharing one agent id count twice here and
+once in [`trace_coverage`](#trace_coverage)'s `linked.files`. On every
+row, `priced_invocation_count <= spend_invocation_count <=
+linked_invocation_count <= invocation_count`.
+
+**Related:** [`cost_coverage`](#cost_coverage), [`trace_coverage`](#trace_coverage)
 
 ### `session_spawned`
 
