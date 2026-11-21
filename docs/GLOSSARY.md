@@ -1868,6 +1868,36 @@ like-for-like.
 
 **Related:** [`total_cost`](#total_cost), [`cost_coverage`](#cost_coverage)
 
+### `cost_coverage_status`
+
+**Short:** Whether both sides of a `diff` price everything their cost figures
+count: `full`, `incomplete` or `unknown`.
+
+**Detail:** Added in v0.12 (#713). `diff` reads each snapshot's
+[`cost_coverage`](#cost_coverage) block and its count of unparseable
+trace files, and reports `baseline_cost_coverage_status`,
+`current_cost_coverage_status` and the combined `cost_coverage_status`.
+A side is `incomplete` when it has tokens with no price, agent
+invocations with no linked trace or with unpriced trace spend, or trace
+files that could not be parsed; `unknown` when it has no readable
+`cost_coverage` or `trace_coverage` block (it predates v0.12.0, or the
+block is malformed or empty). The combined status is `unknown` if either
+side is, else `incomplete` if either side is, else `full`. Its scope is
+the figures `diff` compares (totals, by-model and per-agent cost), so it
+ignores diagnostics gaps: a snapshot can read `full` here while the
+`analyze` footer reports it `INCOMPLETE`. On anything but `full`, `diff`
+adds one line per affected side to the caveat above the cost tables, and
+`diff --quiet` marks its cost figure. It never changes the exit code.
+
+**Example:**
+
+```
+⚠ Cost deltas below may not reflect agent behavior:
+  • current cost coverage is incomplete, so cost deltas may reflect what could not be priced, not agent behavior. Pricing: 92.0% of tokens priced; ...
+```
+
+**Related:** [`cost_coverage`](#cost_coverage), [`cost_model`](#cost_model)
+
 ### `linked_invocation_count`
 
 **Short:** Agent invocations of a type that have a linked subagent trace.

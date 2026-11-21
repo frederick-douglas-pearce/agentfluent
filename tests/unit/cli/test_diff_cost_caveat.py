@@ -1,4 +1,4 @@
-"""Cost caveat slot in ``diff`` table output (#543)."""
+"""Cost caveat slot in ``diff`` table output (#543 cost model, #713 cost coverage)."""
 
 from __future__ import annotations
 
@@ -6,6 +6,11 @@ import io
 
 from rich.console import Console
 
+from agentfluent.analytics.cost_coverage import (
+    CostCoverage,
+    InvocationCoverage,
+    PricingCoverage,
+)
 from agentfluent.analytics.cost_model import CostModelStamp
 from agentfluent.cli.formatters.diff_table import (
     _cost_caveat_lines,
@@ -18,10 +23,25 @@ def _stamp(pin: str | None = "0.2.3", method: int | None = 1) -> CostModelStamp:
     return CostModelStamp(genai_prices_version=pin, cost_method_version=method)
 
 
+def _full() -> CostCoverage:
+    return CostCoverage(
+        pricing=PricingCoverage(tokens=1000),
+        invocations=InvocationCoverage(total=4, linked=4, spend=4, priced=4),
+    )
+
+
 def _result(
     baseline: CostModelStamp | None, current: CostModelStamp | None,
 ) -> DiffResult:
-    return DiffResult(baseline_cost_model=baseline, current_cost_model=current)
+    """Stamps under test; both sides at full cost coverage so only #543 speaks."""
+    return DiffResult(
+        baseline_cost_model=baseline,
+        current_cost_model=current,
+        baseline_cost_coverage=_full(),
+        current_cost_coverage=_full(),
+        baseline_unparseable_trace_files=0,
+        current_unparseable_trace_files=0,
+    )
 
 
 class TestCostCaveatLines:

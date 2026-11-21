@@ -22,6 +22,10 @@ from agentfluent.analytics.tokens import Origin
 from agentfluent.config.models import SEVERITY_RANK, Severity
 from agentfluent.core.filtering import WindowMetadata
 from agentfluent.diagnostics.models import Axis, SignalType
+from agentfluent.diff.cost_coverage import (
+    load_cost_coverage,
+    load_unparseable_trace_files,
+)
 from agentfluent.diff.models import (
     AgentTypeDelta,
     DeltaStatus,
@@ -83,6 +87,10 @@ def compute_diff(
         current_diagnostics_version=_load_version(current),
         baseline_cost_model=_load_cost_model(baseline),
         current_cost_model=_load_cost_model(current),
+        baseline_cost_coverage=load_cost_coverage(baseline),
+        current_cost_coverage=load_cost_coverage(current),
+        baseline_unparseable_trace_files=load_unparseable_trace_files(baseline),
+        current_unparseable_trace_files=load_unparseable_trace_files(current),
         fail_on=fail_on,
         regression_detected=regression,
     )

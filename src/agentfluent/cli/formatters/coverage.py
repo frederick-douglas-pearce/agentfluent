@@ -130,14 +130,38 @@ def _diagnostics_clause(diagnostics: Mapping[str, Any] | None) -> str | None:
     return "Diagnostics: " + "; ".join(parts) + "."
 
 
-def _unparseable_clause(trace_coverage: Mapping[str, Any] | None) -> str | None:
-    files = _count((trace_coverage or {}).get("unparseable"), "files")
+def unparseable_trace_files(trace_coverage: Mapping[str, Any] | None) -> int:
+    """``trace_coverage.unparseable.files``, ``0`` when absent."""
+    return _count((trace_coverage or {}).get("unparseable"), "files")
+
+
+def _unparseable_clause(files: int) -> str | None:
     if not files:
         return None
     return (
         f"Subagent traces: {_plural(files, 'trace file')} could not be parsed; "
         "their spend is unknown and not in any total."
     )
+
+
+def cost_gap_clauses(
+    cost_coverage: Mapping[str, Any],
+    unparseable_files: int,
+) -> list[str]:
+    """The gap clauses for the cost figures ``diff`` compares (#713): pricing,
+    agent invocations and unparseable trace files -- the footer's clauses minus
+    diagnostics. Non-empty exactly when
+    :func:`agentfluent.analytics.cost_coverage.has_cost_gap` reports a gap.
+    Plain text; the caller escapes and styles it."""
+    return [
+        clause
+        for clause in (
+            _pricing_clause(cost_coverage.get("pricing") or {}),
+            _invocation_clause(cost_coverage.get("invocations") or {}),
+            _unparseable_clause(unparseable_files),
+        )
+        if clause is not None
+    ]
 
 
 def cost_coverage_footer(
@@ -161,7 +185,7 @@ def cost_coverage_footer(
             _pricing_clause(pricing),
             _invocation_clause(invocations),
             _diagnostics_clause(cost_coverage.get("diagnostics")),
-            _unparseable_clause(trace_coverage),
+            _unparseable_clause(unparseable_trace_files(trace_coverage)),
         )
         if clause is not None
     ]

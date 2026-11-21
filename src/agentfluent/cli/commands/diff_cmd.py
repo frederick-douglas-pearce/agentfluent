@@ -74,6 +74,7 @@ def _print_json(result: DiffResult, *, quiet: bool) -> None:
             "total_cost_delta": result.token_metrics.total_cost_delta,
             "total_tokens_delta": result.token_metrics.total_tokens_delta,
             "cost_model_status": result.cost_model_status,
+            "cost_coverage_status": result.cost_coverage_status,
             "regression_detected": result.regression_detected,
             "fail_on": result.fail_on.value if result.fail_on else None,
         }
@@ -82,13 +83,34 @@ def _print_json(result: DiffResult, *, quiet: bool) -> None:
     print(format_json_output("diff", payload))
 
 
-_QUIET_COST_MODEL_MARKERS = {
-    "mismatch": " (cost model differs)",
-    "unknown": " (cost model unknown)",
+_QUIET_COST_MODEL_NOTES = {
+    "mismatch": "cost model differs",
+    "unknown": "cost model unknown",
 }
-"""Appended to the quiet line's cost figure when the two sides' cost models are
-not known to match (#543), so a one-line CI summary never shows a bare cost
-delta that may come from a pricing change."""
+"""Noted on the quiet line's cost figure when the two sides' cost models are not
+known to match (#543)."""
+
+_QUIET_COST_COVERAGE_NOTES = {
+    "incomplete": "cost coverage incomplete",
+    "unknown": "cost coverage unknown",
+}
+"""Noted on the quiet line's cost figure when either side's cost coverage is not
+known to be full (#713)."""
+
+
+def _quiet_cost_notes(result: DiffResult) -> str:
+    """One parenthetical qualifying the quiet line's cost delta, or ``""``, so a
+    one-line CI summary never shows a bare cost delta that may come from a pricing
+    change or from tokens and invocations that could not be priced."""
+    notes = [
+        note
+        for note in (
+            _QUIET_COST_MODEL_NOTES.get(result.cost_model_status),
+            _QUIET_COST_COVERAGE_NOTES.get(result.cost_coverage_status),
+        )
+        if note is not None
+    ]
+    return f" ({'; '.join(notes)})" if notes else ""
 
 
 def _print_quiet(result: DiffResult) -> None:
@@ -98,8 +120,9 @@ def _print_quiet(result: DiffResult) -> None:
         f"Diff: {result.new_count} new, {result.resolved_count} resolved, "
         f"{result.persisting_count} persisting | "
         f"cost {sign}${abs(cost_delta):.4f}"
-        + _QUIET_COST_MODEL_MARKERS.get(result.cost_model_status, "")
+        + _quiet_cost_notes(result)
         + (" | REGRESSION" if result.regression_detected else ""),
+        soft_wrap=True,
     )
 
 
