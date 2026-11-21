@@ -106,6 +106,14 @@ class TestParallelToolUseFixture:
         assert [c.tool_name for c in trace.tool_calls] == ["Read", "Grep", "Glob"]
         assert all(c.result_summary for c in trace.tool_calls)
 
+    def test_parallel_calls_split_across_lines_share_turn_index(
+        self, subagent_parallel_tool_use_path: Path,
+    ) -> None:
+        # #695: on the real block-per-line layout, siblings share a turn index
+        # only because the fragment merge runs before tool-call pairing.
+        trace = parse_subagent_trace(subagent_parallel_tool_use_path)
+        assert [c.turn_index for c in trace.tool_calls] == [0, 0, 0]
+
 
 class TestShapeDetectionIgnoresTokenVariance:
     """AC2: the shape test reads content, never output_tokens variance."""
