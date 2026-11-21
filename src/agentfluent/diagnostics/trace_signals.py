@@ -24,6 +24,12 @@ trace-specific signal types:
   are not covered by a STUCK or RETRY sequence. Indicates missing
   fallback instructions.
 
+Two calls issued in the same model turn (same `turn_index`) never count
+as consecutive for PARAMETER_RETRY, STUCK_PATTERN or RETRY_LOOP (#695):
+neither saw the other's result. TOOL_ERROR_SEQUENCE is unchanged and still
+counts parallel errored siblings as consecutive -- including same-turn
+errored calls those signals no longer claim (tracked in #725).
+
 PARAMETER_RETRY, STUCK, RETRY, and TOOL_ERROR_SEQUENCE share one
 `covered` index set, enforcing "one observed pattern → one signal" with
 the precedence **PARAMETER_RETRY > STUCK_PATTERN > RETRY_LOOP >
@@ -323,7 +329,13 @@ def _extract_parameter_retries(
     initial error followed by an input-shape change.
 
     Scans ``tool_calls`` directly (independent of ``retry_sequences``) for
-    maximal runs of 2+ calls sharing a ``tool_name``. The returned
+    maximal runs of 2+ calls sharing a ``tool_name``. An adjacent pair
+    issued in the same model turn breaks the run (#695): a parallel sibling
+    never saw the errored call's result, so it cannot be a retry of it.
+    Accepted miss: with turn N = ``[err, ok]`` and turn N+1 = ``[fixed]``,
+    the break leaves ``[ok, fixed]``, whose leading call did not error, so
+    the error-then-fix is not detected (fail-safe under-detection). The
+    returned
     ``covered`` set lists every index claimed by an emitted signal so the
     retry/stuck and error-sequence extractors skip the same evidence —
     PARAMETER_RETRY wins the precedence.
@@ -336,7 +348,11 @@ def _extract_parameter_retries(
     i = 0
     while i < n:
         j = i + 1
-        while j < n and calls[j].tool_name == calls[i].tool_name:
+        while (
+            j < n
+            and calls[j].tool_name == calls[i].tool_name
+            and not calls[j].same_turn_as(calls[j - 1])
+        ):
             j += 1
         if j - i >= _PARAMETER_RETRY_MIN_ATTEMPTS:
             run_indices = list(range(i, j))

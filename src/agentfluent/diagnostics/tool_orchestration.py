@@ -42,6 +42,14 @@ the measured baseline it would improve upon. See
 ``.claude/specs/analysis/407-calibration/`` for the rubric, classification,
 and tuning simulation.
 
+**Parallel same-turn calls need no special handling here (#695).** Unlike
+the retry detectors, this signal has no adjacency or sequence logic: it
+reads only the call count (``AgentInvocation.tool_uses``) and token
+totals. Every parallel sibling's ``tool_result`` does enter the context
+window, so counting each one is correct. A future trace-level (Tier B)
+detector that reasons about call order should key on
+``SubagentToolCall.turn_index``.
+
 **Thresholds.** The three constants below are the PRD's starting defaults.
 The #407 calibration confirmed no threshold band improves precision on the
 current corpus, so they are unchanged pending Tier B.

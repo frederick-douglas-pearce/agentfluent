@@ -150,6 +150,47 @@ class TestToolCallPairing:
         trace = parse_subagent_trace(path)
         assert [tc.tool_name for tc in trace.tool_calls] == ["Read", "Grep", "Bash"]
 
+    def test_turn_index_shared_by_siblings(self, write_jsonl: WriteJSONL) -> None:
+        # #695: calls from one assistant message share its ordinal.
+        path = write_jsonl(
+            "agent-x.jsonl",
+            [
+                _user("go"),
+                _assistant(
+                    [_tool_use("t1", "Read"), _tool_use("t2", "Read")],
+                    message_id="m1",
+                ),
+                _user([_tool_result("t1"), _tool_result("t2")]),
+                _assistant([_tool_use("t3", "Read")], message_id="m2"),
+                _user([_tool_result("t3")]),
+            ],
+        )
+        trace = parse_subagent_trace(path)
+        assert [tc.turn_index for tc in trace.tool_calls] == [0, 0, 1]
+
+    def test_turn_index_advances_on_text_only_turn(
+        self, write_jsonl: WriteJSONL,
+    ) -> None:
+        # Every assistant message advances the ordinal, including one with no
+        # tool_use, so turn_index identifies a turn rather than counting
+        # tool-bearing turns.
+        path = write_jsonl(
+            "agent-x.jsonl",
+            [
+                _user("go"),
+                _assistant(
+                    [_tool_use("t1", "Read"), _tool_use("t2", "Grep")],
+                    message_id="m1",
+                ),
+                _user([_tool_result("t1"), _tool_result("t2")]),
+                _assistant([{"type": "text", "text": "thinking"}], message_id="m2"),
+                _assistant([_tool_use("t3", "Bash")], message_id="m3"),
+                _user([_tool_result("t3")]),
+            ],
+        )
+        trace = parse_subagent_trace(path)
+        assert [tc.turn_index for tc in trace.tool_calls] == [0, 0, 2]
+
     def test_orphan_tool_use(self, write_jsonl: WriteJSONL) -> None:
         path = write_jsonl(
             "agent-x.jsonl",

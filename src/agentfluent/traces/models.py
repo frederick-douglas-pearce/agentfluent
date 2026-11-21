@@ -65,6 +65,32 @@ class SubagentToolCall(BaseModel):
     timestamp: datetime | None = None
     result_timestamp: datetime | None = None
 
+    turn_index: int | None = None
+    """0-based ordinal of the fragment-merged assistant message (model turn)
+    in the trace file that carried this ``tool_use`` (#695). Parallel
+    sibling calls issued in one turn share it, so it is a general
+    parallelism key rather than a retry flag: two calls with the same
+    ``turn_index`` were issued together and neither saw the other's
+    result. Every assistant message advances the ordinal -- including
+    text-only and synthetic ones -- so it identifies a turn; it is not a
+    count comparable to ``SubagentTrace.model_turns``. ``None`` for
+    programmatically-constructed calls, which then behave as before.
+    If the parser's fragment merge misses a group (lines with no
+    ``message.id``), siblings get distinct ordinals and read as separate
+    turns -- the pre-#695 behavior, never a false same-turn match."""
+
+    def same_turn_as(self, other: SubagentToolCall) -> bool:
+        """Whether ``self`` and ``other`` were issued in the same model turn.
+
+        ``False`` when either ``turn_index`` is unknown (``None``), so calls
+        without turn information keep the pre-#695 adjacency behavior.
+        """
+        return (
+            self.turn_index is not None
+            and other.turn_index is not None
+            and self.turn_index == other.turn_index
+        )
+
     input_keys: list[str] = Field(default_factory=list)
     """Top-level keys of the ``tool_use`` input dict, in source order.
     The primary evidence for PARAMETER_RETRY (#405) input-shape comparison:
