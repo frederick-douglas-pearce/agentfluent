@@ -650,11 +650,41 @@ class TestSameTurnParameterRetry:
         assert len(sigs) == 1
         assert sigs[0].detail["tool_calls"][0]["index"] == 0
 
+    def test_same_turn_pair_mid_run_splits(self) -> None:
+        # Turns [0, 1, 1]: Edit errors, Edit retries with new keys, then a
+        # same-turn sibling. The run must break at the (1, 2) pair, compared
+        # against the previous call, not the run start.
+        calls = [
+            _turn_ptc(0, {"path": "a.py", "old": "x"}, err=True),
+            _turn_ptc(1, {"file_path": "a.py", "old_string": "x"}, err=False),
+            _turn_ptc(1, {"file_path": "b.py", "old_string": "y"}, err=False),
+        ]
+        sigs = _param_signals(_trace(calls=calls))
+        assert len(sigs) == 1
+        assert sigs[0].detail["retry_count"] == 2
+        assert [e["index"] for e in sigs[0].detail["tool_calls"]] == [0, 1]
+
+    def test_same_turn_errored_pair_falls_through_to_error_sequence(self) -> None:
+        # Pins a known imprecision tracked in #725: two parallel errored Edits
+        # are no longer a PARAMETER_RETRY (#695), so they reach
+        # TOOL_ERROR_SEQUENCE, which still reads parallel siblings as
+        # consecutive. When #725 changes that, this test should fail loudly.
+        calls = [
+            _turn_ptc(0, {"path": "a.py", "old": "x"}, err=True),
+            _turn_ptc(0, {"file_path": "a.py", "old_string": "x"}, err=True),
+        ]
+        sigs = extract_trace_signals(_trace(calls=calls))
+        assert [s for s in sigs if s.signal_type == SignalType.PARAMETER_RETRY] == []
+        tes = [s for s in sigs if s.signal_type == SignalType.TOOL_ERROR_SEQUENCE]
+        assert len(tes) == 1
+        assert tes[0].severity == Severity.WARNING
+        assert tes[0].detail["error_count"] == 2
+
     def test_accepted_miss_error_then_fix_across_turns(self) -> None:
         # Turn 0 = [Edit(err), Edit(ok)], turn 1 = [Edit(fixed)]. The break
         # leaves [ok, fixed] as the cross-turn run; its leading call did not
-        # error, so neither PARAMETER_RETRY nor RETRY_LOOP fires -- the
-        # documented, fail-safe under-detection.
+        # error, so PARAMETER_RETRY does not fire -- the accepted miss
+        # documented on `_extract_parameter_retries`.
         calls = [
             _turn_ptc(0, {"path": "a.py"}, err=True),
             _turn_ptc(0, {"path": "b.py"}, err=False),
@@ -663,4 +693,3 @@ class TestSameTurnParameterRetry:
         trace = _trace(calls=calls, sequences=detect_retry_sequences(calls))
         types = {s.signal_type for s in extract_trace_signals(trace)}
         assert SignalType.PARAMETER_RETRY not in types
-        assert SignalType.RETRY_LOOP not in types

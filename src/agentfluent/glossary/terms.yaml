@@ -214,9 +214,10 @@
     try differently. The retries may eventually succeed, in which case
     `eventual_success: true` is recorded in the signal detail.
 
-    Calls the agent issued in parallel within one model turn are never
-    counted as retries of each other: neither saw the other's result.
-    The same rule applies to `stuck_pattern` and `parameter_retry`.
+    Calls the agent issued in parallel within one model turn (recorded as
+    one message) are not counted as retries of each other: neither saw
+    the other's result. The same rule applies to `stuck_pattern` and
+    `parameter_retry`.
   example: "Subagent 'architect' retried tool 'Read' 5 times."
   severity_range: warning
   threshold: attempts >= 3
@@ -233,6 +234,9 @@
     The agent isn't varying its approach between attempts; it's stuck in a
     loop. Emits `critical` because nothing the agent can do will recover
     without prompt-level intervention.
+
+    As with `retry_loop`, calls issued in parallel within one model turn
+    (recorded as one message) are not counted as repeats of each other.
   example: |
     Subagent 'Explore' repeated tool 'Bash' with identical input 6 times
     without progress.
@@ -258,8 +262,9 @@
     high-precision: an error followed by an input-shape change is strong
     evidence the agent doesn't know the parameter format.
 
-    Parallel calls from one model turn don't count as consecutive here:
-    a sibling issued alongside the errored call never saw its result.
+    Parallel calls from one model turn (recorded as one message) don't
+    count as consecutive here: a sibling issued alongside the errored
+    call never saw its result.
 
     Scanned directly from `tool_calls`, independent of the
     similarity-based retry detector -- a parameter-shape retry varies the

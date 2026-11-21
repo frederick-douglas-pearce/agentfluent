@@ -168,9 +168,10 @@ def _pair_tool_calls(messages: list[SessionMessage]) -> list[SubagentToolCall]:
     multiple ``tool_use`` blocks, so faithful per-call token attribution
     is not possible. Trace-level ``usage`` is the source of truth.
 
-    ``turn_index`` is the ordinal of the assistant message among all
-    assistant messages (in the same order ``_turn_usages`` walks), so
-    sibling calls from one message share it (#695).
+    ``turn_index`` is the 0-based ordinal of the assistant message among
+    all assistant messages in file order, so sibling calls from one message
+    share it (#695). It is not an index into ``turn_usages``, which skips
+    messages without ``usage``.
     """
     results: dict[str, tuple[ContentBlock, datetime | None]] = {}
     for msg in messages:
