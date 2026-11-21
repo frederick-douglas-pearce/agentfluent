@@ -52,6 +52,8 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _dist_version
 from typing import Literal
 
 from genai_prices.data import (  # internal, non-``__all__`` surface -- see module docstring
@@ -63,6 +65,19 @@ from genai_prices.data import (  # internal, non-``__all__`` surface -- see modu
 logger = logging.getLogger(__name__)
 
 _ANTHROPIC = next((p for p in providers if p.id == "anthropic"), None)
+
+
+def installed_version() -> str | None:
+    """Return the installed genai-prices distribution version, or ``None`` if unknown.
+
+    The rate table is pinned exactly in ``pyproject.toml``, so this version identifies the
+    upstream half of the cost model. ``analytics.cost_model`` stamps it into every analyze
+    envelope (#543) so ``diff`` can tell when two snapshots were priced by different tables.
+    """
+    try:
+        return _dist_version("genai-prices")
+    except PackageNotFoundError:
+        return None
 
 
 @dataclass(frozen=True)

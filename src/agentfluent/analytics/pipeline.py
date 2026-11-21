@@ -21,6 +21,7 @@ from agentfluent.analytics.agent_metrics import (
     compute_agent_metrics,
 )
 from agentfluent.analytics.cost_coverage import CostCoverage, compute_cost_coverage
+from agentfluent.analytics.cost_model import CostModelStamp
 from agentfluent.analytics.pricing import SYNTHETIC_MODELS
 from agentfluent.analytics.tokens import (
     ModelTokenBreakdown,
@@ -190,6 +191,14 @@ class AnalysisResult(BaseModel):
     analyzed with different rule sets / calibration constants (#347).
     ``None`` on legacy envelopes; populated as ``agentfluent.__version__``
     by :mod:`agentfluent.cli.commands.analyze`."""
+
+    cost_model: CostModelStamp | None = None
+    """Which rate table and cost method priced this envelope's dollar figures (#543).
+    Stamped by :mod:`agentfluent.cli.commands.analyze` so ``diff`` can flag a cost delta
+    that comes from a pricing or cost-method change rather than agent behavior. ``None`` on
+    envelopes from before v0.12.0. Deliberately a plain ``None`` default -- never a
+    ``default_factory`` or computed field, which would stamp a rehydrated legacy envelope
+    with the reader's own cost model."""
 
     project_name: str | None = None
     """Display name of the analyzed project. Stamped by the CLI so

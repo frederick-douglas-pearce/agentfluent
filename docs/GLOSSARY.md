@@ -1839,6 +1839,35 @@ agentfluent usually adds the missing price.
 
 **Related:** [`cost_coverage`](#cost_coverage), [`total_cost`](#total_cost)
 
+### `cost_model`
+
+**Short:** Which rate table and cost method priced an envelope's dollar figures,
+so `diff` can tell a pricing change from an agent-behavior change.
+
+**Detail:** Added in v0.12 (#543). `analyze --format json` writes a `cost_model`
+block with two parts: `genai_prices_version` (the pinned upstream
+rate table) and `cost_method_version` (a number AgentFluent raises
+when it changes how cost is computed). `diff` compares the two sides
+and reports `cost_model_status`: `match`, `mismatch` (with
+`cost_model_changes` naming `pricing_table` and/or `cost_method`) or
+`unknown`, when either snapshot has no readable stamp (it predates
+v0.12.0, or the stamp is malformed), or a stamp part is missing and no
+other part is known to differ (a known difference reports `mismatch`). Two
+unstamped snapshots are `unknown` even from the same release. On anything but
+`match` it prints a caveat above the cost tables, and `diff --quiet`
+marks its cost figure. The caveat never changes the exit code.
+Re-capture the baseline with the current release to compare
+like-for-like.
+
+**Example:**
+
+```
+⚠ Cost deltas below may not reflect agent behavior:
+  • baseline and current were priced by different cost models (genai-prices 0.1.4 → 0.2.3), so cost deltas may reflect the pricing change, not agent behavior.
+```
+
+**Related:** [`total_cost`](#total_cost), [`cost_coverage`](#cost_coverage)
+
 ### `linked_invocation_count`
 
 **Short:** Agent invocations of a type that have a linked subagent trace.

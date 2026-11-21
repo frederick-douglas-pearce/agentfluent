@@ -73,12 +73,22 @@ def _print_json(result: DiffResult, *, quiet: bool) -> None:
             "persisting_count": result.persisting_count,
             "total_cost_delta": result.token_metrics.total_cost_delta,
             "total_tokens_delta": result.token_metrics.total_tokens_delta,
+            "cost_model_status": result.cost_model_status,
             "regression_detected": result.regression_detected,
             "fail_on": result.fail_on.value if result.fail_on else None,
         }
     else:
         payload = result.model_dump(mode="json")
     print(format_json_output("diff", payload))
+
+
+_QUIET_COST_MODEL_MARKERS = {
+    "mismatch": " (cost model differs)",
+    "unknown": " (cost model unknown)",
+}
+"""Appended to the quiet line's cost figure when the two sides' cost models are
+not known to match (#543), so a one-line CI summary never shows a bare cost
+delta that may come from a pricing change."""
 
 
 def _print_quiet(result: DiffResult) -> None:
@@ -88,6 +98,7 @@ def _print_quiet(result: DiffResult) -> None:
         f"Diff: {result.new_count} new, {result.resolved_count} resolved, "
         f"{result.persisting_count} persisting | "
         f"cost {sign}${abs(cost_delta):.4f}"
+        + _QUIET_COST_MODEL_MARKERS.get(result.cost_model_status, "")
         + (" | REGRESSION" if result.regression_detected else ""),
     )
 

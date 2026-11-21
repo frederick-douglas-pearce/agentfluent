@@ -271,3 +271,25 @@ class TestDiagnosticsVersionStamp:
         data = parse_json_output(result.stdout, expected_command="analyze")
         assert isinstance(data, dict)
         assert data.get("diagnostics_version") == __version__
+
+    def test_envelope_includes_cost_model_stamp(
+        self, runner: CliRunner, cli_app: typer.Typer, populated_home: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """#543: the envelope records which cost model priced it. The pin is read
+        from installed metadata, so the test feeds a sentinel rather than asserting
+        today's pin (which would fail on every genai-prices bump)."""
+        from agentfluent.analytics import _genai_source
+        from agentfluent.analytics.cost_model import COST_METHOD_VERSION
+
+        monkeypatch.setattr(_genai_source, "_dist_version", lambda _name: "9.9.9-sentinel")
+        result = runner.invoke(
+            cli_app, ["analyze", "--project", "project", "--json"],
+        )
+        assert result.exit_code == EXIT_OK
+        data = parse_json_output(result.stdout, expected_command="analyze")
+        assert isinstance(data, dict)
+        assert data.get("cost_model") == {
+            "genai_prices_version": "9.9.9-sentinel",
+            "cost_method_version": COST_METHOD_VERSION,
+        }

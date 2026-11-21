@@ -15,6 +15,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import ValidationError
+
+from agentfluent.analytics.cost_model import CostModelStamp
 from agentfluent.analytics.tokens import Origin
 from agentfluent.config.models import SEVERITY_RANK, Severity
 from agentfluent.core.filtering import WindowMetadata
@@ -78,6 +81,8 @@ def compute_diff(
         current_window=_load_window(current),
         baseline_diagnostics_version=_load_version(baseline),
         current_diagnostics_version=_load_version(current),
+        baseline_cost_model=_load_cost_model(baseline),
+        current_cost_model=_load_cost_model(current),
         fail_on=fail_on,
         regression_detected=regression,
     )
@@ -103,6 +108,20 @@ def _load_version(envelope: dict[str, Any]) -> str | None:
     if not isinstance(raw, str) or not raw:
         return None
     return raw
+
+
+def _load_cost_model(envelope: dict[str, Any]) -> CostModelStamp | None:
+    """Read the ``cost_model`` stamp (#543), returning ``None`` when it is absent
+    (pre-v0.12.0 envelopes), null, or malformed -- all of which ``diff`` treats as
+    an unknown cost model.
+    """
+    raw = envelope.get("cost_model")
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return CostModelStamp.model_validate(raw)
+    except ValidationError:
+        return None
 
 
 def has_regression(result: DiffResult) -> bool:

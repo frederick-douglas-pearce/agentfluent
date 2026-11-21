@@ -237,7 +237,74 @@ def _print_rec_table(
     console.print()
 
 
+def _cost_caveat_lines(result: DiffResult) -> list[str]:
+    """Lines that qualify every cost delta below them, or ``[]`` when none apply.
+
+    One yellow header, then one indented reason per line. This is the single
+    slot for cost caveats in table output: printed once, above the total,
+    by-model and per-agent cost tables. Other cost caveats (#713's coverage
+    disclosure) add reasons here rather than printing a second banner.
+    """
+    reasons: list[str] = []
+    cost_model_reason = _cost_model_reason(result)
+    if cost_model_reason is not None:
+        reasons.append(cost_model_reason)
+    if not reasons:
+        return []
+    header = (
+        "[yellow]⚠ Cost deltas below may not reflect agent behavior:[/yellow]"
+    )
+    return [header, *(f"  • {reason}" for reason in reasons)]
+
+
+def _cost_model_reason(result: DiffResult) -> str | None:
+    """Explain a cost-model mismatch or an unknown cost model (#543)."""
+    status = result.cost_model_status
+    if status == "match":
+        return None
+    baseline = result.baseline_cost_model
+    current = result.current_cost_model
+    if status == "mismatch" and baseline is not None and current is not None:
+        parts: list[str] = []
+        if "pricing_table" in result.cost_model_changes:
+            parts.append(
+                f"genai-prices {escape(str(baseline.genai_prices_version))} → "
+                f"{escape(str(current.genai_prices_version))}",
+            )
+        if "cost_method" in result.cost_model_changes:
+            parts.append(
+                f"cost method {baseline.cost_method_version} → "
+                f"{current.cost_method_version}",
+            )
+        return (
+            "baseline and current were priced by different cost models ("
+            + "; ".join(parts)
+            + "), so cost deltas may reflect the pricing change, not agent "
+            "behavior."
+        )
+    if baseline is not None and current is not None:
+        subject = "a snapshot's cost-model stamp is incomplete"
+    elif baseline is None and current is None:
+        subject = (
+            "neither snapshot has a readable cost-model stamp (missing or malformed)"
+        )
+    elif baseline is None:
+        subject = (
+            "the baseline snapshot has no readable cost-model stamp (missing or malformed)"
+        )
+    else:
+        subject = (
+            "the current snapshot has no readable cost-model stamp (missing or malformed)"
+        )
+    return (
+        f"cost model unknown: {subject}, so cost deltas may include pricing "
+        "or cost-method changes, not only agent behavior."
+    )
+
+
 def _render_token_metrics(console: Console, result: DiffResult) -> None:
+    for line in _cost_caveat_lines(result):
+        console.print(line)
     tm = result.token_metrics
     table = Table(title="Token Metrics")
     table.add_column("Metric")

@@ -45,7 +45,7 @@ The 1-hour cache-write overlay (#534) lands in **v0.10**. Before it, AgentFluent
 
 This matters for `agentfluent diff`: a baseline snapshot captured **before** v0.10 stores costs computed under the old all-5m rate. Diffing it against a snapshot taken **after** upgrading will show a positive cost delta on cache-heavy sessions that comes purely from the pricing fix, not from any change in agent behavior. To compare like-for-like, **re-capture your baseline after upgrading to v0.10** so both sides price 1h writes the same way. Token counts (which the diff also reports) are unaffected.
 
-A follow-up will stamp the pricing-model version into snapshots so the diff can flag a cross-version comparison automatically (tracked in #543).
+From v0.12.0, `analyze --format json` stamps each snapshot with its cost model: the genai-prices version and a cost-method version that AgentFluent raises when it changes how cost is computed (#543; see [`cost_model`](GLOSSARY.md#cost_model)). `diff` compares the two stamps. When they differ, or a snapshot has no readable stamp (it predates v0.12.0, or the stamp is malformed), it prints a caveat above the cost tables, and `diff --quiet` marks its cost figure. The fix is the same: re-capture the baseline with the current release.
 
 ## Date-aware base rates (session priced at the rate in effect when it ran)
 
