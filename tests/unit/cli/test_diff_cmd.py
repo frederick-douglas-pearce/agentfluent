@@ -624,7 +624,10 @@ class TestCostModelStampOutput:
         current = _data(total_cost=2.0)
         # Full cost coverage on both sides (#713), so these cases isolate the stamp.
         for side in (baseline, current):
-            side["cost_coverage"] = {"pricing": {"tokens": 150}, "invocations": {}}
+            side["cost_coverage"] = {
+                "pricing": {"tokens": 150, "unpriced_tokens": 0},
+                "invocations": {"total": 0, "linked": 0, "spend": 0, "priced": 0},
+            }
             side["trace_coverage"] = {"unparseable": {"files": 0}}
         if baseline_stamp is not None:
             baseline["cost_model"] = baseline_stamp

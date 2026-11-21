@@ -256,7 +256,9 @@ def _cost_caveat_lines(result: DiffResult) -> list[str]:
 
 def _render_token_metrics(console: Console, result: DiffResult) -> None:
     for line in _cost_caveat_lines(result):
-        console.print(line)
+        # emoji=False: reasons carry envelope strings, and escape() does not stop
+        # Rich emoji shortcodes such as ":smile:".
+        console.print(line, emoji=False)
     tm = result.token_metrics
     table = Table(title="Token Metrics")
     table.add_column("Metric")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -13,6 +14,8 @@ from agentfluent.analytics.cost_coverage import (
     PricingCoverage,
     has_cost_gap,
 )
+from agentfluent.analytics.pipeline import analyze_sessions
+from agentfluent.config.models import Severity
 from agentfluent.diff.compute import compute_diff
 from agentfluent.diff.cost_coverage import (
     cost_coverage_status,
@@ -20,6 +23,7 @@ from agentfluent.diff.cost_coverage import (
     load_unparseable_trace_files,
     side_coverage_status,
 )
+from tests.unit.test_trace_coverage import _build_session
 
 
 def _coverage(
@@ -106,10 +110,57 @@ class TestLoadCostCoverage:
             {"pricing": [], "invocations": {}},
             {"pricing": {"tokens": "many"}, "invocations": {}},
             "full",
+            {"pricing": {}, "invocations": {}},  # empty sub-blocks
         ],
     )
     def test_unreadable_block_is_none_never_full(self, raw: Any) -> None:
         assert load_cost_coverage(_envelope(cost_coverage=raw)) is None
+
+    @pytest.mark.parametrize(
+        ("section", "key"),
+        [
+            ("pricing", "tokens"),
+            ("pricing", "unpriced_tokens"),
+            ("invocations", "total"),
+            ("invocations", "linked"),
+            ("invocations", "spend"),
+            ("invocations", "priced"),
+        ],
+    )
+    def test_each_required_count_missing_is_none(self, section: str, key: str) -> None:
+        block = _coverage().model_dump(mode="json")
+        del block[section][key]
+        assert load_cost_coverage(_envelope(cost_coverage=block)) is None
+
+    @pytest.mark.parametrize(
+        ("section", "values"),
+        [
+            ("pricing", {"tokens": 10, "unpriced_tokens": -5}),
+            ("pricing", {"tokens": 10, "unpriced_tokens": 11}),
+            ("invocations", {"total": -3, "linked": -3, "spend": -3, "priced": -3}),
+            ("invocations", {"total": 3, "linked": 5, "spend": 3, "priced": 3}),
+            ("invocations", {"total": 4, "linked": 4, "spend": 2, "priced": 3}),
+            ("invocations", {"total": 4, "linked": 1, "spend": 9, "priced": 1}),
+        ],
+    )
+    def test_inconsistent_counts_are_none(self, section: str, values: dict[str, int]) -> None:
+        block = _coverage().model_dump(mode="json")
+        block[section].update(values)
+        assert load_cost_coverage(_envelope(cost_coverage=block)) is None
+
+    def test_huge_consistent_counts_load(self) -> None:
+        block = _coverage().model_dump(mode="json")
+        block["pricing"].update(tokens=10**400, unpriced_tokens=10**399)
+        loaded = load_cost_coverage(_envelope(cost_coverage=block))
+        assert loaded is not None
+        assert loaded.pricing.unpriced_tokens == 10**399
+
+    def test_real_analyze_output_loads(self, tmp_path: Path) -> None:
+        """The checks must accept what ``analyze`` actually writes, or every
+        diff would silently read ``unknown``."""
+        data = analyze_sessions([_build_session(tmp_path)]).model_dump(mode="json")
+        assert load_cost_coverage(data) is not None
+        assert load_unparseable_trace_files(data) == 0
 
 
 class TestLoadUnparseableTraceFiles:
@@ -146,6 +197,9 @@ class TestSideStatus:
 
     def test_no_trace_count_is_unknown_even_with_a_full_block(self) -> None:
         assert side_coverage_status(_coverage(), None) == "unknown"
+
+    def test_no_trace_count_outranks_an_incomplete_block(self) -> None:
+        assert side_coverage_status(_coverage(unpriced=5), None) == "unknown"
 
 
 class TestCombinedStatus:
@@ -210,9 +264,34 @@ class TestComputeDiff:
         assert result.cost_coverage_status == "incomplete"
 
     def test_coverage_never_sets_regression(self) -> None:
-        result = compute_diff(_envelope(), _envelope(), fail_on=None)
+        """At the lowest threshold, a coverage gap with no new recommendation is
+        still no regression."""
+        unpriced = _envelope(
+            cost_coverage=_coverage(unpriced=40).model_dump(mode="json"),
+            trace_coverage=_TRACES_CLEAN,
+        )
+        result = compute_diff(_envelope(), unpriced, fail_on=Severity.INFO)
         assert result.cost_coverage_status == "unknown"
+        assert result.current_cost_coverage_status == "incomplete"
         assert result.regression_detected is False
+
+    @pytest.mark.parametrize(
+        "block",
+        [
+            {},
+            {"pricing": {}, "invocations": {}},
+            {"pricing": {"tokens": 10, "unpriced_tokens": -1},
+             "invocations": {"total": 0, "linked": 0, "spend": 0, "priced": 0}},
+            {"pricing": {"tokens": 10, "unpriced_tokens": 0},
+             "invocations": {"total": 1, "linked": 2, "spend": 0, "priced": 0}},
+        ],
+    )
+    def test_present_but_malformed_block_reads_unknown(self, block: dict[str, Any]) -> None:
+        full = _envelope(cost_coverage=_FULL_BLOCK, trace_coverage=_TRACES_CLEAN)
+        bad = _envelope(cost_coverage=block, trace_coverage=_TRACES_CLEAN)
+        result = compute_diff(bad, full)
+        assert result.baseline_cost_coverage is None
+        assert result.baseline_cost_coverage_status == "unknown"
 
     def test_json_carries_status_fields(self) -> None:
         payload = self._diff(_envelope(), _envelope()).model_dump(mode="json")

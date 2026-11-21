@@ -1694,16 +1694,21 @@
     invocations with no linked trace or with unpriced trace spend, or trace
     files that could not be parsed; `unknown` when it has no readable
     `cost_coverage` or `trace_coverage` block (it predates v0.12.0, or the
-    block is malformed or empty). The combined status is `unknown` if either
+    block is malformed, empty, missing a count, or inconsistent, such as more
+    linked invocations than invocations). The combined status is `unknown` if either
     side is, else `incomplete` if either side is, else `full`. Its scope is
     the figures `diff` compares (totals, by-model and per-agent cost), so it
     ignores diagnostics gaps: a snapshot can read `full` here while the
     `analyze` footer reports it `INCOMPLETE`. On anything but `full`, `diff`
     adds one line per affected side to the caveat above the cost tables, and
     `diff --quiet` marks its cost figure. It never changes the exit code.
+    The full `diff --format json` also carries the raw inputs per side:
+    `baseline_cost_coverage` / `current_cost_coverage` (the block as read,
+    `null` when unreadable) and `baseline_unparseable_trace_files` /
+    `current_unparseable_trace_files` (`null` when unreadable).
   example: |
     ⚠ Cost deltas below may not reflect agent behavior:
-      • current cost coverage is incomplete, so cost deltas may reflect what could not be priced, not agent behavior. Pricing: 92.0% of tokens priced; ...
+      • current cost coverage is incomplete, so cost deltas may reflect spend that could not be measured or priced, not agent behavior. Pricing: 92.0% of tokens priced; ...
   related: [cost_coverage, cost_model]
 
 - name: linked_invocation_count

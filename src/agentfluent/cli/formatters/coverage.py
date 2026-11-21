@@ -150,9 +150,11 @@ def cost_gap_clauses(
 ) -> list[str]:
     """The gap clauses for the cost figures ``diff`` compares (#713): pricing,
     agent invocations and unparseable trace files -- the footer's clauses minus
-    diagnostics. Non-empty exactly when
-    :func:`agentfluent.analytics.cost_coverage.has_cost_gap` reports a gap.
-    Plain text; the caller escapes and styles it."""
+    diagnostics. For non-negative counts (all ``diff``'s loader admits), non-empty
+    exactly when :func:`agentfluent.analytics.cost_coverage.has_cost_gap` reports a
+    gap; ``test_clauses_non_empty_iff_gap`` pins the two together, and
+    ``test_footer_minus_diagnostics_equals_diff_clauses`` pins this list to the
+    footer's. Plain text; the caller escapes and styles it."""
     return [
         clause
         for clause in (

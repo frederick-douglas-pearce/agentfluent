@@ -21,25 +21,54 @@ from agentfluent.analytics.cost_coverage import CostCoverage, has_cost_gap
 CostCoverageStatus = Literal["full", "incomplete", "unknown"]
 
 
+_REQUIRED_PRICING_KEYS = ("tokens", "unpriced_tokens")
+_REQUIRED_INVOCATION_KEYS = ("total", "linked", "spend", "priced")
+
+
 def load_cost_coverage(envelope: dict[str, Any]) -> CostCoverage | None:
     """Read the envelope's ``cost_coverage`` block, or ``None`` when it is absent
     (pre-v0.12.0), null, or malformed.
 
-    Fails closed: every :class:`CostCoverage` field defaults to zero, so a lenient
-    validation of ``{}`` (or of a block missing ``pricing`` or ``invocations``)
-    would read as full coverage. Both sub-blocks must be objects to count.
+    Fails closed, because every :class:`CostCoverage` count defaults to zero and a
+    zero reads as "no gap". The block counts only when:
+
+    - ``pricing`` carries ``tokens`` and ``unpriced_tokens``, and ``invocations``
+      carries ``total``, ``linked``, ``spend`` and ``priced`` -- every count the gap
+      check and the caveat clauses read; and
+    - those counts are consistent: ``0 <= priced <= spend <= linked <= total`` and
+      ``0 <= unpriced_tokens <= tokens``.
+
+    Anything else returns ``None``, which ``diff`` reports as ``unknown``. Values
+    pydantic coerces losslessly (``"10"``, ``10.0``) are accepted as read; this
+    check is diff's own and does not constrain the ``analyze`` models.
     """
     raw = envelope.get("cost_coverage")
     if not isinstance(raw, dict):
         return None
-    if not isinstance(raw.get("pricing"), dict) or not isinstance(
-        raw.get("invocations"), dict,
+    pricing = raw.get("pricing")
+    invocations = raw.get("invocations")
+    if not isinstance(pricing, dict) or not isinstance(invocations, dict):
+        return None
+    if any(key not in pricing for key in _REQUIRED_PRICING_KEYS) or any(
+        key not in invocations for key in _REQUIRED_INVOCATION_KEYS
     ):
         return None
     try:
-        return CostCoverage.model_validate(raw)
+        coverage = CostCoverage.model_validate(raw)
     except ValidationError:
         return None
+    if not _is_consistent(coverage):
+        return None
+    return coverage
+
+
+def _is_consistent(coverage: CostCoverage) -> bool:
+    inv = coverage.invocations
+    pricing = coverage.pricing
+    return (
+        0 <= inv.priced <= inv.spend <= inv.linked <= inv.total
+        and 0 <= pricing.unpriced_tokens <= pricing.tokens
+    )
 
 
 def load_unparseable_trace_files(envelope: dict[str, Any]) -> int | None:

@@ -93,14 +93,28 @@ def _cost_coverage_reason(result: DiffResult, side: str) -> str | None:
         unparseable = result.current_unparseable_trace_files
     if status == "full":
         return None
-    if status == "unknown" or coverage is None or unparseable is None:
+    if coverage is None or unparseable is None:
+        if coverage is None and unparseable is None:
+            missing = (
+                "has no readable cost-coverage or trace-coverage record (missing or "
+                "malformed; envelopes from before v0.12.0 lack both)"
+            )
+        elif coverage is None:
+            missing = (
+                "has no readable cost-coverage record (missing, malformed or "
+                "inconsistent; envelopes from before v0.12.0 lack it)"
+            )
+        else:
+            missing = (
+                "has no readable count of unparseable trace files "
+                "(trace_coverage.unparseable.files missing or malformed)"
+            )
         return (
-            f"cost coverage unknown: the {side} snapshot has no readable cost-coverage "
-            "record (missing or malformed; envelopes from before v0.12.0 lack it), "
-            "so its dollar figures may leave out unpriced tokens or agent invocations."
+            f"cost coverage unknown: the {side} snapshot {missing}, so its dollar "
+            "figures may leave out unpriced tokens, agent invocations or trace files."
         )
     clauses = cost_gap_clauses(coverage.model_dump(), unparseable)
     return (
-        f"{side} cost coverage is incomplete, so cost deltas may reflect what "
-        "could not be priced, not agent behavior. " + " ".join(clauses)
+        f"{side} cost coverage is incomplete, so cost deltas may reflect spend that "
+        "could not be measured or priced, not agent behavior. " + " ".join(clauses)
     )

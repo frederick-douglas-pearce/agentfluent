@@ -20,7 +20,7 @@ from agentfluent.analytics.cost_coverage import (
     has_cost_gap,
 )
 from agentfluent.analytics.cost_model import CostModelStamp
-from agentfluent.cli.formatters.coverage import cost_gap_clauses
+from agentfluent.cli.formatters.coverage import cost_coverage_footer, cost_gap_clauses
 from agentfluent.cli.formatters.diff_cost_caveat import cost_caveat_reasons
 from agentfluent.cli.formatters.diff_table import _render_token_metrics
 from agentfluent.cli.formatters.json_output import format_json_output
@@ -81,8 +81,10 @@ class TestReasons:
             _result(_coverage(), _coverage(unpriced={"claude-new-1": 40_000})),
         )
         assert len(reasons) == 1
-        assert reasons[0].startswith("current cost coverage is incomplete")
-        assert "not agent behavior" in reasons[0]
+        assert reasons[0].startswith(
+            "current cost coverage is incomplete, so cost deltas may reflect spend "
+            "that could not be measured or priced, not agent behavior.",
+        )
         assert "claude-new-1" in reasons[0]
 
     def test_one_side_legacy_reads_unknown(self) -> None:
@@ -101,8 +103,31 @@ class TestReasons:
             current_unparseable_trace_files=0,
         )
         reasons = cost_caveat_reasons(result)
-        assert reasons == [reasons[0]]
-        assert "the baseline snapshot has no readable cost-coverage record" in reasons[0]
+        assert len(reasons) == 1
+        assert reasons[0].startswith(
+            "cost coverage unknown: the baseline snapshot has no readable count of "
+            "unparseable trace files",
+        )
+        assert "cost-coverage record" not in reasons[0]
+
+    def test_unreadable_block_with_trace_count_names_the_block(self) -> None:
+        result = _result(_coverage(), _coverage())
+        result.current_cost_coverage = None
+        reasons = cost_caveat_reasons(result)
+        assert reasons == [
+            "cost coverage unknown: the current snapshot has no readable cost-coverage "
+            "record (missing, malformed or inconsistent; envelopes from before v0.12.0 "
+            "lack it), so its dollar figures may leave out unpriced tokens, agent "
+            "invocations or trace files.",
+        ]
+
+    def test_current_side_legacy_names_the_current_side(self) -> None:
+        reasons = cost_caveat_reasons(_result(_coverage(), None))
+        assert len(reasons) == 1
+        assert reasons[0].startswith(
+            "cost coverage unknown: the current snapshot has no readable cost-coverage "
+            "or trace-coverage record",
+        )
 
     def test_both_partial_gives_one_reason_per_side(self) -> None:
         reasons = cost_caveat_reasons(
@@ -134,13 +159,35 @@ class TestReasons:
         assert "cost coverage unknown: the baseline snapshot" in out
 
     def test_markup_in_a_model_id_renders_literally(self) -> None:
-        """Model ids come from user-supplied envelope files (C2)."""
+        """Model ids come from user-supplied envelope files (#713 architect review, C2)."""
         out = _render(_result(_coverage(), _coverage(unpriced={"[red]x[/red]": 5})))
         assert "[red]x[/red]" in out
 
+    def test_emoji_shortcode_in_a_model_id_renders_literally(self) -> None:
+        out = _render(_result(_coverage(), _coverage(unpriced={"m:smile:x": 5})))
+        assert "m:smile:x" in out
+
+
+class TestFooterParity:
+    """The analyze footer and diff assemble the same gap clauses; the footer
+    only adds diagnostics (#713 scope ruling, D2)."""
+
+    @pytest.mark.parametrize("unparseable", [0, 2])
+    def test_footer_minus_diagnostics_equals_diff_clauses(self, unparseable: int) -> None:
+        coverage = CostCoverage(
+            pricing=PricingCoverage(tokens=100, unpriced_tokens=10, unpriced_models={"m": 10}),
+            invocations=InvocationCoverage(total=4, linked=3, spend=3, priced=2),
+            diagnostics=DiagnosticsCoverage(partial_figures=1, unpriced_figures=1),
+        )
+        dumped = coverage.model_dump()
+        footer = cost_coverage_footer(dumped, {"unparseable": {"files": unparseable}})
+        footer_clauses = [c for c in footer.clauses if not c.startswith("Diagnostics:")]
+        assert len(footer_clauses) < len(footer.clauses)
+        assert footer_clauses == cost_gap_clauses(dumped, unparseable)
+
 
 class TestSharedClauses:
-    """The diff clauses and the shared gap check cannot disagree (C3)."""
+    """The diff clauses and the shared gap check cannot disagree (#713 architect review, C3)."""
 
     @pytest.mark.parametrize(
         ("coverage", "unparseable"),
@@ -223,7 +270,9 @@ class TestCli:
         baseline: Any, current: Any, note: str | None,
     ) -> None:
         a, b = _paths(tmp_path, baseline, current)
-        result = runner.invoke(cli_app, ["diff", a, b, "--quiet", "--fail-on", "off"])
+        result = runner.invoke(
+            cli_app, ["diff", a, b, "--quiet", "--fail-on", "off"], env={"COLUMNS": "40"},
+        )
         assert result.exit_code == 0, result.output
         lines = result.output.strip().splitlines()
         assert len(lines) == 1  # one line, never wrapped
@@ -239,7 +288,10 @@ class TestCli:
         data = json.loads(Path(a).read_text())
         del data["data"]["cost_model"]
         Path(a).write_text(json.dumps(data))
-        result = runner.invoke(cli_app, ["diff", a, b, "--quiet", "--fail-on", "off"])
+        result = runner.invoke(
+            cli_app, ["diff", a, b, "--quiet", "--fail-on", "off"], env={"COLUMNS": "40"},
+        )
+        assert len(result.output.strip().splitlines()) == 1
         assert "(cost model unknown; cost coverage unknown)" in result.output
 
     @pytest.mark.parametrize(
@@ -266,6 +318,25 @@ class TestCli:
         payload = json.loads(result.output)["data"]
         assert payload["cost_coverage_status"] != "full"
         assert payload["regression_detected"] is False
+
+    @pytest.mark.parametrize(
+        ("unpriced", "expected"),
+        [(10**399, "current cost coverage is incomplete"), (10**401, "cost coverage unknown")],
+    )
+    def test_huge_counts_never_crash_the_table(
+        self, runner: CliRunner, cli_app: typer.Typer, tmp_path: Path,
+        unpriced: int, expected: str,
+    ) -> None:
+        huge = _coverage().model_dump(mode="json")
+        huge["pricing"].update(
+            tokens=10**400, unpriced_tokens=unpriced, unpriced_models={"m": unpriced},
+        )
+        a, b = _paths(tmp_path, _FULL, huge)
+        result = runner.invoke(
+            cli_app, ["diff", a, b, "--fail-on", "off"], env={"COLUMNS": "400"},
+        )
+        assert result.exit_code == 0, result.output
+        assert expected in result.output
 
     def test_table_shows_coverage_caveat(
         self, runner: CliRunner, cli_app: typer.Typer, tmp_path: Path,
