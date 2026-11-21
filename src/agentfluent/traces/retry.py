@@ -18,6 +18,14 @@ different as long as every step is a small change.
 "edit distance < 20%" formulation, applied via
 ``difflib.SequenceMatcher.ratio()``. An exact ``input_summary`` match is
 the common case and short-circuits before the matcher runs.
+
+**Same-turn siblings never retry each other (#695).** Calls issued in
+parallel in one assistant message share a ``turn_index``; a call cannot be
+a retry of a sibling whose result it never saw, so an adjacent same-turn
+pair breaks the run. The later sibling can still start a new run with the
+next turn's call. Accepted miss: with turn 1 = ``[a, b]`` and turn 2 =
+``[b']``, ``b'`` is compared with ``b`` only, so a ``b'`` that retries ``a``
+is not detected (fail-safe to under-detection).
 """
 
 from __future__ import annotations
@@ -30,6 +38,8 @@ SIMILARITY_THRESHOLD = 0.80
 
 
 def _is_similar_retry(a: SubagentToolCall, b: SubagentToolCall) -> bool:
+    if a.same_turn_as(b):
+        return False
     if a.tool_name != b.tool_name:
         return False
     if a.input_summary == b.input_summary:
@@ -74,7 +84,8 @@ def detect_retry_sequences(
 
     Scans left-to-right; a run ``[i, j)`` qualifies when every adjacent
     pair ``(j-1, j)`` passes ``_is_similar_retry`` and ``j - i >= 2``.
-    Interleaved unrelated tool calls break a run. The scan never revisits
+    Interleaved unrelated tool calls break a run, and so does an adjacent
+    pair issued in the same turn (#695). The scan never revisits
     a position, so two separate runs of the same tool across the list
     produce two independent sequences.
     """

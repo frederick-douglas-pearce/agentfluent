@@ -323,7 +323,10 @@ def _extract_parameter_retries(
     initial error followed by an input-shape change.
 
     Scans ``tool_calls`` directly (independent of ``retry_sequences``) for
-    maximal runs of 2+ calls sharing a ``tool_name``. The returned
+    maximal runs of 2+ calls sharing a ``tool_name``. An adjacent pair
+    issued in the same model turn breaks the run (#695): a parallel sibling
+    never saw the errored call's result, so it cannot be a retry of it. The
+    returned
     ``covered`` set lists every index claimed by an emitted signal so the
     retry/stuck and error-sequence extractors skip the same evidence —
     PARAMETER_RETRY wins the precedence.
@@ -336,7 +339,11 @@ def _extract_parameter_retries(
     i = 0
     while i < n:
         j = i + 1
-        while j < n and calls[j].tool_name == calls[i].tool_name:
+        while (
+            j < n
+            and calls[j].tool_name == calls[i].tool_name
+            and not calls[j].same_turn_as(calls[j - 1])
+        ):
             j += 1
         if j - i >= _PARAMETER_RETRY_MIN_ATTEMPTS:
             run_indices = list(range(i, j))

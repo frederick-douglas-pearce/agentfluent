@@ -308,3 +308,84 @@ class TestParserIntegration:
         assert attempts == [2, 3]
         # total_retries = (3-1) + (2-1) = 3
         assert trace.total_retries == 3
+
+
+def _turn_call(
+    turn: int | None,
+    input_str: str = '{"file_path":"/repo/src/a.py"}',
+    name: str = "Read",
+) -> SubagentToolCall:
+    return SubagentToolCall(
+        tool_name=name,
+        input_summary=input_str,
+        result_summary="ok",
+        turn_index=turn,
+    )
+
+
+class TestSameTurnSiblings:
+    """#695: parallel calls from one assistant message never retry each other."""
+
+    def test_same_turn_similar_pair_is_not_a_retry(self) -> None:
+        assert detect_retry_sequences([_turn_call(0), _turn_call(0)]) == []
+
+    def test_same_pair_across_two_turns_is_a_retry(self) -> None:
+        seqs = detect_retry_sequences([_turn_call(0), _turn_call(1)])
+        assert len(seqs) == 1
+        assert seqs[0].tool_call_indices == [0, 1]
+
+    def test_same_turn_pair_splits_a_run(self) -> None:
+        # Turns [0, 1, 1, 2]: the (1, 2) adjacency is same-turn, so the run
+        # breaks there and the sibling at index 2 starts a new run with turn 2.
+        calls = [_turn_call(0), _turn_call(1), _turn_call(1), _turn_call(2)]
+        seqs = detect_retry_sequences(calls)
+        assert [s.tool_call_indices for s in seqs] == [[0, 1], [2, 3]]
+
+    def test_unknown_turn_index_keeps_adjacency_behavior(self) -> None:
+        seqs = detect_retry_sequences([_turn_call(None), _turn_call(None)])
+        assert len(seqs) == 1
+
+    def test_one_unknown_turn_index_is_not_same_turn(self) -> None:
+        seqs = detect_retry_sequences([_turn_call(0), _turn_call(None)])
+        assert len(seqs) == 1
+
+    def test_accepted_miss_retry_of_earlier_sibling(self) -> None:
+        # Turn 0 = [a, b], turn 1 = [b'] where b' is similar to a only.
+        # b' is compared with its predecessor b, so the retry of a is not
+        # detected -- the documented, fail-safe under-detection.
+        a = _turn_call(0, '{"file_path":"/repo/src/alpha_module.py"}')
+        b = _turn_call(0, '{"pattern":"zzz","path":"/other/place"}')
+        b_prime = _turn_call(1, '{"file_path":"/repo/src/alpha_module.py","limit":5}')
+        assert detect_retry_sequences([a, b, b_prime]) == []
+
+
+class TestSameTurnFromParsedTrace:
+    def test_parallel_calls_in_one_message_are_not_retries(
+        self, write_jsonl: WriteJSONL,
+    ) -> None:
+        inp = {"file_path": "/repo/src/a.py"}
+        path = write_jsonl(
+            "agent-parallel.jsonl",
+            [
+                user_message("go", timestamp="2026-04-21T10:00:00.000Z"),
+                {
+                    "type": "assistant",
+                    "timestamp": "2026-04-21T10:00:01.000Z",
+                    "message": {
+                        "id": "msg_p",
+                        "role": "assistant",
+                        "model": "claude-opus-4-6",
+                        "content": [
+                            {"type": "tool_use", "id": "t1", "name": "Read", "input": inp},
+                            {"type": "tool_use", "id": "t2", "name": "Read", "input": inp},
+                        ],
+                    },
+                },
+                user_with_tool_result("t1", "ok", timestamp="2026-04-21T10:00:01.500Z"),
+                user_with_tool_result("t2", "ok", timestamp="2026-04-21T10:00:01.600Z"),
+            ],
+        )
+        trace = parse_subagent_trace(path)
+        assert [c.turn_index for c in trace.tool_calls] == [0, 0]
+        assert trace.retry_sequences == []
+        assert trace.total_retries == 0

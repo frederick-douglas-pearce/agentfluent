@@ -16,6 +16,7 @@ from agentfluent.traces.models import (
     SubagentToolCall,
     SubagentTrace,
 )
+from agentfluent.traces.retry import detect_retry_sequences
 
 
 def _tc(
@@ -623,3 +624,43 @@ class TestParameterRetry:
         assert SignalType.PARAMETER_RETRY in types
         assert SignalType.RETRY_LOOP not in types
         assert SignalType.TOOL_ERROR_SEQUENCE not in types
+
+
+def _turn_ptc(turn: int, inp: dict[str, object], *, err: bool) -> SubagentToolCall:
+    call = _ptc("Edit", inp, res="validation error" if err else "ok", err=err)
+    return call.model_copy(update={"turn_index": turn})
+
+
+class TestSameTurnParameterRetry:
+    """#695: a parallel sibling cannot be a parameter retry of an errored call."""
+
+    def test_same_turn_pair_not_emitted(self) -> None:
+        calls = [
+            _turn_ptc(0, {"path": "a.py", "old": "x"}, err=True),
+            _turn_ptc(0, {"file_path": "a.py", "old_string": "x"}, err=False),
+        ]
+        assert _param_signals(_trace(calls=calls)) == []
+
+    def test_cross_turn_pair_emitted(self) -> None:
+        calls = [
+            _turn_ptc(0, {"path": "a.py", "old": "x"}, err=True),
+            _turn_ptc(1, {"file_path": "a.py", "old_string": "x"}, err=False),
+        ]
+        sigs = _param_signals(_trace(calls=calls))
+        assert len(sigs) == 1
+        assert sigs[0].detail["tool_calls"][0]["index"] == 0
+
+    def test_accepted_miss_error_then_fix_across_turns(self) -> None:
+        # Turn 0 = [Edit(err), Edit(ok)], turn 1 = [Edit(fixed)]. The break
+        # leaves [ok, fixed] as the cross-turn run; its leading call did not
+        # error, so neither PARAMETER_RETRY nor RETRY_LOOP fires -- the
+        # documented, fail-safe under-detection.
+        calls = [
+            _turn_ptc(0, {"path": "a.py"}, err=True),
+            _turn_ptc(0, {"path": "b.py"}, err=False),
+            _turn_ptc(1, {"file_path": "a.py", "old_string": "x"}, err=False),
+        ]
+        trace = _trace(calls=calls, sequences=detect_retry_sequences(calls))
+        types = {s.signal_type for s in extract_trace_signals(trace)}
+        assert SignalType.PARAMETER_RETRY not in types
+        assert SignalType.RETRY_LOOP not in types

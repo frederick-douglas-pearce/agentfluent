@@ -289,6 +289,10 @@ qualify as `stuck_pattern`. Indicates missing error-recovery guidance
 try differently. The retries may eventually succeed, in which case
 `eventual_success: true` is recorded in the signal detail.
 
+Calls the agent issued in parallel within one model turn are never
+counted as retries of each other: neither saw the other's result.
+The same rule applies to `stuck_pattern` and `parameter_retry`.
+
 **Example:**
 
 ```
@@ -343,6 +347,9 @@ removed, or renamed) and secondarily by nested-value structure or a
 scalar type change when the full input was captured. This is
 high-precision: an error followed by an input-shape change is strong
 evidence the agent doesn't know the parameter format.
+
+Parallel calls from one model turn don't count as consecutive here:
+a sibling issued alongside the errored call never saw its result.
 
 Scanned directly from `tool_calls`, independent of the
 similarity-based retry detector -- a parameter-shape retry varies the
