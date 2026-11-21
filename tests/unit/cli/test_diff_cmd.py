@@ -622,6 +622,13 @@ class TestCostModelStampOutput:
     ) -> tuple[Path, Path]:
         baseline = _data(total_cost=1.0)
         current = _data(total_cost=2.0)
+        # Full cost coverage on both sides (#713), so these cases isolate the stamp.
+        for side in (baseline, current):
+            side["cost_coverage"] = {
+                "pricing": {"tokens": 150, "unpriced_tokens": 0},
+                "invocations": {"total": 0, "linked": 0, "spend": 0, "priced": 0},
+            }
+            side["trace_coverage"] = {"unparseable": {"files": 0}}
         if baseline_stamp is not None:
             baseline["cost_model"] = baseline_stamp
         if current_stamp is not None:
@@ -677,7 +684,9 @@ class TestCostModelStampOutput:
         self, runner: CliRunner, cli_app: typer.Typer, tmp_path: Path,
     ) -> None:
         paths = self._paths(tmp_path, self._STAMP, self._STAMP)
-        assert "cost model" not in self._quiet(runner, cli_app, paths)
+        output = self._quiet(runner, cli_app, paths)
+        assert "cost model" not in output
+        assert "(" not in output
 
     @pytest.mark.parametrize(
         "baseline_stamp",

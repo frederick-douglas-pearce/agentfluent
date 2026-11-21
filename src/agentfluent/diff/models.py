@@ -12,11 +12,17 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, computed_field
 
+from agentfluent.analytics.cost_coverage import CostCoverage
 from agentfluent.analytics.cost_model import CostModelStamp
 from agentfluent.analytics.tokens import Origin
 from agentfluent.config.models import Severity
 from agentfluent.core.filtering import WindowMetadata
 from agentfluent.diagnostics.models import Axis, SignalType
+from agentfluent.diff.cost_coverage import (
+    CostCoverageStatus,
+    cost_coverage_status,
+    side_coverage_status,
+)
 from agentfluent.diff.cost_model import (
     CostModelChange,
     CostModelStatus,
@@ -287,6 +293,49 @@ class DiffResult(BaseModel):
         """Which stamp components differ between the two sides
         (``pricing_table`` and/or ``cost_method``)."""
         return cost_model_changes(self.baseline_cost_model, self.current_cost_model)
+
+    baseline_cost_coverage: CostCoverage | None = None
+    current_cost_coverage: CostCoverage | None = None
+    """``cost_coverage`` block copied from each input envelope (#713): what its
+    dollar figures could and could not price. ``None`` when the envelope has no
+    readable block: absent (envelopes from before v0.12.0), null, or malformed
+    (including one missing its ``pricing`` or ``invocations`` object)."""
+
+    baseline_unparseable_trace_files: int | None = None
+    current_unparseable_trace_files: int | None = None
+    """Subagent trace files each envelope could not parse
+    (``trace_coverage.unparseable.files``, #648); their spend is in no total.
+    ``None`` when the envelope has no readable ``trace_coverage`` block."""
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def baseline_cost_coverage_status(self) -> CostCoverageStatus:
+        """``full`` / ``incomplete`` / ``unknown`` for the baseline side (rules in
+        :func:`agentfluent.diff.cost_coverage.side_coverage_status`)."""
+        return side_coverage_status(
+            self.baseline_cost_coverage, self.baseline_unparseable_trace_files,
+        )
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def current_cost_coverage_status(self) -> CostCoverageStatus:
+        """``full`` / ``incomplete`` / ``unknown`` for the current side."""
+        return side_coverage_status(
+            self.current_cost_coverage, self.current_unparseable_trace_files,
+        )
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def cost_coverage_status(self) -> CostCoverageStatus:
+        """Whether both sides' cost figures cover everything they count:
+        ``unknown`` if either side is unknown, else ``incomplete`` if either side
+        is, else ``full``. Scope is the figures ``diff`` compares -- totals,
+        by-model and per-agent cost; diagnostics coverage is excluded, so a
+        snapshot can read ``full`` here and ``incomplete`` in the ``analyze``
+        footer. Never affects ``regression_detected``."""
+        return cost_coverage_status(
+            self.baseline_cost_coverage_status, self.current_cost_coverage_status,
+        )
 
     fail_on: Severity | None = None
     """The severity threshold the diff was evaluated against (``None``

@@ -152,6 +152,26 @@ def compute_cost_coverage(
     )
 
 
+def has_cost_gap(coverage: CostCoverage, unparseable_trace_files: int) -> bool:
+    """Whether the run's totals, by-model or per-agent cost leave anything out (#713).
+
+    A gap is: tokens with no price; an agent invocation with no linked trace
+    (spend unknown) or whose trace spend went unpriced; or a subagent trace file
+    that could not be parsed. A linked trace with no model response spent
+    nothing, so it is not a gap. Diagnostics figures are deliberately excluded:
+    this is the scope of the cost figures ``diff`` compares, and the ``analyze``
+    footer additionally reports diagnostics gaps on top of these.
+    """
+    pricing = coverage.pricing
+    invocations = coverage.invocations
+    return (
+        pricing.unpriced_tokens > 0
+        or invocations.linked < invocations.total
+        or invocations.priced < invocations.spend
+        or unparseable_trace_files > 0
+    )
+
+
 def pricing_gap_warning(coverage: CostCoverage | None) -> EnvironmentWarning | None:
     """An environment warning when any token went unpriced, so ``warnings[]`` is
     never empty on a run whose totals read low because a model had no price.
@@ -179,5 +199,6 @@ __all__ = [
     "InvocationCoverage",
     "PricingCoverage",
     "compute_cost_coverage",
+    "has_cost_gap",
     "pricing_gap_warning",
 ]

@@ -47,6 +47,8 @@ This matters for `agentfluent diff`: a baseline snapshot captured **before** v0.
 
 From v0.12.0, `analyze --format json` stamps each snapshot with its cost model: the genai-prices version and a cost-method version that AgentFluent raises when it changes how cost is computed (#543; see [`cost_model`](GLOSSARY.md#cost_model)). `diff` compares the two stamps. When they differ, or a snapshot has no readable stamp (it predates v0.12.0, or the stamp is malformed), it prints a caveat above the cost tables, and `diff --quiet` marks its cost figure. The fix is the same: re-capture the baseline with the current release.
 
+`diff` also reads each snapshot's [`cost_coverage`](GLOSSARY.md#cost_coverage) block (#713; see [`cost_coverage_status`](GLOSSARY.md#cost_coverage_status)). When either side has tokens with no price, agent invocations whose spend is unknown or unpriced, or trace files it could not parse — or has no readable coverage block at all, as every snapshot from before v0.12.0 does — the same caveat names that side and its gaps, and `diff --quiet` notes `cost coverage incomplete` or `cost coverage unknown`. A model id that went unpriced on one side otherwise reads as a cost drop. Neither caveat changes the exit code.
+
 ## Date-aware base rates (session priced at the rate in effect when it ran)
 
 From **v0.11**, AgentFluent resolves each session's base rate at the session's own date — the first-message timestamp is threaded through the cost path into genai-prices' dated `constraint`s (`get_pricing(model, timestamp=...)`, #546). The intent is that a historical session reports the cost it actually incurred, not today's rate.
