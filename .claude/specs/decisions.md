@@ -1473,3 +1473,20 @@ _Corrected pre-merge — `#664` code review r1. An earlier revision of this head
 **Reference:** PM scope review 2026-11-22; `#686`, `#682`, `#704`, `#705`; D057, D062, D064, D065.
 
 ---
+
+## D067: `#682` ships generic context-tier pricing and closes `#639`; historical cost restated upward; `COST_METHOD_VERSION` 1 → 2
+
+**Date:** 2026-11-22
+**Status:** Accepted (maintainer, at the `#682` plan gate)
+
+**Context:** `#682` (release-blocking per D066(2)) fixes `claude-haiku-5-5`'s 5× rate above 100K prompt tokens, which `_genai_source._base_rate` discarded. Measured at plan time: 10 of 46 haiku-5-5 requests (21.7%) exceed 100K. A tier mechanism reads every upstream `TieredPrices`, and at the `genai-prices==0.2.3` pin three more curated ids carry a >200K tier: `claude-sonnet-4-5-20250929` at every date, and `claude-opus-4-6` / `claude-sonnet-4-6` for dates before 2026-03-13.
+
+**Decision:**
+- **(1) Generic tiers, not a haiku-only allow-list.** `#682` implements tier-aware pricing for every curated model and closes `#639`, which is milestoned to v0.12.0. An allow-list would keep a known under-report on purpose (the D061 recurrence class).
+- **(2) Tiers are a per-request class-A rate choice.** `ModelPricing` gains a tier table; the request's prompt size (`input + cache_creation + cache_read`, strict `>`, whole request at the tier rate, matching genai-prices' `calc_unit_price`) selects the rates; `compute_cost` and the `#547` class B/C stacking order are unchanged. Every dollar figure prices per request; no aggregate selects a tier.
+- **(3) Historical cost is restated upward** for sessions with over-boundary requests on the models above. The PR records the measured before/after delta split into the haiku-5-5 share and the historical >200K share, and `#548` discloses the models, the date window and the direction.
+- **(4) `COST_METHOD_VERSION` goes 1 → 2**, so `diff` attributes the repricing to the cost method rather than to agent behavior.
+
+**Reference:** `#682` plan gate 2026-11-22; architect review issuecomment-7087594098; PM scope ruling; D061, D066.
+
+---
