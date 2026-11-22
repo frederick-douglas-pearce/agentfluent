@@ -455,6 +455,22 @@ class TestStuckIdentityUsesFullInput:
         types = {s.signal_type for s in extract_trace_signals(trace)}
         assert SignalType.STUCK_PATTERN not in types
 
+    def test_summary_only_and_input_data_forms_compare_equal(self) -> None:
+        # Same input, one call carrying input_data and others summary-only
+        # with a different key order: canonicalized, they are identical.
+        full = _read_call({"b": 1, "a": 2}, res="same")
+        summary_only = [
+            SubagentToolCall(
+                tool_name="Read", input_summary='{"a": 2, "b": 1}', result_summary="same",
+            )
+            for _ in range(3)
+        ]
+        trace = _trace(
+            calls=[full, *summary_only], sequences=[_rs(tool="Read", attempts=4)],
+        )
+        types = {s.signal_type for s in extract_trace_signals(trace)}
+        assert SignalType.STUCK_PATTERN in types
+
     def test_empty_input_repeat_is_still_comparable(self) -> None:
         # An empty input has no input_data but an untruncated summary ("{}"),
         # which is the full serialization, so identity is known.

@@ -314,9 +314,13 @@ Subagent 'architect' retried tool 'Read' 5 times.
 **Short:** A subagent retried the same tool with **identical input** 4+ times --
 the most severe retry signal.
 
-**Detail:** Triggered when 4+ retry attempts share byte-identical `input_summary`.
-The agent isn't varying its approach between attempts; it's stuck in a
-loop. Emits `critical` because nothing the agent can do will recover
+**Detail:** Triggered when 4+ retry attempts share the identical full tool input
+**and** return the identical result. The comparison uses the complete
+input, never the truncated `input_summary` shown as evidence, so paging
+through one long file path with a changing `offset` does not count. When
+the full input was too large to keep, the signal does not fire. The agent
+isn't varying its approach and gets the same answer each time; it's stuck
+in a loop. Emits `critical` because nothing the agent can do will recover
 without prompt-level intervention.
 
 As with `retry_loop`, calls issued in parallel within one model turn

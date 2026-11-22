@@ -143,10 +143,19 @@ def _full_input_identity(call: SubagentToolCall) -> str | None:
       of identity, and a detection signal fails safe by not firing.
     """
     if call.input_data is not None:
-        return json.dumps(call.input_data, sort_keys=True, ensure_ascii=False)
+        return _canonical_json(call.input_data)
     if len(call.input_summary) < INPUT_SUMMARY_MAX_CHARS:
-        return call.input_summary
+        # Normalize through the same canonical form so a summary-only call
+        # and an input_data call with the same input compare equal.
+        try:
+            return _canonical_json(json.loads(call.input_summary))
+        except ValueError:
+            return call.input_summary
     return None
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
 
 
 def _is_stuck(calls: list[SubagentToolCall]) -> bool:
@@ -473,7 +482,9 @@ def _extract_retry_and_stuck(
             # paging never matches. Comparing the truncated `input_summary`
             # did NOT hold: a long `file_path` fills the 200-char summary and
             # cuts off `offset`, so successive pages compared equal. A paging
-            # run that is not STUCK lands here and is dropped by this gate.
+            # run that is not STUCK lands here: dropped by this gate when its
+            # first page succeeded, but still a RETRY_LOOP when the first page
+            # errored (retry grouping itself still keys on the summary).
             if not calls[0].is_error:
                 continue
             signals.append(
