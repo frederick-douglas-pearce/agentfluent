@@ -25,6 +25,17 @@ The function signature accepts ``agent_invocations`` from day one so
 #271 can integrate without forcing a mid-flight refactor; #269's
 USER_CORRECTION detection ignores the param (messages-only).
 
+USER_CORRECTION is a human-in-the-loop signal: it only reads user
+messages a person typed. Before any pattern runs, a provenance gate
+(tier 0) drops machine-injected user messages -- skill bodies, command
+caveats, cross-session relay and subagent hand-backs, compaction
+summaries, Agent SDK prompts -- via the shared
+``core.provenance.is_machine_injected`` predicate (#667). Dropped
+messages also leave the ``total_user_messages`` denominator. The
+``_SYSTEM_WRAPPER_RE`` stripping below still runs on the lines that
+pass the gate, because wrappers (``<system-reminder>`` etc.) are also
+appended inside human-typed lines.
+
 False-positive guardrail (3-tier heuristic) for USER_CORRECTION:
 
 1. **Strong-correction override** — high-confidence phrases (``that's
@@ -51,6 +62,7 @@ from enum import StrEnum
 
 from agentfluent.agents.models import WRITE_TOOLS, AgentInvocation
 from agentfluent.config.models import Severity
+from agentfluent.core.provenance import is_machine_injected
 from agentfluent.core.session import SessionMessage
 from agentfluent.diagnostics.models import DiagnosticSignal, SignalType
 
@@ -679,6 +691,10 @@ def extract_quality_signals(
                     stats.post_completion += 1
             continue
         if msg.type != "user":
+            continue
+        # Tier 0 provenance gate (#667): text no human typed is neither a
+        # correction nor a user turn for the rate denominator.
+        if is_machine_injected(msg):
             continue
         text = msg.text
         if not text:

@@ -665,7 +665,14 @@ instead", "wait, that's wrong", "revert").
 **Detail:** Quality-axis signal (v0.6). High correction frequency in sessions
 without review subagents is evidence the parent would have benefited
 from independent review before committing to the wrong path.
-Detection uses a 3-tier heuristic to suppress false positives:
+Only messages a person typed count: user-role messages Claude Code
+or the Agent SDK injected (skill bodies, command caveats,
+cross-session relay and subagent hand-backs, compaction summaries,
+Agent SDK prompts) are dropped first, by their `isMeta`,
+`isCompactSummary`, `promptSource` and `origin.kind` fields, and
+do not count toward the session's user-message total. So this
+signal never fires on an Agent SDK session's programmatic prompts.
+Detection then uses a 3-tier heuristic to suppress false positives:
 
 1. **Strong-correction override** -- high-confidence phrases
    (`that's wrong`, `revert`, `undo`, `that's not what I`) fire
