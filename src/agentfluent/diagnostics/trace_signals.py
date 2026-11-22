@@ -55,11 +55,13 @@ Different remediation axes.
 
 from __future__ import annotations
 
+import json
 import re
 
 from agentfluent.config.models import Severity
 from agentfluent.diagnostics.models import DiagnosticSignal, SignalType
 from agentfluent.traces.models import (
+    INPUT_SUMMARY_MAX_CHARS,
     RESULT_SUMMARY_MAX_CHARS,
     RetrySequence,
     SubagentToolCall,
@@ -121,6 +123,59 @@ _ERROR_SEQUENCE_CRITICAL_MIN = 4
 _RETRY_LOOP_MIN_ATTEMPTS = 3
 # Minimum identical attempts to emit STUCK_PATTERN instead of RETRY_LOOP.
 _STUCK_MIN_ATTEMPTS = 4
+
+
+def _full_input_identity(call: SubagentToolCall) -> str | None:
+    """The call's complete input as a comparable string, or ``None`` if unknown.
+
+    STUCK_PATTERN decides identity on this, never on the 200-char display
+    ``input_summary`` alone (#666): a long ``file_path`` (the
+    ``tool-results/`` spill path is the common case) fills the summary and
+    cuts it just before ``offset``, so every page of a correct paged read
+    compared equal and fired ``critical`` STUCK at 0/112 precision.
+
+    - ``input_data`` present: canonical JSON of the full input.
+    - ``input_data`` absent and the summary is shorter than the cap: the
+      summary was not truncated, so it *is* the full serialization (an
+      empty or missing input, or a fixture built without ``input_data``).
+    - Otherwise (an input over ``INPUT_DATA_MAX_CHARS``, so only a truncated
+      prefix survives): ``None``. A shared truncated prefix is not evidence
+      of identity, and a detection signal fails safe by not firing.
+    """
+    if call.input_data is not None:
+        return _canonical_json(call.input_data)
+    if len(call.input_summary) < INPUT_SUMMARY_MAX_CHARS:
+        # Normalize through the same canonical form so a summary-only call
+        # and an input_data call with the same input compare equal.
+        try:
+            return _canonical_json(json.loads(call.input_summary))
+        except ValueError:
+            return call.input_summary
+    return None
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
+
+
+def _is_stuck(calls: list[SubagentToolCall]) -> bool:
+    """True when every call repeats the same full input AND the same result.
+
+    Input identity uses ``_full_input_identity``; an unknown identity on any
+    call means not stuck. The identical-result requirement corroborates it:
+    a genuine missing-exit-condition loop repeats its output too, while a
+    run whose results differ is making progress. ``result_summary`` is
+    truncated, but it only ever adds a *necessary* condition, so it can
+    suppress a firing and never create one.
+    """
+    first_identity = _full_input_identity(calls[0])
+    if first_identity is None:
+        return False
+    return all(
+        _full_input_identity(c) == first_identity
+        and c.result_summary == calls[0].result_summary
+        for c in calls[1:]
+    )
 
 
 def _evidence_from_call(call: SubagentToolCall, index: int) -> dict[str, object]:
@@ -377,10 +432,10 @@ def _extract_retry_and_stuck(
     """Emit STUCK_PATTERN or RETRY_LOOP — never both — per `RetrySequence`.
 
     STUCK and RETRY are mutually exclusive by design. A `RetrySequence`
-    whose `attempts >= 4` AND whose member calls all share the exact
-    same `input_summary` is STUCK; any other sequence with `attempts >= 3`
-    is RETRY. Sequences with `attempts == 2` are below the diagnostic
-    threshold and do not emit here.
+    whose `attempts >= 4` AND whose member calls all share the same full
+    input AND the same result (`_is_stuck`, #666) is STUCK; any other
+    sequence with `attempts >= 3` is RETRY. Sequences with `attempts == 2`
+    are below the diagnostic threshold and do not emit here.
 
     The returned `covered` set lists all `tool_call_indices` consumed by
     emitted STUCK or RETRY signals so `_extract_error_sequences` can
@@ -404,11 +459,9 @@ def _extract_retry_and_stuck(
         if not calls:
             continue
 
-        # STUCK requires attempts >= 4 AND exact input identity; only
-        # compute identity when the attempt threshold qualifies.
-        is_stuck = seq.attempts >= _STUCK_MIN_ATTEMPTS and all(
-            c.input_summary == calls[0].input_summary for c in calls[1:]
-        )
+        # STUCK requires attempts >= 4 AND full-input + result identity
+        # (#666); only compute identity when the attempt threshold qualifies.
+        is_stuck = seq.attempts >= _STUCK_MIN_ATTEMPTS and _is_stuck(calls)
         if is_stuck:
             signals.append(
                 _build_stuck_signal(
@@ -424,9 +477,14 @@ def _extract_retry_and_stuck(
             # crucially, left OUT of `covered` (mirrors PARAMETER_RETRY's
             # return-None-no-cover) so a genuine error sub-run inside a
             # similarity-grouped sequence can still surface as
-            # TOOL_ERROR_SEQUENCE. STUCK stays ungated: it requires identical
-            # inputs, which drifting paging never matches, and an identical
-            # no-error repeat is a real missing-exit-condition loop.
+            # TOOL_ERROR_SEQUENCE. STUCK stays ungated on errors: it requires
+            # the identical FULL input and identical results (#666), which
+            # paging never matches. Comparing the truncated `input_summary`
+            # did NOT hold: a long `file_path` fills the 200-char summary and
+            # cuts off `offset`, so successive pages compared equal. A paging
+            # run that is not STUCK lands here: dropped by this gate when its
+            # first page succeeded, but still a RETRY_LOOP when the first page
+            # errored (retry grouping itself still keys on the summary).
             if not calls[0].is_error:
                 continue
             signals.append(

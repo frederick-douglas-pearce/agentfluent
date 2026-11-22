@@ -11,6 +11,7 @@ from agentfluent.diagnostics.trace_signals import (
     extract_trace_signals,
 )
 from agentfluent.traces.models import (
+    INPUT_SUMMARY_MAX_CHARS,
     RESULT_SUMMARY_MAX_CHARS,
     RetrySequence,
     SubagentToolCall,
@@ -377,6 +378,109 @@ class TestStuckPattern:
         types = {s.signal_type for s in signals}
         assert SignalType.RETRY_LOOP in types
         assert SignalType.STUCK_PATTERN not in types
+
+
+# Real `tool-results/` spill-path shape (#666), scrubbed. Long enough that the
+# serialized input fills the 200-char summary before `offset`.
+_SPILL_PATH = (
+    "/home/user/.claude/projects/-home-user-Documents-Courses-example-org-projects-"
+    "example-course-example-project-example-classifier/"
+    "00000000-0000-0000-0000-000000000000/tool-results/"
+    "mcp-github-search_issues-1793838775794.txt"
+)
+
+
+def _read_call(inp: dict[str, object], res: str = "ok") -> SubagentToolCall:
+    """A `Read` call built the way the trace parser builds it."""
+    serialized = json.dumps(inp, ensure_ascii=False)
+    return SubagentToolCall(
+        tool_name="Read",
+        input_summary=serialized[:INPUT_SUMMARY_MAX_CHARS],
+        input_data=json.loads(serialized),
+        input_keys=list(inp),
+        result_summary=res,
+    )
+
+
+class TestStuckIdentityUsesFullInput:
+    """#666: STUCK identity is decided on the full input, never the truncated
+    display summary, and needs identical results too."""
+
+    def test_paginated_spill_read_is_not_stuck(self) -> None:
+        calls = [
+            _read_call(
+                {"file_path": _SPILL_PATH, "offset": 1 + 200 * i, "limit": 200},
+                res=f"page {i} lines",
+            )
+            for i in range(6)
+        ]
+        # The precondition the bug relied on: every display summary is equal.
+        assert len(_SPILL_PATH) >= 200
+        assert len({c.input_summary for c in calls}) == 1
+        trace = _trace(calls=calls, sequences=[_rs(tool="Read", attempts=6)])
+        types = {s.signal_type for s in extract_trace_signals(trace)}
+        assert SignalType.STUCK_PATTERN not in types
+        # Error-free paging is not a RETRY_LOOP either (#581 gate).
+        assert SignalType.RETRY_LOOP not in types
+
+    def test_identical_full_input_and_result_is_stuck(self) -> None:
+        inp = {"file_path": _SPILL_PATH, "offset": 1, "limit": 200}
+        calls = [_read_call(inp, res="same page") for _ in range(4)]
+        trace = _trace(calls=calls, sequences=[_rs(tool="Read", attempts=4)])
+        stucks = [
+            s for s in extract_trace_signals(trace)
+            if s.signal_type == SignalType.STUCK_PATTERN
+        ]
+        assert len(stucks) == 1
+        assert stucks[0].detail["stuck_count"] == 4
+
+    def test_identical_input_differing_results_is_not_stuck(self) -> None:
+        # Same input, changing output: progress (e.g. a re-run that advances).
+        calls = [_tc(inp="cat status", res=f"step {i}") for i in range(4)]
+        trace = _trace(calls=calls, sequences=[_rs(attempts=4)])
+        types = {s.signal_type for s in extract_trace_signals(trace)}
+        assert SignalType.STUCK_PATTERN not in types
+
+    def test_unavailable_full_input_does_not_fire(self) -> None:
+        # Input over INPUT_DATA_MAX_CHARS: the parser keeps only a truncated
+        # summary and no input_data. A shared prefix is not identity.
+        truncated = ("x" * INPUT_SUMMARY_MAX_CHARS)
+        calls = [
+            SubagentToolCall(
+                tool_name="Write", input_summary=truncated, result_summary="ok",
+            )
+            for _ in range(5)
+        ]
+        trace = _trace(calls=calls, sequences=[_rs(tool="Write", attempts=5)])
+        types = {s.signal_type for s in extract_trace_signals(trace)}
+        assert SignalType.STUCK_PATTERN not in types
+
+    def test_summary_only_and_input_data_forms_compare_equal(self) -> None:
+        # Same input, one call carrying input_data and others summary-only
+        # with a different key order: canonicalized, they are identical.
+        full = _read_call({"b": 1, "a": 2}, res="same")
+        summary_only = [
+            SubagentToolCall(
+                tool_name="Read", input_summary='{"a": 2, "b": 1}', result_summary="same",
+            )
+            for _ in range(3)
+        ]
+        trace = _trace(
+            calls=[full, *summary_only], sequences=[_rs(tool="Read", attempts=4)],
+        )
+        types = {s.signal_type for s in extract_trace_signals(trace)}
+        assert SignalType.STUCK_PATTERN in types
+
+    def test_empty_input_repeat_is_still_comparable(self) -> None:
+        # An empty input has no input_data but an untruncated summary ("{}"),
+        # which is the full serialization, so identity is known.
+        calls = [
+            SubagentToolCall(tool_name="Poll", input_summary="{}", result_summary="nope")
+            for _ in range(4)
+        ]
+        trace = _trace(calls=calls, sequences=[_rs(tool="Poll", attempts=4)])
+        types = {s.signal_type for s in extract_trace_signals(trace)}
+        assert SignalType.STUCK_PATTERN in types
 
 
 class TestMutualExclusion:
