@@ -15,9 +15,10 @@ separately (``extract_sdk_main_session_signals``).
 
 **Cost source (#675).** Dollar savings price observed spend, never the
 ``total_tokens`` context-size proxy: a subagent's linked trace's deduplicated
-per-turn usage (``analytics.tokens.trace_spend_usage``) and, for an SDK main
+per-turn requests (``analytics.tokens.trace_spend_requests``) and, for an SDK main
 session, the turns the parent token fold counts -- each at the model it ran on
-and at the alternative model, through ``analytics.tokens.price_usage``. An
+and at the alternative model, through ``analytics.tokens.price_requests``, one
+request at a time so each turn selects its own prompt-length tier (#682). An
 invocation without trace spend contributes no dollars; it is never estimated.
 Both sides price at the latest rate: savings is a forward-looking figure.
 
@@ -36,8 +37,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from agentfluent.analytics.tokens import (
+    ApiRequest,
+    SpendObservation,
     counts_as_parent_call,
-    price_usage,
+    price_requests,
     trace_spend,
 )
 from agentfluent.config.models import Severity
@@ -197,10 +200,10 @@ class SavingsEstimate:
     """How many observations both sides could price; never extrapolated to the rest."""
 
 
-def invocation_spend(inv: AgentInvocation) -> tuple[Usage, str] | None:
-    """An invocation's spend and the model it ran on, or ``None`` (#675).
+def invocation_spend(inv: AgentInvocation) -> SpendObservation | None:
+    """An invocation's spend requests and the model it ran on, or ``None`` (#675).
 
-    Spend is the linked trace's deduplicated per-turn usage
+    Spend is the linked trace's deduplicated turns, one request each (#682)
     (``analytics.tokens.trace_spend``) -- what the analytics fold and per-agent
     cost read (#646, #701). An invocation with no linked trace, or whose trace
     does not count as spend, has none.
@@ -209,22 +212,26 @@ def invocation_spend(inv: AgentInvocation) -> tuple[Usage, str] | None:
 
 
 def estimate_usage_savings(
-    observations: Iterable[tuple[Usage, str]],
+    observations: Iterable[SpendObservation],
     alt_model: str,
 ) -> SavingsEstimate | None:
-    """Price each ``(usage, model it ran on)`` at its own model and at ``alt_model``.
+    """Price each ``(requests, model they ran on)`` at its own model and at ``alt_model``.
+
+    Requests are priced one at a time on both sides (#682): a turn whose prompt
+    exceeds the alternative model's tier threshold prices at that tier, so a
+    long-context turn moved to ``claude-haiku-5-5`` is not under-priced 5x.
 
     An observation counts only when both rates exist; the rest are left out,
     never estimated. Returns ``None`` when nothing could be priced -- no dollar
     figure, not $0. Latest rate on both sides (``timestamp=None``); see
-    ``analytics.tokens.price_usage`` for the counterfactual and what it ignores.
+    ``analytics.tokens.price_requests`` for the counterfactual and what it ignores.
     """
     current_total = 0.0
     alt_total = 0.0
     priced = 0
-    for usage, model in observations:
-        current = price_usage(usage, model, timestamp=None)
-        alternative = price_usage(usage, alt_model, timestamp=None)
+    for requests, model in observations:
+        current = price_requests(requests, model, timestamp=None)
+        alternative = price_requests(requests, alt_model, timestamp=None)
         if current is None or alternative is None:
             continue
         current_total += current
@@ -298,7 +305,7 @@ def _build_mismatch_signal(
     mismatch_type: MismatchType,
     complexity: ComplexityTier,
     recommended_model: str,
-    spend: Sequence[tuple[Usage, str]],
+    spend: Sequence[SpendObservation],
     routing_scope: str = "subagent",
 ) -> DiagnosticSignal:
     # Savings are only meaningful for overspec (cheap recommended model).
@@ -356,7 +363,7 @@ def _build_mismatch_signal(
 
 def _detect_mismatch(
     stats: AgentStats,
-    spend: Sequence[tuple[Usage, str]],
+    spend: Sequence[SpendObservation],
     routing_scope: str = "subagent",
 ) -> DiagnosticSignal | None:
     """Emit a MODEL_MISMATCH signal when declared tier is wrong for complexity.
@@ -415,7 +422,7 @@ def extract_model_routing_signals(
     if not invocations:
         return []
     stats_by_type = aggregate_agent_stats(invocations, configs)
-    spend_by_type: dict[str, list[tuple[Usage, str]]] = defaultdict(list)
+    spend_by_type: dict[str, list[SpendObservation]] = defaultdict(list)
     for inv in invocations:
         observation = invocation_spend(inv)
         if observation is not None:
@@ -516,7 +523,7 @@ def _build_main_session_stats(session: SessionAnalysis) -> AgentStats | None:
     )
 
 
-def _main_session_spend(session: SessionAnalysis) -> list[tuple[Usage, str]]:
+def _main_session_spend(session: SessionAnalysis) -> list[SpendObservation]:
     """The main session's own spend: the turns the parent token fold counts (#675).
 
     ``counts_as_parent_call`` is ``compute_token_metrics``'s predicate (usage
@@ -525,7 +532,7 @@ def _main_session_spend(session: SessionAnalysis) -> list[tuple[Usage, str]]:
     (``_build_main_session_stats``) are untouched.
     """
     return [
-        (msg.usage, msg.model)
+        ((ApiRequest.of(msg.usage),), msg.model)
         for msg in session.messages
         if counts_as_parent_call(msg) and msg.usage is not None and msg.model
     ]

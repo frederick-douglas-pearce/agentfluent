@@ -8,15 +8,14 @@ not clamped to zero.
 
 from __future__ import annotations
 
-import dataclasses
 import inspect
+from collections.abc import Iterable
 from datetime import datetime
 
 import pytest
 
 from agentfluent.analytics import tokens
 from agentfluent.analytics.pricing import compute_cost, get_pricing
-from agentfluent.analytics.tokens import ModelTokenBreakdown
 from agentfluent.core.session import Usage
 from agentfluent.diagnostics import parent_workload
 from agentfluent.diagnostics.parent_workload import (
@@ -51,20 +50,23 @@ def _burst(
 ) -> ToolBurst:
     # Mirror the parser fallback: undifferentiated writes land in the 5m
     # bucket; `cache_creation_1h_tokens` carries the 1h portion (#534).
+    usage = Usage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cache_creation_input_tokens=(
+            cache_creation_input_tokens + cache_creation_1h_tokens
+        ),
+        cache_read_input_tokens=cache_read_input_tokens,
+        cache_creation_5m_input_tokens=cache_creation_input_tokens,
+        cache_creation_1h_input_tokens=cache_creation_1h_tokens,
+    )
+    # One assistant message: the burst's per-message usages are what get priced (#682).
     return ToolBurst(
         preceding_user_text="",
         assistant_text="",
         tool_use_blocks=[],
-        usage=Usage(
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cache_creation_input_tokens=(
-                cache_creation_input_tokens + cache_creation_1h_tokens
-            ),
-            cache_read_input_tokens=cache_read_input_tokens,
-            cache_creation_5m_input_tokens=cache_creation_input_tokens,
-            cache_creation_1h_input_tokens=cache_creation_1h_tokens,
-        ),
+        usage=usage,
+        usages=[usage],
         model=model,
     )
 
@@ -130,12 +132,13 @@ class TestPickAlternativeModel:
 def _old_formula(
     burst: ToolBurst, parent_model: str, alt_model: str,
 ) -> tuple[float, float]:
-    """The pre-#707 implementation, recomputed independently of ``price_usage``.
+    """The pre-#707 implementation, recomputed independently of ``price_requests``.
 
     ``compute_cost`` on the parent's observed usage, and on the alternative
     side the cache-dropping counterfactual (cache reads as fresh input, cache
-    writes dropped). #707 moved the pricing onto ``price_usage``; the figures
-    must not move (AC2), whatever rates the genai-prices pin carries.
+    writes dropped). #707 moved the pricing onto ``price_usage`` (now
+    ``price_requests``); the figures must not move (AC2), whatever rates the
+    genai-prices pin carries.
     """
     parent_pricing = get_pricing(parent_model)
     alt_pricing = get_pricing(alt_model)
@@ -260,7 +263,7 @@ class TestEstimateBurstCost:
     def test_figures_unchanged_from_the_pre_707_formula(
         self, burst: ToolBurst, parent_model: str, alt_model: str,
     ) -> None:
-        # AC2: routing through price_usage moved the path, not the figures.
+        # AC2: routing through price_requests moved the path, not the figures.
         got = _priced(burst, parent_model, alt_model)
         expected = _old_formula(burst, parent_model, alt_model)
         assert got == pytest.approx(expected, rel=1e-12, abs=1e-15)
@@ -288,7 +291,7 @@ class TestEstimateBurstCost:
         alt_model: str | None,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        # An empty/None id short-circuits before price_usage: the result must
+        # An empty/None id short-circuits before price_requests: the result must
         # not depend on get_pricing("") happening to return None.
         looked_up: list[str] = []
         real_get_pricing = tokens.get_pricing
@@ -318,27 +321,29 @@ class TestEstimateBurstCost:
 
 
 class TestEstimateBurstCostPricingPath:
-    """AC1: both sides price through ``analytics.tokens._cost_of`` (#707).
+    """AC1: both sides price through ``analytics.tokens._cost_of`` (#707), one
+    message at a time (#682).
 
     ``_cost_of`` is the single ``Usage`` -> rate path, so a change there
     reaches the offload estimate; the guard pins that the estimate reaches
-    it, not merely that it calls ``price_usage``. Per-request levers
-    (context tiers #682, multipliers and surcharges #537-#539) will reach
-    it too, but a burst's ``usage`` is summed over its messages, so they
-    are not applied correctly until per-message usage is passed in (#682).
+    it with the burst's per-message requests, not merely that it calls
+    ``price_requests``.
     """
 
     def test_both_sides_price_through_cost_of(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        calls: list[ModelTokenBreakdown] = []
+        calls: list[tuple[str, list[tokens.ApiRequest]]] = []
         real_cost_of = tokens._cost_of
 
         def _spy(
-            breakdown: ModelTokenBreakdown, timestamp: datetime | None = None,
+            model: str,
+            requests: Iterable[tokens.ApiRequest],
+            timestamp: datetime | None = None,
         ) -> float | None:
-            calls.append(dataclasses.replace(breakdown))
-            return real_cost_of(breakdown, timestamp)
+            materialized = list(requests)
+            calls.append((model, materialized))
+            return real_cost_of(model, materialized, timestamp)
 
         monkeypatch.setattr(tokens, "_cost_of", _spy)
         burst = _burst(
@@ -349,30 +354,35 @@ class TestEstimateBurstCostPricingPath:
         )
         got = _priced(burst, OPUS, SONNET)
 
-        assert [c.model for c in calls] == [OPUS, SONNET]
-        parent, alt = calls
+        assert [model for model, _ in calls] == [OPUS, SONNET]
+        (_, [parent]), (_, [alt]) = calls
+        pu, au = parent.usage, alt.usage
         assert (
-            parent.input_tokens, parent.output_tokens,
-            parent.cache_creation_5m_tokens, parent.cache_creation_1h_tokens,
-            parent.cache_read_input_tokens,
+            pu.input_tokens, pu.output_tokens,
+            pu.cache_creation_5m_input_tokens, pu.cache_creation_1h_input_tokens,
+            pu.cache_read_input_tokens,
         ) == (1000, 500, 200, 300, 4000)
-        # Alt side: the cache-dropping counterfactual reaches _cost_of.
+        # Alt side: the cache-dropping counterfactual reaches _cost_of, tiered on
+        # the original request's full prompt (#682).
         assert (
-            alt.input_tokens, alt.output_tokens,
-            alt.cache_creation_5m_tokens, alt.cache_creation_1h_tokens,
-            alt.cache_read_input_tokens,
+            au.input_tokens, au.output_tokens,
+            au.cache_creation_5m_input_tokens, au.cache_creation_1h_input_tokens,
+            au.cache_read_input_tokens,
         ) == (5000, 500, 0, 0, 0)
+        assert parent.prompt_tokens == alt.prompt_tokens == 1000 + 500 + 4000
         # Call-through: the same figures as the pre-#707 formula.
         assert got == pytest.approx(_old_formula(burst, OPUS, SONNET), rel=1e-12)
 
     def test_cost_of_result_is_what_the_estimate_reports(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        # A change at _cost_of (e.g. a future tier) reaches the offload figures.
+        # A change at _cost_of reaches the offload figures.
         def _fixed(
-            breakdown: ModelTokenBreakdown, timestamp: datetime | None = None,
+            model: str,
+            requests: Iterable[tokens.ApiRequest],
+            timestamp: datetime | None = None,
         ) -> float | None:
-            return 7.0 if breakdown.model == OPUS else 3.0
+            return 7.0 if model == OPUS else 3.0
 
         monkeypatch.setattr(tokens, "_cost_of", _fixed)
         burst = _burst(input_tokens=1, output_tokens=1)

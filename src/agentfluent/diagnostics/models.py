@@ -14,8 +14,8 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
+from agentfluent.analytics.tokens import ApiRequest
 from agentfluent.config.models import Severity
-from agentfluent.core.session import Usage
 
 
 class Axis(StrEnum):
@@ -135,12 +135,14 @@ class DiagnosticSignal(BaseModel):
     detail: dict[str, object] = Field(default_factory=dict)
     """Extensible detail dict for signal-specific data (keyword, snippet,
     actual_value, mean_value, etc.)."""
-    spend_usage: Usage | None = Field(default=None, exclude=True)
-    """The source invocation's trace spend (#675), for a correlator rule that
+    spend_requests: tuple[ApiRequest, ...] | None = Field(default=None, exclude=True)
+    """The source invocation's trace spend, one API request per turn (#675, #682), for a
+    correlator rule that
     prices a model switch but cannot reach the invocation. Set on
     ``DURATION_OUTLIER`` signals whose trace counts as spend. Excluded from
     serialization: ``detail`` is public JSON API (D055) and a usage breakdown is
-    not part of it, so a signal reloaded from JSON has none and prices nothing."""
+    not part of it, so a signal reloaded from JSON has none and prices nothing. Per request
+    rather than summed, so each turn selects its own prompt-length tier at both models."""
 
 
 class DiagnosticRecommendation(BaseModel):
