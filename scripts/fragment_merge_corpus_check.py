@@ -204,7 +204,9 @@ def check_corpus(corpus_dir: Path) -> dict[str, Any]:
             and t.idle_gap_ms > t.duration_ms
         ),
         "trace_active_zero": sum(
-            1 for t in traces if t.duration_ms and t.active_duration_ms == 0
+            1
+            for t in traces
+            if t.duration_ms is not None and t.active_duration_ms == 0
         ),
         "trace_idle_gap_none": sum(
             1 for t in traces if t.duration_ms is not None and t.idle_gap_ms is None

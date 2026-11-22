@@ -79,8 +79,14 @@ def main(argv: list[str] | None = None) -> int:
     print(f"caught (idle_gap_ms > 0): {len(stuck) - len(missed)} / {len(stuck)}")
     for name in missed:
         trace = next(t for n, t in stuck if n == name)
+        # A call without a turn_index is its own turn, as in the heuristic.
+        timed_turns = {
+            ("call", position) if tc.turn_index is None else ("turn", tc.turn_index)
+            for position, tc in enumerate(trace.tool_calls)
+            if tc.timestamp is not None and tc.result_timestamp is not None
+        }
         print(f"  missed: {name} idle_gap_ms={trace.idle_gap_ms} "
-              f"timed_turns={len({tc.turn_index for tc in trace.tool_calls})}")
+              f"timed_turns={len(timed_turns)}")
     return 0
 
 
