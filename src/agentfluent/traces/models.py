@@ -215,9 +215,11 @@ class SubagentTrace(BaseModel):
 
     duration_ms: int | None = None
     idle_gap_ms: int | None = None
-    """Sum of per-call gaps flagged as idle by ``traces.parser._compute_idle_gap_ms``.
-    ``None`` when fewer than two paired tool calls have both timestamps;
-    ``0`` when computable but no gap met the threshold."""
+    """Idle time from ``traces.parser._compute_idle_gap_ms``: the union of
+    per-turn waits flagged as idle, so parallel sibling calls sharing one wait
+    count it once (#697; before #697 this summed per-call gaps).
+    ``None`` when fewer than two model turns have a timed tool call;
+    ``0`` when computable but no wait met the threshold."""
 
     source_file: Path | None = None
 
@@ -309,9 +311,9 @@ class SubagentTrace(BaseModel):
         """Wall-clock duration with detected idle gaps subtracted.
 
         ``None`` when ``duration_ms`` or ``idle_gap_ms`` is ``None``.
-        Clamped at zero to guard against any pathological case where
-        summed idle gaps exceed wall-clock span (overlapping calls,
-        clock skew, future heuristic changes).
+        Clamped at zero as a guard: since #697 unions overlapping waits,
+        only out-of-order timestamps (clock skew) or a future heuristic
+        change can make idle time exceed the wall-clock span.
         """
         if self.duration_ms is None or self.idle_gap_ms is None:
             return None

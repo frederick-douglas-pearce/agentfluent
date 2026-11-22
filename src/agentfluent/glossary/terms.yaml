@@ -164,8 +164,9 @@
     pending user approval -- the IDE prompts to allow a `Write`, an
     MCP call, etc., and the user is AFK -- the wall-clock duration
     inflates without any agent work happening. AgentFluent detects
-    these idle periods per-trace
-    (`gap > max(10 * median, 5 minutes)`) and exposes both
+    these idle periods per-trace -- one wait per model turn, idle when
+    `wait > max(5 * median turn wait, 60 seconds)`, with parallel calls
+    and overlapping waits counted once (#697) -- and exposes both
     `duration_ms` (raw wall-clock) and `active_duration_ms` (idle
     subtracted) on subagent traces. Outlier detection uses the
     active variant when a trace is linked, so an agent that "looked
@@ -1784,9 +1785,10 @@
       tool call sat pending user approval while the user was away (the IDE
       prompting to allow a `Write`, an MCP call, etc.).
     - **active** (`active_duration_ms`) -- wall-clock minus detected idle
-      gaps. AgentFluent flags a gap when it exceeds
-      `max(10 × median, 5 minutes)` within a subagent trace and subtracts
-      it. Available only when a subagent trace is linked (~80% of the
+      gaps. AgentFluent takes one wait per model turn (parallel calls in a
+      turn share it), flags a wait when it exceeds
+      `max(5 × median turn wait, 60 seconds)` within a subagent trace, and
+      subtracts the flagged waits, counting any overlap once (#697). Available only when a subagent trace is linked (~80% of the
       dogfood corpus); without one, only wall-clock exists.
 
     Why the distinction matters: for an interactive agent like `pm`, the

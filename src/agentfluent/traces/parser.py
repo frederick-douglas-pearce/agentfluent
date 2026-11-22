@@ -43,8 +43,10 @@ from agentfluent.traces.models import (
 )
 from agentfluent.traces.retry import detect_retry_sequences
 
-# Idle-gap heuristic: a per-call (tool_use → tool_result) gap counts
-# as idle when gap_ms > max(IDLE_GAP_K * median_gap_in_trace, IDLE_GAP_FLOOR_MS).
+# Idle-gap heuristic: a per-turn wait (earliest tool_use → latest
+# tool_result among the turn's parallel calls) counts as idle when
+# wait_ms > max(IDLE_GAP_K * median_turn_wait_in_trace, IDLE_GAP_FLOOR_MS);
+# idle waits are unioned so overlapping waits count once (#697).
 # Re-calibrated for #454 against the v0.7+ corpus: the original
 # (k=10, floor=300_000) caught dramatic gaps but missed 1-4 min
 # user-coupled waits, contributing to the inflated 33-min pm average
@@ -213,36 +215,84 @@ def _pair_tool_calls(messages: list[SessionMessage]) -> list[SubagentToolCall]:
     return tool_calls
 
 
-def _compute_idle_gap_ms(tool_calls: list[SubagentToolCall]) -> int | None:
-    """Sum per-call gaps (``tool_use`` to ``tool_result``) flagged as idle.
+def _turn_wait_intervals(
+    tool_calls: list[SubagentToolCall],
+) -> list[tuple[datetime, datetime]]:
+    """One ``(start, end)`` wait interval per model turn, in first-seen order.
 
-    Returns ``None`` when fewer than two paired calls have both
-    timestamps — too little data to compute a meaningful per-trace
-    median, and a single isolated long gap can't be distinguished from
-    "this is just how slow this tool runs" without context.
+    Calls sharing a ``turn_index`` were issued together (#695) and wait in
+    parallel, so a turn's wait runs from its earliest ``tool_use`` to its
+    latest ``tool_result``. A call with ``turn_index=None`` is its own
+    interval. Calls missing either timestamp, or whose result precedes its
+    use (clock skew, parsing artifact), are skipped so no work is synthesized.
+    """
+    by_turn: dict[tuple[str, int], tuple[datetime, datetime]] = {}
+    for position, tc in enumerate(tool_calls):
+        if tc.timestamp is None or tc.result_timestamp is None:
+            continue
+        if tc.result_timestamp < tc.timestamp:
+            continue
+        key = ("call", position) if tc.turn_index is None else ("turn", tc.turn_index)
+        current = by_turn.get(key)
+        if current is None:
+            by_turn[key] = (tc.timestamp, tc.result_timestamp)
+        else:
+            by_turn[key] = (
+                min(current[0], tc.timestamp),
+                max(current[1], tc.result_timestamp),
+            )
+    return list(by_turn.values())
+
+
+def _union_ms(intervals: list[tuple[datetime, datetime]]) -> float:
+    """Total length (ms) covered by ``intervals``, counting overlaps once."""
+    total = 0.0
+    current_start: datetime | None = None
+    current_end: datetime | None = None
+    for start, end in sorted(intervals):
+        if current_start is None or current_end is None or start > current_end:
+            if current_start is not None and current_end is not None:
+                total += (current_end - current_start).total_seconds() * 1000
+            current_start, current_end = start, end
+        elif end > current_end:
+            current_end = end
+    if current_start is not None and current_end is not None:
+        total += (current_end - current_start).total_seconds() * 1000
+    return total
+
+
+def _compute_idle_gap_ms(tool_calls: list[SubagentToolCall]) -> int | None:
+    """Idle time: the union of per-turn waits flagged as idle (#697).
+
+    Each model turn contributes one wait (``_turn_wait_intervals``), so N
+    parallel siblings waiting through one approval window count as one wait,
+    not N. The median is taken over those per-turn waits, a turn is idle when
+    its wait exceeds ``max(IDLE_GAP_K * median, IDLE_GAP_FLOOR_MS)``, and the
+    idle turns' intervals are unioned so any cross-turn overlap (e.g. a
+    background call) is also counted once.
+
+    Returns ``None`` when fewer than two timed turns exist -- too little data
+    to compute a meaningful per-trace median, and a single isolated long wait
+    can't be distinguished from "this is just how slow this tool runs"
+    without context.
 
     The Claude Code JSONL has no structural marker for approval-pending
     state; this heuristic is a workaround. See anthropics/claude-code#55240
     for the upstream proposal that would replace it with structural detection.
     """
-    gaps_ms: list[float] = []
-    for tc in tool_calls:
-        if tc.timestamp is None or tc.result_timestamp is None:
-            continue
-        delta = (tc.result_timestamp - tc.timestamp).total_seconds() * 1000
-        if delta < 0:
-            # Out-of-order timestamps (clock skew, parsing artifact);
-            # don't synthesize work that didn't happen.
-            continue
-        gaps_ms.append(delta)
-
-    if len(gaps_ms) < 2:
+    intervals = _turn_wait_intervals(tool_calls)
+    if len(intervals) < 2:
         return None
 
-    median_gap = statistics.median(gaps_ms)
-    threshold = max(IDLE_GAP_K * median_gap, float(IDLE_GAP_FLOOR_MS))
-    idle_total = sum(g for g in gaps_ms if g > threshold)
-    return int(round(idle_total))
+    waits_ms = [(end - start).total_seconds() * 1000 for start, end in intervals]
+    median_wait = statistics.median(waits_ms)
+    threshold = max(IDLE_GAP_K * median_wait, float(IDLE_GAP_FLOOR_MS))
+    idle_intervals = [
+        interval
+        for interval, wait in zip(intervals, waits_ms, strict=True)
+        if wait > threshold
+    ]
+    return int(round(_union_ms(idle_intervals)))
 
 
 def parse_subagent_trace(path: Path) -> SubagentTrace:
