@@ -29,8 +29,9 @@ USER_CORRECTION is a human-in-the-loop signal: it only reads user
 messages a person typed. Before any pattern runs, a provenance gate
 (tier 0) drops machine-injected user messages -- skill bodies, command
 caveats, cross-session relay and subagent hand-backs, compaction
-summaries, Agent SDK prompts -- via the shared
-``core.provenance.is_machine_injected`` predicate (#667). Dropped
+summaries, and Agent SDK prompts whose line carries ``promptSource`` or
+``turnOrigin`` -- via the shared ``core.provenance.is_machine_injected``
+predicate (#667). Dropped
 messages also leave the ``total_user_messages`` denominator. The
 ``_SYSTEM_WRAPPER_RE`` stripping below still runs on the lines that
 pass the gate, because wrappers (``<system-reminder>`` etc.) are also

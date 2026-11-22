@@ -1264,8 +1264,10 @@ class TestUserCorrectionProvenanceGate:
 
     def test_fixture_only_human_corrections_fire(self) -> None:
         """End to end through the parser: the security-review prompt shapes
-        (isMeta skill expansion, promptSource sdk) and the relay/hand-back
-        shape all carry strong-correction words after a write tool, yet
+        (isMeta skill expansion, promptSource sdk), the structural
+        relay/hand-back shape, an SDK-issued slash command (turnOrigin sdk
+        only) and a legacy relay line with no provenance fields (text
+        fallback) all carry strong-correction words after a write tool, yet
         only the two human-typed corrections fire (AC1 + AC2)."""
         messages = parse_session(self.FIXTURE)
         signals = self._user_corrections(extract_quality_signals(messages))

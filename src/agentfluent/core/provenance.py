@@ -8,27 +8,29 @@ signal that means "a human said this" must exclude them first.
 
 ``is_machine_injected`` is that shared gate (#667). It reads the raw
 provenance fields the parser captures on ``SessionMessage``
-(``is_meta``, ``prompt_source``, ``origin_kind``, ``is_compact_summary``)
-and decides in this order:
+(``is_meta``, ``prompt_source``, ``origin_kind``, ``turn_origin``,
+``is_compact_summary``) and decides in this order:
 
 1. **Structural fields** (current formats). ``isMeta`` or
    ``isCompactSummary`` mark a line injected on their own.
-   ``promptSource`` and ``origin.kind`` are checked against the values
-   known to mean *human* -- anything else that is present, including a
-   value this module has never seen, counts as injected. Several of
-   these values are not documented upstream, so an unknown one must not
-   be read as a person (fail-safe: an uncertain line does not feed a
-   human-behavior signal).
+   ``promptSource``, ``origin.kind`` and ``turnOrigin`` are checked
+   against the values known to mean *human* -- anything else that is
+   present, including a value this module has never seen, counts as
+   injected. Several of these values are not documented upstream, so an
+   unknown one must not be read as a person (fail-safe: an uncertain
+   line does not feed a human-behavior signal).
 2. **Text-marker fallback**, only when the line carries none of the
    structural fields (older formats): an anchored prefix match for the
-   relay / hand-back shapes. Structure always wins over text, so a
+   relay / hand-back shapes only. Structure always wins over text, so a
    human-typed line that quotes a marker is still human.
 
-``promptSource: "sdk"`` counts as injected: an Agent SDK prompt is
-written by a program, so human-in-the-loop signals such as
-``USER_CORRECTION`` never fire on it. Key on this per-line field, never
-on the session-level ``entrypoint`` -- a Claude Code session can
-contain ``sdk`` lines.
+An Agent SDK prompt is written by a program, so it counts as injected
+-- but only when its line says so, through ``promptSource: "sdk"`` or
+``turnOrigin: "sdk"`` (the only marker on SDK-issued slash-command
+lines). An SDK prompt line carrying neither field is not recognized:
+the text fallback covers relay / hand-back shapes, not SDK prompts. An
+``entrypoint``-based fallback was considered and deferred (#667 scope
+ruling).
 
 The value sets are module-level so calibration can sweep them.
 """
@@ -45,6 +47,9 @@ HUMAN_PROMPT_SOURCES: frozenset[str] = frozenset(
 HUMAN_ORIGIN_KINDS: frozenset[str] = frozenset({"human"})
 """``origin.kind`` values written for a prompt a human entered."""
 
+HUMAN_TURN_ORIGINS: frozenset[str] = frozenset({"human"})
+"""``turnOrigin`` values written for a prompt a human entered."""
+
 INJECTED_TEXT_PREFIXES: tuple[str, ...] = (
     "Another Claude session sent a message:",
     "<agent-message from=",
@@ -60,6 +65,7 @@ def _has_structural_provenance(message: SessionMessage) -> bool:
         or message.is_compact_summary
         or message.prompt_source is not None
         or message.origin_kind is not None
+        or message.turn_origin is not None
     )
 
 
@@ -81,6 +87,11 @@ def is_machine_injected(message: SessionMessage) -> bool:
     if (
         message.origin_kind is not None
         and message.origin_kind not in HUMAN_ORIGIN_KINDS
+    ):
+        return True
+    if (
+        message.turn_origin is not None
+        and message.turn_origin not in HUMAN_TURN_ORIGINS
     ):
         return True
     if _has_structural_provenance(message):

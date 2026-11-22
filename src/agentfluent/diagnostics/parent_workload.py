@@ -172,6 +172,10 @@ def _is_real_user_text(msg: SessionMessage) -> bool:
     Claude Code emits tool-result responses as user-typed messages with no
     text and a ``tool_result`` content block. Those don't break a burst.
     A real user turn has actual text AND no tool_result block.
+
+    Known exception to the prompt-provenance rule (CLAUDE.md): this does
+    not yet gate on ``core.provenance.is_machine_injected``, so injected
+    user messages still count as user turns here. Tracked in #734.
     """
     if msg.type != "user":
         return False

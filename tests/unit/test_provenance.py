@@ -10,6 +10,7 @@ from agentfluent.core.parser import _parse_user_message
 from agentfluent.core.provenance import (
     HUMAN_ORIGIN_KINDS,
     HUMAN_PROMPT_SOURCES,
+    HUMAN_TURN_ORIGINS,
     INJECTED_TEXT_PREFIXES,
     is_machine_injected,
 )
@@ -31,7 +32,12 @@ class TestStructuralProvenance:
     def test_compact_summary_is_injected(self) -> None:
         assert is_machine_injected(_user(is_compact_summary=True))
 
-    @pytest.mark.parametrize("source", sorted(HUMAN_PROMPT_SOURCES))
+    def test_human_prompt_sources_are_pinned(self) -> None:
+        assert HUMAN_PROMPT_SOURCES == frozenset(
+            {"typed", "queued", "suggestion_accepted"},
+        )
+
+    @pytest.mark.parametrize("source", ["typed", "queued", "suggestion_accepted"])
     def test_human_prompt_sources_are_not_injected(self, source: str) -> None:
         assert not is_machine_injected(_user(prompt_source=source))
 
@@ -53,6 +59,26 @@ class TestStructuralProvenance:
     def test_non_human_origin_kinds_are_injected(self, kind: str) -> None:
         assert is_machine_injected(_user(origin_kind=kind))
 
+    def test_human_turn_origin_is_not_injected(self) -> None:
+        assert HUMAN_TURN_ORIGINS == frozenset({"human"})
+        assert not is_machine_injected(_user(turn_origin="human"))
+
+    @pytest.mark.parametrize(
+        "origin", ["sdk", "peer", "task_notification", "scheduled", "future-origin"],
+    )
+    def test_non_human_turn_origins_are_injected(self, origin: str) -> None:
+        assert is_machine_injected(_user(turn_origin=origin))
+
+    def test_sdk_slash_command_line_is_injected(self) -> None:
+        """SDK-issued slash commands carry turnOrigin as their only marker."""
+        msg = _user(
+            "<command-message>dev-loop</command-message>"
+            "<command-args>revert that, it's wrong</command-args>",
+            turn_origin="sdk",
+            entrypoint="sdk-cli",
+        )
+        assert is_machine_injected(msg)
+
     def test_typed_line_with_machine_origin_is_injected(self) -> None:
         """Each field is checked on its own; one machine value is enough."""
         assert is_machine_injected(_user(prompt_source="typed", origin_kind="peer"))
@@ -71,11 +97,26 @@ class TestStructuralProvenance:
 
 
 class TestLegacyTextMarkerFallback:
-    @pytest.mark.parametrize("prefix", INJECTED_TEXT_PREFIXES)
-    def test_marker_prefix_without_structural_fields_is_injected(
-        self, prefix: str,
+    def test_marker_prefixes_are_pinned(self) -> None:
+        assert INJECTED_TEXT_PREFIXES == (
+            "Another Claude session sent a message:",
+            "<agent-message from=",
+            "[Subagent hand-back]",
+        )
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            'Another Claude session sent a message:\n<agent-message from="a1">'
+            "\n[Subagent hand-back] revert it\n</agent-message>",
+            '<agent-message from="a1">revert it</agent-message>',
+            "[Subagent hand-back] The text below is the final report. Revert it.",
+        ],
+    )
+    def test_legacy_relay_shapes_without_structural_fields_are_injected(
+        self, text: str,
     ) -> None:
-        assert is_machine_injected(_user(f"{prefix} revert it"))
+        assert is_machine_injected(_user(text))
 
     def test_marker_after_leading_whitespace_is_injected(self) -> None:
         assert is_machine_injected(_user("\n  [Subagent hand-back] report"))
@@ -86,10 +127,19 @@ class TestLegacyTextMarkerFallback:
             _user("why did the [Subagent hand-back] say revert?"),
         )
 
-    def test_structure_wins_over_text(self) -> None:
-        """A human-typed line that starts with a marker stays human."""
+    @pytest.mark.parametrize(
+        "fields",
+        [
+            {"prompt_source": "typed"},
+            {"origin_kind": "human"},
+            {"turn_origin": "human"},
+        ],
+    )
+    def test_structure_wins_over_text(self, fields: dict[str, Any]) -> None:
+        """A line with any human structural field that starts with a marker
+        stays human: each field alone disables the text fallback."""
         assert not is_machine_injected(
-            _user("[Subagent hand-back] pasted by me", prompt_source="typed"),
+            _user("[Subagent hand-back] pasted by me", **fields),
         )
 
     def test_plain_legacy_line_is_not_injected(self) -> None:
@@ -107,11 +157,13 @@ class TestParserCapturesProvenance:
             isMeta=True,
             promptSource="system",
             origin={"kind": "peer", "from": "a1"},
+            turnOrigin="peer",
             isCompactSummary=True,
         )
         assert msg.is_meta is True
         assert msg.prompt_source == "system"
         assert msg.origin_kind == "peer"
+        assert msg.turn_origin == "peer"
         assert msg.is_compact_summary is True
 
     def test_absent_fields_default(self) -> None:
@@ -119,6 +171,7 @@ class TestParserCapturesProvenance:
         assert msg.is_meta is False
         assert msg.prompt_source is None
         assert msg.origin_kind is None
+        assert msg.turn_origin is None
         assert msg.is_compact_summary is False
 
     @pytest.mark.parametrize(
@@ -131,6 +184,8 @@ class TestParserCapturesProvenance:
             {"origin": "human"},
             {"origin": {"kind": 7}},
             {"origin": ["peer"]},
+            {"turnOrigin": 5},
+            {"turnOrigin": {"kind": "sdk"}},
         ],
     )
     def test_malformed_values_are_neutral(self, top: dict[str, Any]) -> None:
@@ -139,13 +194,15 @@ class TestParserCapturesProvenance:
         assert msg.is_compact_summary is False
         assert msg.prompt_source is None
         assert msg.origin_kind is None
+        assert msg.turn_origin is None
         assert not is_machine_injected(msg)
 
 
 class TestProvenanceStaysOutOfTheEnvelope:
     def test_analysis_json_carries_no_provenance_fields(self) -> None:
-        """The new SessionMessage fields are internal: no serialized model
-        embeds SessionMessage, so they never become public JSON API (D055)."""
+        """The new SessionMessage fields are internal. SessionAnalysis.messages
+        embeds SessionMessage but is ``exclude=True``, so these fields never
+        reach the serialized envelope and never become public JSON API (D055)."""
         from pathlib import Path
 
         from agentfluent.analytics.pipeline import analyze_sessions
@@ -156,5 +213,7 @@ class TestProvenanceStaysOutOfTheEnvelope:
             / "session_injected_user_messages.jsonl"
         )
         dumped = analyze_sessions([fixture]).model_dump_json()
-        for name in ("is_meta", "prompt_source", "origin_kind", "is_compact_summary"):
+        for name in (
+            "is_meta", "prompt_source", "origin_kind", "turn_origin", "is_compact_summary",
+        ):
             assert f'"{name}"' not in dumped

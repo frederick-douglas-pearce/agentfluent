@@ -669,9 +669,12 @@ Only messages a person typed count: user-role messages Claude Code
 or the Agent SDK injected (skill bodies, command caveats,
 cross-session relay and subagent hand-backs, compaction summaries,
 Agent SDK prompts) are dropped first, by their `isMeta`,
-`isCompactSummary`, `promptSource` and `origin.kind` fields, and
-do not count toward the session's user-message total. So this
-signal never fires on an Agent SDK session's programmatic prompts.
+`isCompactSummary`, `promptSource`, `origin.kind` and `turnOrigin`
+fields, plus a text-prefix check for relay and hand-back messages
+in older formats that lack those fields. They do not count toward
+the session's user-message total. Agent SDK prompts are dropped when
+their line carries `promptSource` or `turnOrigin`; an SDK prompt
+line with neither is not recognized.
 Detection then uses a 3-tier heuristic to suppress false positives:
 
 1. **Strong-correction override** -- high-confidence phrases

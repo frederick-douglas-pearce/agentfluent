@@ -195,13 +195,16 @@ class SessionMessage(BaseModel):
     is_meta: bool = False
     """Top-level ``isMeta`` on a ``user`` line: Claude Code marks internal
     content that is not part of the conversation proper (skill bodies,
-    command caveats, system reminders, cross-session relay). User lines
-    only; ``False`` when absent or not exactly ``true``. Read by
+    command caveats, system reminders, cross-session relay). Upstream
+    documents ``isMeta`` only on ``system`` lines; its use on ``user``
+    lines is observed locally (CLI 2.1.x, 2026). User lines only;
+    ``False`` when absent or not exactly ``true``. Read by
     ``core.provenance.is_machine_injected`` (#667)."""
 
     prompt_source: str | None = None
     """Top-level ``promptSource`` on a ``user`` prompt line: how the prompt
-    originated. Documented upstream: ``"typed"``, ``"sdk"``; also observed
+    originated. Documented upstream: ``"typed"``, ``"sdk"`` and a
+    synthesized-style value for injected prompts; also observed locally
     (CLI 2.1.x, 2026): ``"queued"``, ``"suggestion_accepted"``,
     ``"system"``. User lines only; ``None`` when absent or not a string.
     Kept raw so the classification policy lives in ``core.provenance``
@@ -212,6 +215,13 @@ class SessionMessage(BaseModel):
     (CLI 2.1.x, 2026, undocumented upstream): ``"human"``, ``"peer"``,
     ``"task-notification"``, ``"auto-continuation"``. User lines only;
     ``None`` when absent, not an object, or ``kind`` is not a string (#667)."""
+
+    turn_origin: str | None = None
+    """Top-level ``turnOrigin`` on a ``user`` line. Observed (CLI 2.1.x,
+    2026, undocumented upstream): ``"human"``, ``"peer"``,
+    ``"task_notification"``, ``"scheduled"``, ``"sdk"``. It is the only
+    provenance field on SDK-issued slash-command lines. User lines only;
+    ``None`` when absent or not a string (#667)."""
 
     is_compact_summary: bool = False
     """Top-level ``isCompactSummary`` on a ``user`` line: the injected
