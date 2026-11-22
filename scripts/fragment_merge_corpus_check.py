@@ -28,6 +28,13 @@ A nonzero value means the two accepted ambiguities documented on
 
 Corpora default to the four used in #694; pass ``--corpus NAME=DIR`` (DIR
 relative to ``~/.claude/projects``, or absolute) to choose others.
+``trace_active_clamped_zero`` counts linked traces whose idle gap exceeds
+their span (the clamp in ``active_duration_ms`` fired), ``trace_active_zero``
+those whose active duration is 0 for any reason (clamped, or idle exactly
+equal to the span), and ``trace_idle_gap_none`` those with a span but no computable
+idle gap (#697); ``--json`` also carries ``idle_gap_ms_by_trace`` so a
+before/after pair can be diffed for traces whose idle gap became ``None``.
+
 ``--json PATH`` writes the results for diffing. A corpus or file that cannot
 be read is reported on stderr and skipped.
 """
@@ -51,6 +58,9 @@ from agentfluent.diagnostics.pipeline import run_diagnostics
 from agentfluent.traces.models import SubagentTrace
 
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
+# Per-trace idle gap, written to --json only (not printed), so two runs can be
+# diffed for traces whose idle gap became None (#697).
+PER_TRACE_KEY = "idle_gap_ms_by_trace"
 DEFAULT_CORPORA = {
     "agentfluent": "-home-fdpearce-Documents-Projects-git-agentfluent",
     "claude-code-loop": "-home-fdpearce-Documents-Projects-git-claude-code-loop",
@@ -186,7 +196,28 @@ def check_corpus(corpus_dir: Path) -> dict[str, Any]:
         "active_duration_invocations": sum(
             m.active_duration_invocation_count for m in agents.by_agent_type.values()
         ),
+        "trace_active_clamped_zero": sum(
+            1
+            for t in traces
+            if t.duration_ms is not None
+            and t.idle_gap_ms is not None
+            and t.idle_gap_ms > t.duration_ms
+        ),
+        "trace_active_zero": sum(
+            1
+            for t in traces
+            if t.duration_ms is not None and t.active_duration_ms == 0
+        ),
+        "trace_idle_gap_none": sum(
+            1 for t in traces if t.duration_ms is not None and t.idle_gap_ms is None
+        ),
+        "trace_idle_gap_ms": sum(t.idle_gap_ms or 0 for t in traces),
         "signals": dict(sorted(signals.items())),
+        PER_TRACE_KEY: {
+            f"{t.source_file.parent.parent.name}/{t.agent_id}": t.idle_gap_ms
+            for t in traces
+            if t.source_file is not None
+        },
     }
 
 
@@ -219,7 +250,8 @@ def main(argv: list[str] | None = None) -> int:
             continue
         print(f"== {name}")
         for key, value in results[name].items():
-            print(f"   {key}: {value}")
+            if key != PER_TRACE_KEY:
+                print(f"   {key}: {value}")
 
     if args.json:
         try:

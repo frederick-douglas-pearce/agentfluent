@@ -17,9 +17,14 @@ from agentfluent.traces.models import (
     INPUT_SUMMARY_MAX_CHARS,
     RESULT_SUMMARY_MAX_CHARS,
     UNKNOWN_AGENT_TYPE,
+    SubagentToolCall,
     SubagentTrace,
 )
-from agentfluent.traces.parser import parse_subagent_trace
+from agentfluent.traces.parser import (
+    _compute_idle_gap_ms,
+    _union_ms,
+    parse_subagent_trace,
+)
 from tests._builders import (
     assistant_message as _assistant,
 )
@@ -776,12 +781,14 @@ class TestResultTimestamp:
 
 
 class TestIdleGapDetection:
-    """`SubagentTrace.idle_gap_ms` / `active_duration_ms` (#230, re-tuned in #454).
+    """`SubagentTrace.idle_gap_ms` / `active_duration_ms` (#230, re-tuned in #454,
+    per-turn union in #697).
 
-    Heuristic: per-call gap > max(IDLE_GAP_K * median, IDLE_GAP_FLOOR_MS)
-    counts as idle. After the #454 re-calibration, the floor is 60 s
-    (60_000 ms) and dominates in tests where median tool latency is
-    small. See `scripts/calibration/threshold_validation.ipynb` §11.
+    Heuristic: one wait per model turn (parallel siblings share it); a wait
+    > max(IDLE_GAP_K * median turn wait, IDLE_GAP_FLOOR_MS) counts as idle,
+    and idle waits are unioned so overlap counts once. After the #454
+    re-calibration, the floor is 60 s (60_000 ms) and dominates in tests
+    where median tool latency is small. See `scripts/calibration/threshold_validation.ipynb` §11.
     """
 
     @staticmethod
@@ -825,7 +832,7 @@ class TestIdleGapDetection:
         assert trace.active_duration_ms is None
 
     def test_short_gaps_no_idle(self, write_jsonl: WriteJSONL) -> None:
-        # Several fast tool calls — every gap below the 5-min floor
+        # Several fast tool calls — every gap below the 60 s floor
         path = write_jsonl(
             "agent-x.jsonl",
             [
@@ -892,8 +899,8 @@ class TestIdleGapDetection:
         assert trace.idle_gap_ms is None
 
     def test_active_duration_clamped_at_zero(self) -> None:
-        # If idle_gap_ms ever exceeds duration_ms (overlapping calls,
-        # future heuristic change), active_duration_ms must clamp at 0
+        # If idle_gap_ms ever exceeds duration_ms (clock skew, a future
+        # heuristic change), active_duration_ms must clamp at 0
         # rather than going negative.
         from agentfluent.traces.models import SubagentTrace
 
@@ -905,6 +912,230 @@ class TestIdleGapDetection:
             idle_gap_ms=5000,
         )
         assert trace.active_duration_ms == 0
+
+
+def _ts(seconds: float) -> str:
+    """ISO timestamp ``seconds`` after 2026-04-21T10:00:00Z."""
+    base = datetime(2026, 4, 21, 10, 0, 0, tzinfo=UTC).timestamp()
+    stamp = datetime.fromtimestamp(base + seconds, tz=UTC)
+    return stamp.strftime("%Y-%m-%dT%H:%M:%S.") + f"{stamp.microsecond // 1000:03d}Z"
+
+
+def _turn(
+    turn_id: str, start: float, result_offsets: list[float],
+) -> list[dict[str, Any]]:
+    """One assistant turn issuing ``len(result_offsets)`` parallel calls at
+    ``start``; call k's result lands ``result_offsets[k]`` seconds later."""
+    ids = [f"{turn_id}_{k}" for k in range(len(result_offsets))]
+    lines: list[dict[str, Any]] = [
+        _assistant(
+            [_tool_use(tool_id, "Bash") for tool_id in ids],
+            message_id=f"msg_{turn_id}",
+            timestamp=_ts(start),
+        ),
+    ]
+    for tool_id, offset in zip(ids, result_offsets, strict=True):
+        lines.append(_user([_tool_result(tool_id, "ok")], timestamp=_ts(start + offset)))
+    return lines
+
+
+def _short_turns(count: int) -> list[dict[str, Any]]:
+    """``count`` single-call turns, each waiting 1 s, from t=1 s."""
+    return [line for k in range(count) for line in _turn(f"s{k}", 1 + 2 * k, [1])]
+
+
+def _call(start: float, end: float, turn_index: int | None) -> SubagentToolCall:
+    base = datetime(2026, 4, 21, 10, 0, 0, tzinfo=UTC).timestamp()
+    return SubagentToolCall(
+        tool_name="Bash",
+        input_summary="",
+        result_summary="ok",
+        timestamp=datetime.fromtimestamp(base + start, tz=UTC),
+        result_timestamp=datetime.fromtimestamp(base + end, tz=UTC),
+        turn_index=turn_index,
+    )
+
+
+class TestIdleGapParallelSiblings:
+    """#697: parallel same-turn siblings sharing one wait count it once.
+
+    Every idle-gap case below carries at least three 1 s waits (single-call
+    turns, or calls without a turn_index) so the median wait is ~1 s and the
+    60 s floor binds; with only two samples nothing can ever be flagged
+    (5 x median >= 2.5 x the larger wait). ``_union_ms`` is also tested
+    directly.
+    """
+
+    def test_sibling_pair_sharing_wait_subtracted_once(
+        self, write_jsonl: WriteJSONL,
+    ) -> None:
+        # AC1: two siblings both waiting 600 s. The pre-#697 per-call sum
+        # gives 1_200_000; the shared wait is one 600_000 ms window.
+        lines = [_user("go", timestamp=_ts(0)), *_short_turns(3)]
+        trace = parse_subagent_trace(
+            write_jsonl("agent-x.jsonl", [*lines, *_turn("p", 100, [600, 600])]),
+        )
+        assert trace.idle_gap_ms == 600_000
+        assert trace.idle_gap_ms != 1_200_000
+
+        single = parse_subagent_trace(
+            write_jsonl("agent-y.jsonl", [*lines, *_turn("p", 100, [600])]),
+        )
+        assert trace.idle_gap_ms == single.idle_gap_ms
+
+    def test_staggered_sibling_results_take_longest(
+        self, write_jsonl: WriteJSONL,
+    ) -> None:
+        # Siblings return at +600 s and +300 s: the turn waited 600 s,
+        # not 900 s (the pre-#697 sum).
+        trace = parse_subagent_trace(
+            write_jsonl(
+                "agent-x.jsonl",
+                [_user("go", timestamp=_ts(0)), *_short_turns(3), *_turn("p", 100, [600, 300])],
+            ),
+        )
+        assert trace.idle_gap_ms == 600_000
+
+    def test_turn_wait_ends_at_latest_result_whatever_the_order(
+        self, write_jsonl: WriteJSONL,
+    ) -> None:
+        # The longest sibling listed second: keeping the first sibling's
+        # interval would give 300_000.
+        trace = parse_subagent_trace(
+            write_jsonl(
+                "agent-x.jsonl",
+                [_user("go", timestamp=_ts(0)), *_short_turns(3), *_turn("p", 100, [300, 600])],
+            ),
+        )
+        assert trace.idle_gap_ms == 600_000
+
+    def test_turn_wait_starts_at_earliest_sibling(self) -> None:
+        # Parsed siblings share their message timestamp, but programmatic
+        # calls need not: a turn spans its earliest start to its latest end
+        # ([50, 700] = 650 s; the first-seen start would give 600 s).
+        calls = [
+            _call(1, 2, None),
+            _call(3, 4, None),
+            _call(5, 6, None),
+            _call(100, 700, 7),
+            _call(50, 200, 7),
+        ]
+        assert _compute_idle_gap_ms(calls) == 650_000
+
+    def test_calls_without_turn_index_never_merge_with_a_turn(self) -> None:
+        # A call without a turn_index at position 0 must not join turn 0;
+        # merging them would give one [1, 700] interval (699 s).
+        calls = [
+            _call(100, 700, None),
+            _call(1, 2, 0),
+            _call(3, 4, 1),
+            _call(5, 6, 2),
+        ]
+        assert _compute_idle_gap_ms(calls) == 600_000
+
+    def test_mixed_naive_and_aware_timestamps(self) -> None:
+        # A naive timestamp is read as UTC rather than raising TypeError
+        # when compared with aware ones across calls.
+        naive = _call(100, 700, 3)
+        naive = naive.model_copy(
+            update={
+                "timestamp": naive.timestamp.replace(tzinfo=None) if naive.timestamp else None,
+                "result_timestamp": (
+                    naive.result_timestamp.replace(tzinfo=None)
+                    if naive.result_timestamp
+                    else None
+                ),
+            },
+        )
+        calls = [
+            _call(1, 2, 0),
+            _call(3, 4, 1),
+            _call(5, 6, 2),
+            naive,
+            _call(400, 1000, 3),
+        ]
+        assert _compute_idle_gap_ms(calls) == 900_000
+
+    def test_disjoint_idle_turns_still_sum(self, write_jsonl: WriteJSONL) -> None:
+        # No overlap: the union equals the sum of both idle waits.
+        trace = parse_subagent_trace(
+            write_jsonl(
+                "agent-x.jsonl",
+                [
+                    _user("go", timestamp=_ts(0)),
+                    *_short_turns(3),
+                    *_turn("a", 100, [120]),
+                    *_turn("b", 300, [90]),
+                ],
+            ),
+        )
+        assert trace.idle_gap_ms == 210_000
+
+    def test_partially_overlapping_waits_across_calls_counted_once(self) -> None:
+        # Two calls without a turn_index whose waits partially overlap (e.g. a
+        # background call): [100, 700] and [400, 1000] cover 900 s, not 1200 s.
+        calls = [
+            _call(1, 2, None),
+            _call(3, 4, None),
+            _call(5, 6, None),
+            _call(100, 700, None),
+            _call(400, 1000, None),
+        ]
+        assert _compute_idle_gap_ms(calls) == 900_000
+
+    def test_union_ms_merges_overlaps(self) -> None:
+        base = datetime(2026, 4, 21, 10, 0, 0, tzinfo=UTC).timestamp()
+
+        def at(seconds: float) -> datetime:
+            return datetime.fromtimestamp(base + seconds, tz=UTC)
+
+        intervals = [(at(50), at(150)), (at(0), at(100)), (at(200), at(210))]
+        assert _union_ms(intervals) == 160_000
+        assert _union_ms([]) == 0
+
+
+class TestIdleGapMedianSample:
+    """#697 Q2: the median is taken over per-turn waits, not per-call gaps,
+    and the two-sample minimum counts turns."""
+
+    def test_median_sampled_per_turn_not_per_call(self, write_jsonl: WriteJSONL) -> None:
+        # One turn of 7 siblings (15 s each), three 70 s turns, one 200 s turn.
+        # Per-call median = 15 s -> threshold 75 s -> 200 s flagged.
+        # Per-turn median = 70 s -> threshold 350 s -> nothing flagged.
+        trace = parse_subagent_trace(
+            write_jsonl(
+                "agent-x.jsonl",
+                [
+                    _user("go", timestamp=_ts(0)),
+                    *_turn("fan", 1, [15] * 7),
+                    *_turn("a", 100, [70]),
+                    *_turn("b", 200, [70]),
+                    *_turn("c", 300, [70]),
+                    *_turn("d", 400, [200]),
+                ],
+            ),
+        )
+        assert trace.idle_gap_ms == 0
+
+    def test_single_turn_of_siblings_is_indeterminate(
+        self, write_jsonl: WriteJSONL,
+    ) -> None:
+        # Three timed calls but one turn: one sample, so None, never 0.
+        trace = parse_subagent_trace(
+            write_jsonl(
+                "agent-x.jsonl",
+                [_user("go", timestamp=_ts(0)), *_turn("p", 1, [1, 2, 900])],
+            ),
+        )
+        assert trace.idle_gap_ms is None
+        assert trace.active_duration_ms is None
+
+    def test_calls_without_turn_index_are_each_a_sample(self) -> None:
+        # Programmatic calls without turn_index keep per-call sampling.
+        calls = [_call(1, 2, None), _call(3, 4, None)]
+        assert _compute_idle_gap_ms(calls) == 0
+        same_turn = [_call(1, 2, 0), _call(1, 4, 0)]
+        assert _compute_idle_gap_ms(same_turn) is None
 
 
 class TestModelTurns:
