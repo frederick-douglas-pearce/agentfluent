@@ -313,6 +313,23 @@ presence.** `ToolResultMetadata` uses `extra="ignore"` so additional fields on
 ```
 **NOTE:** `message.content` can be either a plain string or an array of blocks (`[{"type": "text", "text": "..."}]`). The parser MUST handle both.
 
+**Prompt provenance -- not every `user` line is a human.** Skill bodies, command caveats,
+background-task notifications, cross-session relay / subagent hand-backs, compaction summaries and
+Agent SDK prompts all arrive as `type: "user"`. The discriminators are top-level fields the parser
+keeps on `SessionMessage` (`is_meta`, `prompt_source`, `origin_kind`, `turn_origin`,
+`is_compact_summary`): `isMeta: true`, `isCompactSummary: true`, `promptSource` (human:
+`typed`/`queued`/`suggestion_accepted`; machine: `sdk`, `system`), `origin.kind` (human: `human`;
+machine: `peer`, `task-notification`, `auto-continuation`) and `turnOrigin` (human: `human`; machine:
+`peer`, `task_notification`, `scheduled`, `sdk` -- the only marker on SDK-issued slash-command lines).
+Upstream (`claude-code-sessions` `reference/data-dictionary.md`) documents `promptSource` `typed`/`sdk`
+plus a synthesized-style value, and `isMeta` only on `system` lines; everything else here was observed in
+local CLI 2.1.x sessions (2026). Lines with none of these fields fall back to a text-prefix check that
+catches relay / hand-back messages only -- an SDK prompt line with no `promptSource`/`turnOrigin` is not
+recognized. Any signal that means "a human said this" must gate on
+`core/provenance.py::is_machine_injected`, which treats an unknown `promptSource`/`origin.kind`/`turnOrigin`
+value as injected (#667). Known exception: `diagnostics/parent_workload.py::_is_real_user_text` (burst
+boundaries) does not gate yet -- #734.
+
 ### Key signals for agent analysis
 
 - **Agent tool_use blocks** -- `name: "Agent"` with `subagent_type`, `description`, `prompt` in input. Identifies which agent was invoked and the delegation prompt.

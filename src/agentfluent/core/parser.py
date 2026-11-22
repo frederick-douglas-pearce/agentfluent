@@ -190,11 +190,21 @@ def _parse_user_message(data: dict[str, Any]) -> SessionMessage:
     if raw_tool_use_result and isinstance(raw_tool_use_result, dict):
         metadata = ToolResultMetadata.model_validate(raw_tool_use_result)
 
+    prompt_source = data.get("promptSource")
+    origin = data.get("origin")
+    origin_kind = origin.get("kind") if isinstance(origin, dict) else None
+    turn_origin = data.get("turnOrigin")
+
     return SessionMessage(
         type="user",
         timestamp=parse_timestamp(data.get("timestamp")),
         content_blocks=_normalize_content(message.get("content")),
         entrypoint=data.get("entrypoint"),
+        is_meta=data.get("isMeta") is True,
+        prompt_source=prompt_source if isinstance(prompt_source, str) else None,
+        origin_kind=origin_kind if isinstance(origin_kind, str) else None,
+        turn_origin=turn_origin if isinstance(turn_origin, str) else None,
+        is_compact_summary=data.get("isCompactSummary") is True,
         metadata=metadata,
     )
 

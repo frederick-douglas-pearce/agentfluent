@@ -8,8 +8,13 @@ even when #274 calibration tunes thresholds.
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from agentfluent.agents.models import WRITE_TOOLS, AgentInvocation
 from agentfluent.config.models import Severity
+from agentfluent.core.parser import parse_session
 from agentfluent.core.session import ContentBlock, SessionMessage
 from agentfluent.diagnostics.models import SignalType
 from agentfluent.diagnostics.quality_signals import (
@@ -1246,3 +1251,90 @@ class TestMinFindingKeywords:
         rev = [s for s in signals if s.signal_type == SignalType.REVIEWER_CAUGHT]
         assert len(rev) == 1
         assert rev[0].detail["finding_keywords"] == ["issue"]
+
+
+class TestUserCorrectionProvenanceGate:
+    """Tier 0: machine-injected user messages never feed USER_CORRECTION (#667)."""
+
+    FIXTURE = Path(__file__).parent.parent / "fixtures" / "session_injected_user_messages.jsonl"
+
+    @staticmethod
+    def _user_corrections(signals: list) -> list:
+        return [s for s in signals if s.signal_type == SignalType.USER_CORRECTION]
+
+    def test_fixture_only_human_corrections_fire(self) -> None:
+        """End to end through the parser: the security-review prompt shapes
+        (isMeta skill expansion, promptSource sdk), the structural
+        relay/hand-back shape, an SDK-issued slash command (turnOrigin sdk
+        only) and a legacy relay line with no provenance fields (text
+        fallback) all carry strong-correction words after a write tool, yet
+        only the two human-typed corrections fire (AC1 + AC2)."""
+        messages = parse_session(self.FIXTURE)
+        signals = self._user_corrections(extract_quality_signals(messages))
+        assert [s.detail["correction_text"] for s in signals] == [
+            "no, that's wrong -- revert the last edit",
+            "wait, use the other file instead",
+        ]
+        # Denominator counts the three human-typed user messages only.
+        assert {s.detail["total_user_messages"] for s in signals} == {3}
+
+    @pytest.mark.parametrize(
+        "fields",
+        [
+            {"is_meta": True},
+            {"prompt_source": "sdk"},
+            {"prompt_source": "system", "origin_kind": "peer"},
+            {"is_compact_summary": True},
+        ],
+    )
+    def test_injected_strong_correction_after_write_does_not_fire(
+        self, fields: dict[str, object],
+    ) -> None:
+        messages: list[SessionMessage] = []
+        for _ in range(3):
+            messages.append(_assistant_with_write_tool())
+            messages.append(
+                SessionMessage(
+                    type="user",
+                    content_blocks=[ContentBlock(type="text", text="that's wrong, revert it")],
+                    **fields,  # type: ignore[arg-type]
+                ),
+            )
+        assert self._user_corrections(extract_quality_signals(messages)) == []
+
+    def test_typed_correction_after_write_still_fires(self) -> None:
+        messages: list[SessionMessage] = []
+        for _ in range(2):
+            messages.append(_assistant_with_write_tool())
+            messages.append(
+                SessionMessage(
+                    type="user",
+                    content_blocks=[ContentBlock(type="text", text="no, use the other file")],
+                    prompt_source="typed",
+                    origin_kind="human",
+                ),
+            )
+        assert len(self._user_corrections(extract_quality_signals(messages))) == 2
+
+    def test_injected_messages_leave_the_rate_denominator(self) -> None:
+        """1 human correction among 5 human + 40 injected user turns: the rate
+        is 1/5 = 0.20 (passes the rate floor), not 1/45 = 0.02."""
+        messages: list[SessionMessage] = []
+        for i in range(40):
+            messages.append(_assistant_text(f"note {i}"))
+            messages.append(
+                SessionMessage(
+                    type="user",
+                    content_blocks=[ContentBlock(type="text", text=f"relay {i}")],
+                    is_meta=True,
+                ),
+            )
+        for i in range(4):
+            messages.append(_assistant_text(f"point {i}"))
+            messages.append(_user(f"continue {i}"))
+        messages.append(_assistant_text("here is the plan"))
+        messages.append(_user("revert that change please"))
+        signals = self._user_corrections(extract_quality_signals(messages))
+        assert len(signals) == 1
+        assert signals[0].detail["total_user_messages"] == 5
+        assert signals[0].detail["session_correction_rate"] == pytest.approx(0.2)
