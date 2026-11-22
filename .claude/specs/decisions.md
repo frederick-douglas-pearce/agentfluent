@@ -1450,3 +1450,26 @@ _Corrected pre-merge — `#664` code review r1. An earlier revision of this head
 **Reference:** `#676`, `#688`, PR #712, architect issuecomment-7036061638 and the step-8 scope ruling (ledger `.claude/loop/v0.12.0/progress.md`); D055, D029, D057(11), D061(7), D063(7).
 
 ---
+
+## D066: v0.12.0 closed around cost correctness and reporting trust; overlay levers to backlog; `#682` pulled in
+
+**Date:** 2026-11-22
+**Status:** Accepted (maintainer, on PM scope review)
+
+**Context:** The cost-quantity headline work (`#646`, `#648`, `#701`, `#674`, `#676`/`#688`, `#713`, `#543`) has merged. Recent dev-loop runs filed ~36 unmilestoned follow-ups. The PM reviewed the milestone and every candidate on 2026-11-22.
+
+**Decision:**
+- **(1) Remaining v0.12.0 scope.** Must: `#666`, `#667` (zero-precision diagnostics; the post-release dogfood reads them), `#682` after `#707`, the `#705` AC1 and `#704` AC4 prevalence measurements, and `#548` last. Should: `#715` → `#723`, `#679` → `#680`, `#721`, `#722`, `#684`, `#653`, `#662`, `#649`.
+- **(2) `#682` blocks the release.** The PM recommended shipping the haiku-5-5 >100K context-tier under-pricing as a disclosed limitation; the maintainer chose to wait for the fix. `#707` lands first so the tier enters one pricing path.
+- **(3) Overlay levers deferred to backlog.** `#535`–`#539` show zero prevalence in 89,156 usage objects, and genai-prices 0.2.3 prices batch and fast mode upstream (`#686`). No local overlay will be built for `#536`/`#537`; when prevalence is non-zero, read upstream variant prices via `price_context`.
+- **(4) `#704`/`#705` pull-in thresholds** (architect review, comments on both issues), set before the measurements run so the measurer does not make the call. A share of sessions is rejected as the unit; it appears only in disclosure wording.
+  - **`#705`:** any non-zero count of (session, agent_id) groups with ≥2 invocations on the four standard corpora pulls the fix in (per the issue's own pre-`#676` condition and D062(10)). Non-zero only on `--all` history → v0.13.0 + disclosure. Zero everywhere → close as not observed, with a one-line disclosure.
+  - **`#704`:** dollar totals are already deduped by `#701`. Pull in if (a) any trace-level finding at default `--min-severity` on the standard corpora disappears when replayed calls are removed (zero tolerance), or (b) replayed turns are ≥10% of `total_model_turns` for any single agent type (an architect judgment call, not precedent). A minimal `is_fork` guard that skips trace-level checks is an acceptable v0.12.0 fallback for (a). Below both → v0.13.0 + disclosure.
+  - **Measurement:** extend `scripts/trace_coverage_corpus_check.py`, run through the production pipeline on the four default corpora plus `--all`.
+  - **Outcome (measured 2026-11-22, full history, 2,363 sessions):** `#705`: 0 shared (session, agent_id) groups in 5,228 linked invocations, so it was closed as not observed with a disclosure. `#704`: 2 fork traces in 1 session; 3.7% of fork turns replayed (below the 10% bar); 0 replayed error calls or retry sequences (below the diagnostics bar), so it moved to v0.13.0 with a disclosure. Both disclosures go into `#548`.
+- **(5) Deferred to v0.13.0:** `#683` (narrowed to what `#679`/`#680` leave), `#669` (AC rewrite first), `#725` (first diagnostics fix of v0.13.0), `#668`, `#698`, `#700`, `#709`, `#711`, `#714`, `#716`, `#717`, `#719`. Backlog: `#702`, `#692`, `#687`, `#678`, `#727`. Not milestone items: `#685`, `#670`, `#728`. `#671` closed.
+- **(6) `#548` absorbs** `#652` and `#686`'s `COST_MODEL.md` row fixes; `#686` closes with it.
+
+**Reference:** PM scope review 2026-11-22; `#686`, `#682`, `#704`, `#705`; D057, D062, D064, D065.
+
+---
