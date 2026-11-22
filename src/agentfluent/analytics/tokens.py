@@ -124,8 +124,10 @@ def _cost_of(
     """Price one breakdown row at its model's rate; ``None`` iff the model is unpriced.
 
     The single call site of ``get_pricing`` / ``compute_cost`` in this module (#646 AC1):
-    parent rows, subagent rows and per-agent spend (``price_trace``) all price here, so
-    the ``Usage`` -> rate mapping (the 5m/1h cache-write split) lives on one path.
+    parent rows, subagent rows, per-agent spend (``price_trace``) and every diagnostics
+    dollar figure (via ``price_usage`` -- model-switch savings and, since #707, the
+    parent-workload offload estimate) all price here, so the ``Usage`` -> rate mapping
+    (the 5m/1h cache-write split) lives on one path.
 
     **Linearity assumption.** Pricing is linear in tokens today (base tier only -- the
     upstream adapter discards context tiers -- and no caller passes request multipliers
@@ -305,11 +307,10 @@ def price_usage(
 ) -> float | None:
     """Price one ``Usage`` at ``model``'s rate; ``None`` iff ``model`` is unpriced.
 
-    The public token -> dollar primitive (#675): ``price_trace`` and the
+    The public token -> dollar primitive (#675): ``price_trace``, the
     model-switch savings figures (``diagnostics.model_routing`` and the
-    duration-outlier rule) route through it -- ``diagnostics.parent_workload``'s
-    offload estimate still calls ``compute_cost`` directly until #707 -- and it
-    routes through ``_cost_of``,
+    duration-outlier rule) and ``diagnostics.parent_workload``'s offload
+    estimate (#707) route through it -- and it routes through ``_cost_of``,
     so all five usage components -- including the 5m/1h cache-write split -- map to
     rates on a single path (#646 AC1).
 
@@ -321,7 +322,7 @@ def price_usage(
     ``diagnostics.parent_workload``'s offload estimate uses a *different*
     counterfactual on purpose -- a delegated subagent loses the parent's cache, so
     its alternative side re-prices cache reads as fresh input -- and the two are not
-    meant to converge (#707 routes that estimate's pricing, not its counterfactual,
+    meant to converge (#707 routed that estimate's pricing, not its counterfactual,
     through here).
     """
     breakdown = ModelTokenBreakdown(model=model)

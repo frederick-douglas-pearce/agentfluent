@@ -40,10 +40,12 @@ from agentfluent.diagnostics.parent_workload import (  # noqa: E402
     generate_offload_candidate,
 )
 
-_OPUS = get_pricing("claude-opus-4-7")
-_SONNET = get_pricing("claude-sonnet-4-6")
-assert _OPUS is not None
-assert _SONNET is not None
+# A model id with no price, upstream or residual. The import-time asserts
+# keep the priced/unpriced premise of the cost tests honest.
+_UNPRICED = "not-a-real-model"
+assert get_pricing("claude-opus-4-7") is not None
+assert get_pricing("claude-sonnet-4-6") is not None
+assert get_pricing(_UNPRICED) is None
 
 
 def _tool(name: str, idx: int = 0) -> ToolUseBlock:
@@ -339,8 +341,6 @@ class TestGenerateOffloadCandidate:
         candidate = generate_offload_candidate(
             self._cluster(),
             parent_model="claude-opus-4-7",
-            parent_pricing=_OPUS,
-            alt_pricing=_SONNET,
         )
         assert candidate.parent_model == "claude-opus-4-7"
         assert candidate.alternative_model == "claude-sonnet-4-6"
@@ -363,8 +363,6 @@ class TestGenerateOffloadCandidate:
         candidate = generate_offload_candidate(
             BurstCluster(members=members, top_terms=["pytest"], cohesion_score=0.55),
             parent_model="claude-opus-4-7",
-            parent_pricing=_OPUS,
-            alt_pricing=_SONNET,
         )
         assert candidate.estimated_savings_usd > 0
         assert candidate.cost_note == ""
@@ -386,8 +384,6 @@ class TestGenerateOffloadCandidate:
                 members=members, top_terms=["analyze"], cohesion_score=0.45,
             ),
             parent_model="claude-opus-4-7",
-            parent_pricing=_OPUS,
-            alt_pricing=_SONNET,
         )
         assert candidate.estimated_savings_usd < 0
         assert "cache" in candidate.cost_note.lower()
@@ -395,9 +391,7 @@ class TestGenerateOffloadCandidate:
     def test_unknown_pricing_returns_zero_costs(self) -> None:
         candidate = generate_offload_candidate(
             self._cluster(),
-            parent_model="claude-opus-4-7",
-            parent_pricing=None,
-            alt_pricing=None,
+            parent_model=_UNPRICED,
         )
         assert candidate.estimated_parent_cost_usd == 0.0
         assert candidate.estimated_savings_usd == 0.0
@@ -409,15 +403,77 @@ class TestGenerateOffloadCandidate:
         [(True, True, True), (True, False, False), (False, True, False)],
     )
     def test_cost_priced_marks_whether_both_models_had_prices(
-        self, parent_priced: bool, alt_priced: bool, expected: bool,
+        self,
+        parent_priced: bool,
+        alt_priced: bool,
+        expected: bool,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        # The alternative model is derived inside generate_offload_candidate,
+        # so an unpriced alternative is injected through pick_alternative_model.
+        alt_model = "claude-sonnet-4-6" if alt_priced else _UNPRICED
+        monkeypatch.setattr(
+            parent_workload, "pick_alternative_model", lambda _parent: alt_model,
+        )
         candidate = generate_offload_candidate(
             self._cluster(),
-            parent_model="claude-opus-4-7",
-            parent_pricing=_OPUS if parent_priced else None,
-            alt_pricing=_SONNET if alt_priced else None,
+            parent_model="claude-opus-4-7" if parent_priced else _UNPRICED,
         )
         assert candidate.cost_priced is expected
+        if not expected:
+            assert candidate.estimated_parent_cost_usd == 0.0
+            assert candidate.estimated_savings_usd == 0.0
+
+    def test_cluster_totals_sum_every_burst_estimate(self) -> None:
+        # Totals are the sum of per-burst estimates, each priced at the
+        # cluster's parent model and its alternative (#707).
+        members = [
+            _burst(tools=["Read"], input_tokens=1000, output_tokens=200,
+                   cache_read_input_tokens=3000),
+            _burst(tools=["Read"], input_tokens=50, output_tokens=4000,
+                   cache_creation_input_tokens=7000),
+            _burst(tools=["Bash"], input_tokens=2500, output_tokens=10),
+        ]
+        candidate = generate_offload_candidate(
+            BurstCluster(members=members, top_terms=["t"], cohesion_score=0.5),
+            parent_model="claude-opus-4-7",
+        )
+        estimates = [
+            parent_workload.estimate_burst_cost(
+                b, parent_model="claude-opus-4-7", alt_model="claude-sonnet-4-6",
+            )
+            for b in members
+        ]
+        assert all(e is not None for e in estimates)
+        priced = [e for e in estimates if e is not None]
+        assert candidate.cost_priced is True
+        assert candidate.estimated_parent_cost_usd == pytest.approx(
+            sum(p for p, _ in priced),
+        )
+        assert candidate.estimated_savings_usd == pytest.approx(
+            sum(s for _, s in priced),
+        )
+        assert candidate.estimated_parent_tokens == sum(
+            b.usage.total_tokens for b in members
+        )
+
+    def test_haiku_parent_negative_savings_carries_cost_note(self) -> None:
+        # Haiku's alternative is itself; with cache reads re-priced as fresh
+        # input the estimate goes negative and the "do not offload" note fires.
+        haiku = "claude-haiku-4-5-20251001"
+        assert parent_workload.pick_alternative_model(haiku) == haiku
+        members = [
+            _burst(tools=["Read"], input_tokens=100, output_tokens=100,
+                   cache_read_input_tokens=50_000, model=haiku),
+        ] * 6
+        candidate = generate_offload_candidate(
+            BurstCluster(members=members, top_terms=["x"], cohesion_score=0.5),
+            parent_model=haiku,
+        )
+        assert candidate.cost_priced is True
+        assert candidate.alternative_model == haiku
+        assert candidate.estimated_savings_usd < 0
+        assert "cache" in candidate.cost_note.lower()
 
     def test_subagent_draft_tools_frequency_filtered(self) -> None:
         # 5/6 bursts use Read; 1/6 uses Bash. Threshold filters Bash out.
@@ -427,8 +483,6 @@ class TestGenerateOffloadCandidate:
         candidate = generate_offload_candidate(
             BurstCluster(members=members, top_terms=["t"], cohesion_score=0.45),
             parent_model="claude-opus-4-7",
-            parent_pricing=_OPUS,
-            alt_pricing=_SONNET,
         )
         assert candidate.subagent_draft is not None
         assert candidate.subagent_draft.tools == ["Read"]
@@ -438,8 +492,6 @@ class TestGenerateOffloadCandidate:
         candidate = generate_offload_candidate(
             self._cluster(),
             parent_model="claude-opus-4-7",
-            parent_pricing=_OPUS,
-            alt_pricing=_SONNET,
         )
         yaml_text = candidate.yaml_draft
         # Offload-specific framing the architect required (Q-followup):
@@ -461,8 +513,6 @@ class TestGenerateOffloadCandidate:
         candidate = generate_offload_candidate(
             BurstCluster(members=members, top_terms=["x"], cohesion_score=0.45),
             parent_model="claude-opus-4-7",
-            parent_pricing=_OPUS,
-            alt_pricing=_SONNET,
         )
         yaml_text = candidate.yaml_draft
         assert "cost MORE" in yaml_text
@@ -497,8 +547,6 @@ class TestJsonRoundTrip:
         candidate = generate_offload_candidate(
             clusters[0],
             parent_model="claude-opus-4-7",
-            parent_pricing=_OPUS,
-            alt_pricing=_SONNET,
         )
         payload = candidate.model_dump(mode="json")
         # skill_draft is null in v0.5 — the contract for the v0.6 migration.

@@ -45,7 +45,7 @@ except ImportError:  # pragma: no cover — exercised via install-path test
     pass
 
 from agentfluent.agents.models import WRITE_TOOLS
-from agentfluent.analytics.pricing import ModelPricing, compute_cost, get_pricing
+from agentfluent.analytics.tokens import price_usage
 from agentfluent.config.models import AgentConfig
 from agentfluent.core.session import (
     SessionMessage,
@@ -339,10 +339,10 @@ def pick_alternative_model(parent_model: str) -> str:
 def estimate_burst_cost(
     burst: ToolBurst,
     *,
-    parent_pricing: ModelPricing | None,
-    alt_pricing: ModelPricing | None,
-) -> tuple[float, float]:
-    """Return ``(parent_cost_usd, savings_usd_signed)`` for one burst.
+    parent_model: str | None,
+    alt_model: str | None,
+) -> tuple[float, float] | None:
+    """Return ``(parent_cost_usd, savings_usd_signed)`` for one burst, or ``None``.
 
     Savings is signed; negative means offloading would cost MORE than
     staying on the parent (cache is load-bearing for this pattern). Per
@@ -350,32 +350,43 @@ def estimate_burst_cost(
     zero — so callers can render negative-savings clusters with a
     distinct "do not offload" treatment.
 
-    When either pricing is unknown (lookup returned ``None``), returns
-    ``(0.0, 0.0)`` and emits a debug log. Callers treat that as "no
-    estimate available" rather than "free."
-    """
-    if parent_pricing is None or alt_pricing is None:
-        logger.debug(
-            "Skipping cost estimate for burst: pricing unavailable "
-            "(parent=%s alt=%s).",
-            parent_pricing is not None, alt_pricing is not None,
-        )
-        return (0.0, 0.0)
+    Both sides are priced through ``analytics.tokens.price_usage`` (#707), so
+    every ``Usage`` -> rate mapping in the codebase runs through
+    ``analytics.tokens._cost_of``. The parent side prices the burst's
+    observed usage; the alternative side keeps this estimate's own
+    counterfactual (below), which is deliberately not the same-mix one
+    ``price_usage`` documents for the model-switch savings figures. Both are
+    priced at the latest rate (``timestamp=None``; session-dated pricing is
+    #735).
 
-    u = burst.usage
-    parent_cost = compute_cost(
-        parent_pricing,
-        u.input_tokens, u.output_tokens,
-        u.cache_creation_5m_input_tokens, u.cache_read_input_tokens,
-        cache_creation_1h_tokens=u.cache_creation_1h_input_tokens,
+    Returns ``None`` when either model is missing (empty or ``None`` id) or
+    unpriced, and emits a debug log naming the side. ``None`` means "no
+    estimate available", never "free".
+    """
+    parent_cost = (
+        price_usage(burst.usage, parent_model, timestamp=None)
+        if parent_model else None
     )
     # Alt-model has no cache benefit: cache_read becomes fresh input,
     # cache_creation drops out (a delegated subagent would re-fetch its
     # own context, not pay to write the parent's cache).
-    effective_input = u.input_tokens + u.cache_read_input_tokens
-    alt_cost = compute_cost(
-        alt_pricing, effective_input, u.output_tokens, 0, 0,
+    u = burst.usage
+    alt_usage = Usage(
+        input_tokens=u.input_tokens + u.cache_read_input_tokens,
+        output_tokens=u.output_tokens,
     )
+    alt_cost = (
+        price_usage(alt_usage, alt_model, timestamp=None)
+        if alt_model else None
+    )
+    if parent_cost is None or alt_cost is None:
+        logger.debug(
+            "Skipping cost estimate for burst: pricing unavailable "
+            "(parent=%s priced=%s, alt=%s priced=%s).",
+            parent_model, parent_cost is not None,
+            alt_model, alt_cost is not None,
+        )
+        return None
     return (parent_cost, parent_cost - alt_cost)
 
 
@@ -681,8 +692,6 @@ def generate_offload_candidate(
     cluster: BurstCluster,
     *,
     parent_model: str,
-    parent_pricing: ModelPricing | None,
-    alt_pricing: ModelPricing | None,
 ) -> OffloadCandidate:
     """Synthesize an ``OffloadCandidate`` from a clustered group of bursts.
 
@@ -697,11 +706,20 @@ def generate_offload_candidate(
     parent_tokens = 0
     parent_cost_total = 0.0
     savings_total = 0.0
+    # Every burst is priced at the cluster's parent model, so pricing is
+    # all-or-nothing across the cluster: one unpriced estimate means the
+    # parent or alternative model has no price, and the candidate ships
+    # with zero figures and ``cost_priced=False``.
+    cost_priced = True
     for b in cluster.members:
         parent_tokens += b.usage.total_tokens
-        parent_cost, savings_signed = estimate_burst_cost(
-            b, parent_pricing=parent_pricing, alt_pricing=alt_pricing,
+        estimate = estimate_burst_cost(
+            b, parent_model=parent_model, alt_model=alt_model,
         )
+        if estimate is None:
+            cost_priced = False
+            continue
+        parent_cost, savings_signed = estimate
         parent_cost_total += parent_cost
         savings_total += savings_signed
 
@@ -730,7 +748,7 @@ def generate_offload_candidate(
         estimated_parent_tokens=parent_tokens,
         estimated_parent_cost_usd=parent_cost_total,
         estimated_savings_usd=savings_total,
-        cost_priced=parent_pricing is not None and alt_pricing is not None,
+        cost_priced=cost_priced,
         parent_model=parent_model,
         alternative_model=alt_model,
         cost_note=cost_note,
@@ -745,8 +763,9 @@ def _pick_cluster_parent_model(cluster: BurstCluster) -> str:
 
     All bursts in a cluster should share a model in practice (the
     extractor logs at debug when they don't); we use the first member's
-    model. Empty string means "unknown" — pricing lookup falls back to
-    ``None`` and the candidate ships with zero cost figures.
+    model. Empty string means "unknown" — ``estimate_burst_cost`` returns
+    ``None`` without a price lookup, and the candidate ships with zero cost
+    figures and ``cost_priced=False``.
     """
     if not cluster.members:
         return ""
@@ -797,9 +816,11 @@ def build_offload_candidates(
     module — ``run_diagnostics`` becomes a thin caller. Symmetric with
     ``delegation.suggest_delegations`` placement.
 
-    Pricing is looked up per cluster from
-    ``cluster.members[0].model``; clusters whose model has no pricing
-    table entry ship with ``estimated_*_usd = 0.0`` and a debug log.
+    Each cluster is priced at ``cluster.members[0].model`` and its
+    alternative model, through ``analytics.tokens.price_usage``
+    (``estimate_burst_cost``); a cluster where either model is unknown or
+    unpriced ships with ``estimated_*_usd = 0.0``, ``cost_priced=False`` and
+    a debug log.
     Returns ``[]`` when sklearn is missing OR no cluster meets
     ``min_cluster_size``.
     """
@@ -812,16 +833,8 @@ def build_offload_candidates(
     candidates: list[OffloadCandidate] = []
     for cluster in clusters:
         parent_model = _pick_cluster_parent_model(cluster)
-        parent_pricing = get_pricing(parent_model) if parent_model else None
-        alt_model = pick_alternative_model(parent_model)
-        alt_pricing = get_pricing(alt_model) if alt_model else None
         candidates.append(
-            generate_offload_candidate(
-                cluster,
-                parent_model=parent_model,
-                parent_pricing=parent_pricing,
-                alt_pricing=alt_pricing,
-            ),
+            generate_offload_candidate(cluster, parent_model=parent_model),
         )
     if existing_configs:
         candidates = apply_offload_dedup(candidates, existing_configs, min_similarity)
