@@ -423,8 +423,9 @@ def _extract_retry_and_stuck(
     """Emit STUCK_PATTERN or RETRY_LOOP — never both — per `RetrySequence`.
 
     STUCK and RETRY are mutually exclusive by design. A `RetrySequence`
-    whose `attempts >= 4` AND whose member calls all share the exact
-    same `input_summary` is STUCK; any other sequence with `attempts >= 3`
+    whose `attempts >= 4` AND whose member calls all share the same full input AND
+    the same result (`_is_stuck`, #666) is STUCK; any other sequence with
+    `attempts >= 3`
     is RETRY. Sequences with `attempts == 2` are below the diagnostic
     threshold and do not emit here.
 
