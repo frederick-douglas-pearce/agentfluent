@@ -218,7 +218,9 @@ class SubagentTrace(BaseModel):
     """Idle time from ``traces.parser._compute_idle_gap_ms``: the union of
     per-turn waits flagged as idle, so parallel sibling calls sharing one wait
     count it once (#697; before #697 this summed per-call gaps).
-    ``None`` when fewer than two model turns have a timed tool call;
+    ``None`` when fewer than two wait samples exist -- one per model turn
+    with a timed, in-order tool call; a call without a ``turn_index`` is its
+    own sample;
     ``0`` when computable but no wait met the threshold."""
 
     source_file: Path | None = None

@@ -156,7 +156,8 @@ class AgentTypeMetrics:
     """Sum of active duration over trace-linked invocations with a trace
     duration: ``active_duration_ms`` (idle gaps subtracted), or the trace
     ``duration_ms`` when idle gaps could not be computed (fewer than two
-    timestamped tool calls), mirroring ``active_duration_per_tool_use`` (#690)."""
+    timed model turns -- see ``SubagentTrace.idle_gap_ms``), mirroring
+    ``active_duration_per_tool_use`` (#690)."""
 
     total_wallclock_ms_trace_linked: int = 0
     """Sum of raw ``duration_ms`` over the *same* trace-linked invocations
@@ -370,9 +371,10 @@ def compute_agent_metrics(
         # (#480) so a downstream wall/active ratio reflects idle
         # subtraction, not which invocations happened to have a trace.
         # On a trace-linked invocation both come from the trace (#690).
-        # Where idle gaps could not be computed (fewer than two timestamped
-        # tool calls), the trace span stands in as active -- same source, no
-        # idle subtracted -- so the invocation still counts as covered.
+        # Where idle gaps could not be computed (fewer than two timed model
+        # turns -- see SubagentTrace.idle_gap_ms), the trace span stands in
+        # as active -- same source, no idle subtracted -- so the invocation
+        # still counts as covered.
         if inv.trace is not None and inv.duration_ms is not None:
             active = inv.active_duration_ms
             metrics.total_active_duration_ms += (

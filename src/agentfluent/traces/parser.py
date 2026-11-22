@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 import statistics
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -50,8 +50,11 @@ from agentfluent.traces.retry import detect_retry_sequences
 # Re-calibrated for #454 against the v0.7+ corpus: the original
 # (k=10, floor=300_000) caught dramatic gaps but missed 1-4 min
 # user-coupled waits, contributing to the inflated 33-min pm average
-# in the v0.7 dogfood. The §11 12-trace "obviously-stuck" set still
-# retains 100% subtraction recall at the lowered values — it's a
+# in the v0.7 dogfood. The §11 "obviously-stuck" set retained 100%
+# subtraction recall at the lowered values (12/12, measured for #454
+# under the pre-#697 per-call heuristic). Re-checked for #697 against
+# this production heuristic with scripts/calibration/idle_gap_recall_check.py:
+# 57/57 stuck traces in the local corpus still caught. It is a
 # regression guard for subtraction quality, NOT a recall metric for
 # STUCK_PATTERN (which uses an unrelated retry-attempt mechanism in
 # diagnostics/trace_signals.py and never reads these constants; see
@@ -215,6 +218,11 @@ def _pair_tool_calls(messages: list[SessionMessage]) -> list[SubagentToolCall]:
     return tool_calls
 
 
+def _as_utc(moment: datetime) -> datetime:
+    """``moment`` as an aware datetime, reading a naive one as UTC."""
+    return moment.replace(tzinfo=UTC) if moment.tzinfo is None else moment
+
+
 def _turn_wait_intervals(
     tool_calls: list[SubagentToolCall],
 ) -> list[tuple[datetime, datetime]]:
@@ -225,22 +233,23 @@ def _turn_wait_intervals(
     latest ``tool_result``. A call with ``turn_index=None`` is its own
     interval. Calls missing either timestamp, or whose result precedes its
     use (clock skew, parsing artifact), are skipped so no work is synthesized.
+    Naive timestamps are read as UTC so intervals from different calls can be
+    compared (mixing naive and aware datetimes would raise ``TypeError``).
     """
     by_turn: dict[tuple[str, int], tuple[datetime, datetime]] = {}
     for position, tc in enumerate(tool_calls):
         if tc.timestamp is None or tc.result_timestamp is None:
             continue
-        if tc.result_timestamp < tc.timestamp:
+        start = _as_utc(tc.timestamp)
+        end = _as_utc(tc.result_timestamp)
+        if end < start:
             continue
         key = ("call", position) if tc.turn_index is None else ("turn", tc.turn_index)
         current = by_turn.get(key)
         if current is None:
-            by_turn[key] = (tc.timestamp, tc.result_timestamp)
+            by_turn[key] = (start, end)
         else:
-            by_turn[key] = (
-                min(current[0], tc.timestamp),
-                max(current[1], tc.result_timestamp),
-            )
+            by_turn[key] = (min(current[0], start), max(current[1], end))
     return list(by_turn.values())
 
 

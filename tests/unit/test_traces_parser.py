@@ -959,9 +959,11 @@ def _call(start: float, end: float, turn_index: int | None) -> SubagentToolCall:
 class TestIdleGapParallelSiblings:
     """#697: parallel same-turn siblings sharing one wait count it once.
 
-    Every trace below carries at least three 1 s turns so the median turn
-    wait is ~1 s and the 60 s floor binds; with only two samples nothing can
-    ever be flagged (5 x median >= 2.5 x the larger wait).
+    Every idle-gap case below carries at least three 1 s waits (single-call
+    turns, or calls without a turn_index) so the median wait is ~1 s and the
+    60 s floor binds; with only two samples nothing can ever be flagged
+    (5 x median >= 2.5 x the larger wait). ``_union_ms`` is also tested
+    directly.
     """
 
     def test_sibling_pair_sharing_wait_subtracted_once(
@@ -994,6 +996,66 @@ class TestIdleGapParallelSiblings:
         )
         assert trace.idle_gap_ms == 600_000
 
+    def test_turn_wait_ends_at_latest_result_whatever_the_order(
+        self, write_jsonl: WriteJSONL,
+    ) -> None:
+        # The longest sibling listed second: keeping the first sibling's
+        # interval would give 300_000.
+        trace = parse_subagent_trace(
+            write_jsonl(
+                "agent-x.jsonl",
+                [_user("go", timestamp=_ts(0)), *_short_turns(3), *_turn("p", 100, [300, 600])],
+            ),
+        )
+        assert trace.idle_gap_ms == 600_000
+
+    def test_turn_wait_starts_at_earliest_sibling(self) -> None:
+        # Parsed siblings share their message timestamp, but programmatic
+        # calls need not: a turn spans its earliest start to its latest end
+        # ([50, 700] = 650 s; the first-seen start would give 600 s).
+        calls = [
+            _call(1, 2, None),
+            _call(3, 4, None),
+            _call(5, 6, None),
+            _call(100, 700, 7),
+            _call(50, 200, 7),
+        ]
+        assert _compute_idle_gap_ms(calls) == 650_000
+
+    def test_calls_without_turn_index_never_merge_with_a_turn(self) -> None:
+        # A call without a turn_index at position 0 must not join turn 0;
+        # merging them would give one [1, 700] interval (699 s).
+        calls = [
+            _call(100, 700, None),
+            _call(1, 2, 0),
+            _call(3, 4, 1),
+            _call(5, 6, 2),
+        ]
+        assert _compute_idle_gap_ms(calls) == 600_000
+
+    def test_mixed_naive_and_aware_timestamps(self) -> None:
+        # A naive timestamp is read as UTC rather than raising TypeError
+        # when compared with aware ones across calls.
+        naive = _call(100, 700, 3)
+        naive = naive.model_copy(
+            update={
+                "timestamp": naive.timestamp.replace(tzinfo=None) if naive.timestamp else None,
+                "result_timestamp": (
+                    naive.result_timestamp.replace(tzinfo=None)
+                    if naive.result_timestamp
+                    else None
+                ),
+            },
+        )
+        calls = [
+            _call(1, 2, 0),
+            _call(3, 4, 1),
+            _call(5, 6, 2),
+            naive,
+            _call(400, 1000, 3),
+        ]
+        assert _compute_idle_gap_ms(calls) == 900_000
+
     def test_disjoint_idle_turns_still_sum(self, write_jsonl: WriteJSONL) -> None:
         # No overlap: the union equals the sum of both idle waits.
         trace = parse_subagent_trace(
@@ -1010,7 +1072,7 @@ class TestIdleGapParallelSiblings:
         assert trace.idle_gap_ms == 210_000
 
     def test_partially_overlapping_waits_across_calls_counted_once(self) -> None:
-        # Two untimed-turn calls whose waits partially overlap (e.g. a
+        # Two calls without a turn_index whose waits partially overlap (e.g. a
         # background call): [100, 700] and [400, 1000] cover 900 s, not 1200 s.
         calls = [
             _call(1, 2, None),
@@ -1068,7 +1130,7 @@ class TestIdleGapMedianSample:
         assert trace.idle_gap_ms is None
         assert trace.active_duration_ms is None
 
-    def test_untimed_turn_calls_are_each_a_sample(self) -> None:
+    def test_calls_without_turn_index_are_each_a_sample(self) -> None:
         # Programmatic calls without turn_index keep per-call sampling.
         calls = [_call(1, 2, None), _call(3, 4, None)]
         assert _compute_idle_gap_ms(calls) == 0

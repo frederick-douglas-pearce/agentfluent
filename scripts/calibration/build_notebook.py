@@ -1168,7 +1168,7 @@ across 26 trace-attached pm invocations, hitting the ideal target.
 - **As more contributor data accumulates, re-run this section.**
   Validate the floor stays defensible at 60 s; check whether the K
   arm starts binding for traces with median tool latency above 12 s.
-- **Phase 2 implementation lives in `traces/parser.py:49-50`**: the
+- **Phase 2 implementation lives in `traces/parser.py`**: the
   `IDLE_GAP_K` and `IDLE_GAP_FLOOR_MS` constants point back to this
   section for their calibration rationale.
 """))

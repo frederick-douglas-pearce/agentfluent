@@ -28,8 +28,10 @@ A nonzero value means the two accepted ambiguities documented on
 
 Corpora default to the four used in #694; pass ``--corpus NAME=DIR`` (DIR
 relative to ``~/.claude/projects``, or absolute) to choose others.
-``trace_active_clamped_zero`` counts linked traces whose active duration
-clamps to 0 and ``trace_idle_gap_none`` those with a span but no computable
+``trace_active_clamped_zero`` counts linked traces whose idle gap exceeds
+their span (the clamp in ``active_duration_ms`` fired), ``trace_active_zero``
+those whose active duration is 0 for any reason (clamped, or idle exactly
+equal to the span), and ``trace_idle_gap_none`` those with a span but no computable
 idle gap (#697); ``--json`` also carries ``idle_gap_ms_by_trace`` so a
 before/after pair can be diffed for traces whose idle gap became ``None``.
 
@@ -197,7 +199,12 @@ def check_corpus(corpus_dir: Path) -> dict[str, Any]:
         "trace_active_clamped_zero": sum(
             1
             for t in traces
-            if t.duration_ms and t.active_duration_ms == 0
+            if t.duration_ms is not None
+            and t.idle_gap_ms is not None
+            and t.idle_gap_ms > t.duration_ms
+        ),
+        "trace_active_zero": sum(
+            1 for t in traces if t.duration_ms and t.active_duration_ms == 0
         ),
         "trace_idle_gap_none": sum(
             1 for t in traces if t.duration_ms is not None and t.idle_gap_ms is None

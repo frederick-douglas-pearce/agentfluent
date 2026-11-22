@@ -246,7 +246,8 @@ class AgentInvocation(BaseModel):
     @property
     def active_duration_per_tool_use(self) -> float | None:
         """Average active duration (ms) per tool call. Falls back to
-        ``duration_per_tool_use`` when no trace is linked."""
+        ``duration_per_tool_use`` when no trace is linked or its idle gap
+        could not be computed."""
         active = self.active_duration_ms
         if active is not None and self.tool_uses and self.tool_uses > 0:
             return active / self.tool_uses
