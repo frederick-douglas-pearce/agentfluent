@@ -320,9 +320,12 @@ class TestEstimateBurstCost:
 class TestEstimateBurstCostPricingPath:
     """AC1: both sides price through ``analytics.tokens._cost_of`` (#707).
 
-    ``_cost_of`` is where per-request levers land (context tiers #682,
-    multipliers and surcharges #537-#539), so the guard pins that the
-    offload estimate reaches it — not merely that it calls ``price_usage``.
+    ``_cost_of`` is the single ``Usage`` -> rate path, so a change there
+    reaches the offload estimate; the guard pins that the estimate reaches
+    it, not merely that it calls ``price_usage``. Per-request levers
+    (context tiers #682, multipliers and surcharges #537-#539) will reach
+    it too, but a burst's ``usage`` is summed over its messages, so they
+    are not applied correctly until per-message usage is passed in (#682).
     """
 
     def test_both_sides_price_through_cost_of(

@@ -424,6 +424,16 @@ class TestGenerateOffloadCandidate:
             assert candidate.estimated_parent_cost_usd == 0.0
             assert candidate.estimated_savings_usd == 0.0
 
+    def test_empty_cluster_is_not_priced(self) -> None:
+        # No burst, no estimate: the zero figures are "no estimate", not "free".
+        candidate = generate_offload_candidate(
+            BurstCluster(members=[], top_terms=["x"], cohesion_score=0.5),
+            parent_model="claude-opus-4-7",
+        )
+        assert candidate.cost_priced is False
+        assert candidate.estimated_parent_cost_usd == 0.0
+        assert candidate.estimated_savings_usd == 0.0
+
     def test_cluster_totals_sum_every_burst_estimate(self) -> None:
         # Totals are the sum of per-burst estimates, each priced at the
         # cluster's parent model and its alternative (#707).

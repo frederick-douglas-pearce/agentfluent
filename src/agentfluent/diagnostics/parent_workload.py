@@ -706,11 +706,13 @@ def generate_offload_candidate(
     parent_tokens = 0
     parent_cost_total = 0.0
     savings_total = 0.0
-    # Every burst is priced at the cluster's parent model, so pricing is
-    # all-or-nothing across the cluster: one unpriced estimate means the
-    # parent or alternative model has no price, and the candidate ships
-    # with zero figures and ``cost_priced=False``.
-    cost_priced = True
+    # ``cost_priced`` says whether the figures were priced. Every burst is
+    # priced at the cluster's parent model, so pricing is all-or-nothing
+    # across the cluster: one unpriced estimate means the parent or
+    # alternative model has no price, and the candidate ships with zero
+    # figures and ``cost_priced=False``. An empty cluster has no estimate
+    # at all, so its zero figures are not priced either.
+    cost_priced = bool(cluster.members)
     for b in cluster.members:
         parent_tokens += b.usage.total_tokens
         estimate = estimate_burst_cost(

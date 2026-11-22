@@ -137,7 +137,9 @@ def _cost_of(
     fold by construction. **No test guards linearity**: a non-linear change here moves
     the session fold and per-agent attribution identically. Per-request levers --
     context tiers (#682), multipliers or surcharges (#537-#539) -- need per-request
-    usage, which a trace's aggregated ``usage`` does not carry; #682 owns that guard.
+    usage, which neither a trace's aggregated ``usage`` nor a parent-workload offload
+    burst's summed ``usage`` (``diagnostics.parent_workload.ToolBurst``) carries; #682
+    owns that guard.
     """
     pricing = get_pricing(breakdown.model, timestamp)
     if pricing is None:
