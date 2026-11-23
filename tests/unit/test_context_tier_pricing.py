@@ -187,6 +187,23 @@ class TestModelPricingTiers:
         assert pricing_.for_prompt(100_000) is pricing_
         assert pricing_.for_prompt(100_001).input == 0.5
 
+    def test_for_prompt_selects_the_highest_applicable_tier(self) -> None:
+        """With several tiers, a prompt over every threshold prices at the LAST one, and a
+        prompt between two thresholds at the lower one -- genai-prices' rule (the highest tier
+        whose start is below the prompt), not the first tier that applies."""
+        first = ModelPricing(2, 2, 2, 2)
+        second = ModelPricing(4, 4, 4, 4)
+        pricing_ = ModelPricing(
+            1, 1, 1, 1,
+            context_tiers=(
+                ContextTier(threshold=1_000, pricing=first),
+                ContextTier(threshold=5_000, pricing=second),
+            ),
+        )
+        assert pricing_.for_prompt(1_000).input == 1
+        assert pricing_.for_prompt(3_000).input == 2
+        assert pricing_.for_prompt(5_001).input == 4
+
     def test_tier_1h_cache_write_is_twice_tier_input(self) -> None:
         pricing_ = get_pricing(HAIKU_55)
         assert pricing_ is not None
@@ -513,6 +530,21 @@ class TestDiagnosticsPerRequest:
             for u in messages
         )
         assert savings == pytest.approx(parent_cost - alt)
+
+    def test_offload_burst_without_usages_prices_its_sum_at_base(self) -> None:
+        """A burst built without per-message usages prices its sum as ONE request at the base
+        tier (prompt 0) -- never tiered on the sum, which would over-price it 5x here."""
+        aggregate = _request(150_000)
+        burst = ToolBurst(
+            preceding_user_text="", assistant_text="", tool_use_blocks=[],
+            usage=aggregate, model=HAIKU_55,
+        )
+        estimate = estimate_burst_cost(burst, parent_model=HAIKU_55, alt_model=FLAT)
+        assert estimate is not None
+        haiku = get_pricing(HAIKU_55)
+        assert haiku is not None
+        assert estimate[0] == pytest.approx(_priced_at(haiku, aggregate))
+        assert _cost(aggregate, HAIKU_55) == pytest.approx(5 * estimate[0])
 
     def test_offload_alt_side_tiers_on_full_prompt_not_repriced_input(self) -> None:
         # Fresh input + cache reads is 90K (under 100K), but the original prompt carries
