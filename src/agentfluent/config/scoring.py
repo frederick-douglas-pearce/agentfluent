@@ -28,11 +28,6 @@ ACTION_VERBS: frozenset[str] = frozenset({
     "scan", "search", "test", "translate", "validate", "verify", "write",
 })
 
-# Expensive models that may be overkill for simple tasks
-EXPENSIVE_MODELS: frozenset[str] = frozenset({
-    "claude-opus-4-6", "claude-opus-4-5-20251101",
-})
-
 # Patterns suggesting structured prompt sections
 SECTION_PATTERN = re.compile(r"^#{1,3}\s+", re.MULTILINE)
 
@@ -48,6 +43,23 @@ SUCCESS_KEYWORDS: frozenset[str] = frozenset({
     "produce", "deliver", "result", "criteria",
 })
 
+
+def _is_expensive_model(model: str) -> bool:
+    """Whether ``model`` is in the ``complex`` tier, i.e. an expensive model (#680).
+
+    Derived from ``diagnostics._complexity.classify_model_tier`` -- family-prefix
+    matched after alias resolution, so a new Opus/Fable generation or a bare
+    ``opus`` needs no edit here. This replaced a hand-maintained id set that only
+    knew two retired Opus ids. The question asked here is about *price*, carried
+    by a complexity tier; if #678 splits those axes, this caller moves to the
+    price axis.
+
+    Imported inside the function so ``import agentfluent.config`` does not load
+    the diagnostics package (which itself imports ``agentfluent.config.*``).
+    """
+    from agentfluent.diagnostics._complexity import classify_model_tier
+
+    return classify_model_tier(model) == "complex"
 
 
 def _score_description(config: AgentConfig) -> tuple[int, list[ConfigRecommendation]]:
@@ -186,7 +198,7 @@ def _score_model_selection(config: AgentConfig) -> tuple[int, list[ConfigRecomme
     tools_set = set(config.tools)
     all_read_only = tools_set and tools_set.issubset(READ_ONLY_TOOLS)
 
-    if config.model in EXPENSIVE_MODELS and all_read_only:
+    if _is_expensive_model(config.model) and all_read_only:
         score += 5
         recs.append(ConfigRecommendation(
             dimension="model_selection",

@@ -293,8 +293,8 @@ def resolve_model_alias(model: str) -> str:
     ``tests/unit/test_model_routing.py::TestHelpers::test_every_alias_classifies_like_its_target``).
     Unknown strings pass through unchanged. Shared by pricing (``get_pricing``) and tier
     classification (``diagnostics._complexity.classify_model_tier``, #679), so those two
-    cannot disagree. Not every model-string consumer reads through it yet:
-    ``config.scoring.EXPENSIVE_MODELS`` is an exact-id set (#680) and
+    cannot disagree; ``config.scoring._is_expensive_model`` reads through the tier
+    classifier (#680). Not every model-string consumer reads through it yet:
     ``diagnostics.parent_workload.pick_alternative_model`` is a substring ladder (#683).
     """
     return _ALIASES.get(model, model)
