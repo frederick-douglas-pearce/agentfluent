@@ -18,7 +18,11 @@ from typing import Any
 from pydantic import ValidationError
 
 from agentfluent.analytics.cost_model import CostModelStamp
-from agentfluent.analytics.tokens import Origin
+from agentfluent.analytics.tokens import (
+    Origin,
+    row_unpriced_tokens,
+    sum_unpriced_tokens,
+)
 from agentfluent.config.models import SEVERITY_RANK, Severity
 from agentfluent.core.filtering import WindowMetadata
 from agentfluent.diagnostics.models import Axis, SignalType
@@ -372,6 +376,8 @@ def _diff_by_model(
 ) -> list[ModelTokenDelta]:
     baseline_map = _normalize_by_model(baseline)
     current_map = _normalize_by_model(current)
+    baseline_field_bearing = _carries_unpriced(baseline)
+    current_field_bearing = _carries_unpriced(current)
     keys = sorted(set(baseline_map.keys()) | set(current_map.keys()))
     deltas: list[ModelTokenDelta] = []
     for model, origin in keys:
@@ -391,9 +397,40 @@ def _diff_by_model(
                 baseline_cost=b_cost,
                 current_cost=c_cost,
                 cost_delta=c_cost - b_cost,
+                baseline_unpriced_tokens=_side_unpriced(
+                    baseline_map.get((model, origin)), baseline_field_bearing,
+                ),
+                current_unpriced_tokens=_side_unpriced(
+                    current_map.get((model, origin)), current_field_bearing,
+                ),
             ),
         )
     return deltas
+
+
+def _carries_unpriced(raw: dict[str, Any] | list[Any]) -> bool:
+    """Whether a side's ``by_model`` carries ``unpriced_tokens`` (#723).
+
+    A v1 dict-shaped ``by_model`` predates the field. A list carries it when
+    every row has a readable count -- the rule ``report`` uses
+    (:func:`sum_unpriced_tokens`), so the two cannot disagree.
+    """
+    if not isinstance(raw, list):
+        return False
+    rows = [row for row in raw if isinstance(row, dict)]
+    return sum_unpriced_tokens(rows) is not None
+
+
+def _side_unpriced(row: dict[str, Any] | None, field_bearing: bool) -> int | None:
+    """One side's unpriced count for a ``(model, origin)`` key (#723).
+
+    A present row reports its own count (``None`` if missing or malformed);
+    an absent row is a measured ``0`` on a field-bearing side and unknown on a
+    legacy one -- the same contract as ``_side_spend_tokens`` (#693).
+    """
+    if row is None:
+        return 0 if field_bearing else None
+    return row_unpriced_tokens(row)
 
 
 # ---------------------------------------------------------------------------

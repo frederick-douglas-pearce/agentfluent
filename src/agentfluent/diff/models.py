@@ -109,6 +109,41 @@ class ModelTokenDelta(BaseModel):
     baseline_cost: float = 0.0
     current_cost: float = 0.0
     cost_delta: float = 0.0
+    """``current_cost - baseline_cost``. Each cost covers priced tokens only,
+    so this is not a measured change when either side has unpriced tokens
+    (:attr:`cost_delta_measured` is ``False``); it stays numeric for JSON
+    compatibility (D029)."""
+
+    baseline_unpriced_tokens: int | None = None
+    """Baseline tokens for this ``(model, origin)`` whose model had no price
+    (#723). ``None`` means **unknown, never 0**: the baseline envelope predates
+    the field (pre-v0.12.0, or a v1 dict-shaped ``by_model``), or its row
+    carries no readable count. A model absent from a field-bearing side is a
+    measured ``0`` there. No ``unpriced_tokens_delta`` exists by design: a
+    difference of unpriced counts measures nothing."""
+    current_unpriced_tokens: int | None = None
+    """Current-side unpriced tokens; same ``None`` contract as
+    ``baseline_unpriced_tokens``."""
+
+    @property
+    def cost_delta_measured(self) -> bool:
+        """``False`` iff either side has unpriced tokens, so ``cost_delta``
+        subtracts figures that leave some tokens out (#723). An unknown
+        (``None``) side counts as measured, matching how its cost renders.
+        Plain property, not a ``computed_field``: not serialized."""
+        return not _has_unpriced(self.baseline_unpriced_tokens) and not _has_unpriced(
+            self.current_unpriced_tokens,
+        )
+
+
+def _has_unpriced(unpriced_tokens: int | None) -> bool:
+    return unpriced_tokens is not None and unpriced_tokens > 0
+
+
+def _sum_side(values: list[int | None]) -> int | None:
+    if any(value is None for value in values):
+        return None
+    return sum(value for value in values if value is not None)
 
 
 class TokenMetricsDelta(BaseModel):
@@ -137,7 +172,28 @@ class TokenMetricsDelta(BaseModel):
 
     by_model: list[ModelTokenDelta] = Field(default_factory=list)
     """One entry per model that appears in either baseline or current. A
-    model present on only one side has zero on the missing side."""
+    model present on only one side has zero tokens and cost on the missing
+    side; its ``*_unpriced_tokens`` there is ``0`` on a side that carries the
+    field and ``None`` (unknown) on a legacy side."""
+
+    @property
+    def baseline_unpriced_tokens(self) -> int | None:
+        """Baseline unpriced tokens summed over ``by_model`` (#723); ``None``
+        if any row's count is unknown. Derived, not serialized."""
+        return _sum_side([row.baseline_unpriced_tokens for row in self.by_model])
+
+    @property
+    def current_unpriced_tokens(self) -> int | None:
+        """Current-side counterpart of :attr:`baseline_unpriced_tokens`."""
+        return _sum_side([row.current_unpriced_tokens for row in self.by_model])
+
+    @property
+    def total_cost_delta_measured(self) -> bool:
+        """``False`` iff either side's total cost leaves unpriced tokens out,
+        so ``total_cost_delta`` is not a measured change (#723)."""
+        return not _has_unpriced(self.baseline_unpriced_tokens) and not _has_unpriced(
+            self.current_unpriced_tokens,
+        )
 
 
 class AgentTypeDelta(BaseModel):

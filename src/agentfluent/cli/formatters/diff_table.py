@@ -21,6 +21,7 @@ from agentfluent.cli.formatters.helpers import (
     axis_label,
     axis_shift_label,
     format_cost,
+    format_priced_cost,
     format_tokens,
     severity_cell,
     truncate,
@@ -268,9 +269,19 @@ def _render_token_metrics(console: Console, result: DiffResult) -> None:
 
     table.add_row(
         "Total cost",
-        format_cost(tm.baseline_total_cost),
-        format_cost(tm.current_total_cost),
-        _signed_cost(tm.total_cost_delta),
+        format_priced_cost(
+            tm.baseline_total_cost,
+            total_tokens=tm.baseline_total_tokens,
+            unpriced_tokens=tm.baseline_unpriced_tokens,
+        ),
+        format_priced_cost(
+            tm.current_total_cost,
+            total_tokens=tm.current_total_tokens,
+            unpriced_tokens=tm.current_unpriced_tokens,
+        ),
+        _priced_cost_delta_cell(
+            tm.total_cost_delta, measured=tm.total_cost_delta_measured,
+        ),
     )
     table.add_row(
         "Total tokens",
@@ -319,9 +330,17 @@ def _render_by_model(console: Console, rows: list[ModelTokenDelta]) -> None:
         table.add_row(
             row.model,
             row.origin,
-            format_cost(row.baseline_cost),
-            format_cost(row.current_cost),
-            _signed_cost(row.cost_delta),
+            format_priced_cost(
+                row.baseline_cost,
+                total_tokens=row.baseline_total_tokens,
+                unpriced_tokens=row.baseline_unpriced_tokens,
+            ),
+            format_priced_cost(
+                row.current_cost,
+                total_tokens=row.current_total_tokens,
+                unpriced_tokens=row.current_unpriced_tokens,
+            ),
+            _priced_cost_delta_cell(row.cost_delta, measured=row.cost_delta_measured),
             _signed_int(row.total_tokens_delta),
         )
     console.print(table)
@@ -456,6 +475,13 @@ def _spend_delta_cell(value: int | None) -> str:
 
 def _signed_cost(value: float) -> str:
     return _signed(value, format_cost(abs(value)))
+
+
+def _priced_cost_delta_cell(value: float, *, measured: bool) -> str:
+    """Cost Δ that renders "—" when either side leaves unpriced tokens out
+    (#723): subtracting priced-only figures would read a pricing gap as a
+    cost change. Otherwise the signed delta, as before."""
+    return _signed_cost(value) if measured else "—"
 
 
 def _signed_float(

@@ -1867,8 +1867,14 @@ date, so one model id can be priced in one session and unpriced in
 another. A merged row can therefore be partly unpriced. `analyze` and
 `report` show a wholly unpriced cost as `no price` and a partly
 unpriced one as `$X (partial)`, never `$0.00` (#715); an envelope
-written before v0.12.0 has no unpriced count and renders as before. Upgrading
-agentfluent usually adds the missing price.
+written before v0.12.0 has no unpriced count and renders as before.
+`diff` marks its Total cost row and by-model cost cells the same way,
+and shows the Cost Δ as `—` when either side has unpriced tokens,
+since subtracting the priced parts would read a pricing gap as a cost
+change. Its JSON carries `baseline_unpriced_tokens` and
+`current_unpriced_tokens` on each `by_model` row (`null` when that
+side's envelope predates the field) (#723). Upgrading agentfluent
+usually adds the missing price.
 
 **Related:** [`cost_coverage`](#cost_coverage), [`total_cost`](#total_cost)
 

@@ -8,10 +8,10 @@ cost breakdown and parent-vs-subagent origin attribution.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from agentfluent.analytics.pricing import SYNTHETIC_MODELS, compute_cost, get_pricing
 from agentfluent.core.session import SessionMessage, Usage
@@ -29,6 +29,36 @@ NO_PRICE = "no price"
 Distinct from the ``-`` the agent table uses for *unknown*: an unpriced
 figure is known to be missing, and ``$0.00`` would read as free. Lives
 here so both ``cli`` and ``diagnostics`` render the same token."""
+
+
+def row_unpriced_tokens(row: Mapping[str, Any]) -> int | None:
+    """A serialized ``by_model`` row's ``unpriced_tokens``, or ``None`` if unknown.
+
+    ``None`` when the key is missing (a pre-v0.12.0 envelope) or holds anything
+    but a non-negative int -- a hand-edited envelope must read as unknown, not
+    crash ``diff`` (#723).
+    """
+    value = row.get("unpriced_tokens")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def sum_unpriced_tokens(rows: Iterable[Mapping[str, Any]]) -> int | None:
+    """Sum ``unpriced_tokens`` over serialized ``by_model`` rows (#715, #723).
+
+    ``None`` when any row's count is unknown (:func:`row_unpriced_tokens`):
+    whether that row's ``0.0`` cost was unpriced cannot be told, so the sum is
+    unknown too. Shared by ``report`` and ``diff`` so the two cannot disagree
+    about which envelope is legacy.
+    """
+    total = 0
+    for row in rows:
+        count = row_unpriced_tokens(row)
+        if count is None:
+            return None
+        total += count
+    return total
 
 
 @dataclass

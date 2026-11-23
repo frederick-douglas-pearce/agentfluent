@@ -376,6 +376,18 @@ class TestReportSummary:
         assert "$2.00" in line
         assert "(partial)" not in line
 
+    def test_mixed_legacy_rows_render_the_total_as_before(self) -> None:
+        # One row carries the count, one predates it: the total's unpriced
+        # share is unknown, so no marker is claimed either way (#723, D2).
+        out = render_summary(_report_data([
+            _row(_UNPRICED, cost=0.0, unpriced=1000),
+            _row("claude-opus-4-7", cost=2.0, unpriced=None),
+        ]))
+        line = _line(out, "Total cost (API rate)")
+        assert "$2.00" in line
+        assert "(partial)" not in line
+        assert NO_PRICE not in line
+
 
 # ---- offload table + --verbose YAML -----------------------------------------
 
