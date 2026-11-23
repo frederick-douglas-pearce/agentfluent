@@ -10,6 +10,7 @@ from agentfluent.analytics._genai_source import classify_upstream_match
 from agentfluent.analytics.pricing import (
     LEGACY_MODEL_PREFIXES,
     SYNTHETIC_MODELS,
+    ContextTier,
     ModelPricing,
     compute_cost,
     get_known_models,
@@ -818,13 +819,18 @@ class TestForwardCompatGuard:
     _EXPECTED_DATED_TIERS = frozenset({"claude-opus-4-6", "claude-sonnet-4-6"})
 
     @staticmethod
-    def _tiers(model: str, when: datetime | None) -> tuple[tuple[int, float, float], ...]:
+    def _tiers(model: str, when: datetime | None) -> tuple[ContextTier, ...]:
+        # The whole tier (threshold + every rate, cache writes and reads included):
+        # ``ContextTier`` / ``ModelPricing`` are frozen dataclasses, so they compare by value.
         rates = get_pricing(model, when)
         assert rates is not None
-        return tuple(
-            (tier.threshold, tier.pricing.input, tier.pricing.output)
-            for tier in rates.context_tiers
-        )
+        return rates.context_tiers
+
+    def test_tier_comparison_sees_cache_rates(self) -> None:
+        """F3: a dated change to a tier's cache rate alone must change what is compared."""
+        tier = ModelPricing(input=10, output=37.5, cache_creation_5m=12.5, cache_read=1.0)
+        moved = ModelPricing(input=10, output=37.5, cache_creation_5m=12.5, cache_read=0.5)
+        assert ContextTier(200_000, tier) != ContextTier(200_000, moved)
 
     @pytest.mark.parametrize("model", list(_GOLDEN_RATES))
     def test_tier_table_dates_only_where_expected(self, model: str) -> None:

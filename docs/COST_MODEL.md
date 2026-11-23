@@ -63,6 +63,8 @@ Two consequences for reading the numbers:
 - A `by_model` row's cost is the sum of its requests' costs, so it **cannot be recomputed as row tokens × one rate** when any of its requests crossed a threshold.
 - **Historical cost moves up** (D067): sessions with long requests on the models above now report what they were billed. `COST_METHOD_VERSION` is `2`, so `agentfluent diff` attributes the change to the cost method rather than to agent behavior.
 
+**Known limitation — tiers are chosen at the session's date (#738).** Rates, base and tier, come from the session's first-message date, so every request in a session tiers against that date's table. A session that starts before 2026-03-13 and runs past it reports its later opus-4-6 / sonnet-4-6 requests over 200K at the tier rate, although they were billed flat. No session in the measured corpus does this (2026-11-22, 2,370 sessions); per-request dating is tracked in #738.
+
 The model-switch savings and offload estimates price the same way, at both models. The offload estimate's delegated side tiers each request on the **original** request's full prompt size, not on its re-priced fresh input. Delegating doesn't shrink the context a request carries, and this reading gives the smaller claimed saving. Those estimates price at the latest rate rather than the session's date (#735), so a pre-2026-03-13 opus-4-6 request over 200K is tiered in `total_cost` but not in the savings figures.
 
 ## Date-aware base rates (session priced at the rate in effect when it ran)

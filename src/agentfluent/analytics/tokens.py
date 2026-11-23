@@ -82,10 +82,10 @@ class TokenMetrics:
 
     api_call_count: int = 0
     """Number of deduplicated assistant messages (API calls). Counts
-    parent-session messages only — subagent traces' per-call usage is
-    not reliably attributable per call, so we sum at the trace level
-    instead (see ``SubagentTrace.usage``; the spend a trace contributes, with
-    turns counted elsewhere in the session removed, is ``trace_spend_usage``)."""
+    parent-session messages only — subagent turns are counted at the trace
+    level (``SubagentTrace.turn_usages``), not here. Their spend, with turns
+    counted elsewhere in the session removed, is ``trace_spend_usage`` for tokens
+    and ``trace_spend_requests`` for dollars, priced per turn (#682)."""
 
     by_model: list[ModelTokenBreakdown] = field(default_factory=list)
     """Per-(model, origin) token breakdown. Schema v2: list, not dict.
@@ -137,10 +137,11 @@ class ApiRequest:
     """One API request to price: its usage and the prompt size that selects its tier (#682).
 
     Build it with :meth:`of` from a single request's ``Usage``. The explicit ``prompt_tokens``
-    exists for the two callers that must not derive it from ``usage``: the parent-workload
-    offload counterfactual (its alternative request tiers on the *original* prompt), and a
-    trace with no per-turn usage, whose aggregate is priced at the base tier (prompt ``0``)
-    rather than tiered on a sum.
+    exists for the three callers that must not derive it from ``usage``: the parent-workload
+    offload counterfactual (its alternative request tiers on the *original* prompt), and two
+    aggregate fallbacks priced at the base tier (prompt ``0``) rather than tiered on a sum --
+    a trace with no per-turn usage (``trace_spend_requests``) and an offload burst built
+    without per-message usages (``diagnostics.parent_workload.estimate_burst_cost``).
     """
 
     usage: Usage
@@ -171,8 +172,13 @@ def _cost_of(
     prompt-length threshold (e.g. ``claude-haiku-5-5`` above 100K) prices at the tier rate on
     every token. Pricing is therefore **not linear in summed tokens**: two 60K-prompt requests
     price at the base rate while their 120K sum would tier. Never collapse requests into one
-    ``Usage`` before calling this -- the non-linearity guard in
-    ``tests/unit/test_context_tier_pricing.py`` fails if a caller does.
+    ``Usage`` before calling this. The current callers are guarded against doing so by
+    ``TestNonLinearityGuard``, ``TestReconciliationWithTiers`` and
+    ``TestDiagnosticsPerRequest`` in ``tests/unit/test_context_tier_pricing.py``; a new
+    dollar figure needs its own per-request test.
+
+    **Rates are resolved once, at ``timestamp``** -- the session's price date -- so every
+    request in a session tiers against that date's table, not its own date (#738).
     """
     pricing = get_pricing(model, timestamp)
     if pricing is None:

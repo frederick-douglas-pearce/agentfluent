@@ -11,17 +11,20 @@ a tier from a sum of requests.
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 import re
 import shutil
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
 import genai_prices
 import pytest
-from genai_prices.types import Tier, TieredPrices
+from genai_prices.types import Tier, TieredPrices, calc_unit_price
 
+from agentfluent.agents.models import AgentInvocation
 from agentfluent.analytics import pricing
 from agentfluent.analytics._genai_source import _rate_for_prompt, _resolve_rates, _tier_table
 from agentfluent.analytics.pipeline import analyze_session
@@ -43,8 +46,17 @@ from agentfluent.analytics.tokens import (
 )
 from agentfluent.core.parser import parse_session
 from agentfluent.core.session import Usage
-from agentfluent.diagnostics.model_routing import estimate_usage_savings
-from agentfluent.diagnostics.parent_workload import ToolBurst, estimate_burst_cost
+from agentfluent.diagnostics.model_routing import (
+    _main_session_spend,
+    estimate_model_savings,
+    estimate_usage_savings,
+)
+from agentfluent.diagnostics.parent_workload import (
+    ToolBurst,
+    estimate_burst_cost,
+    extract_bursts,
+)
+from agentfluent.diagnostics.signals import _trace_spend_requests
 from agentfluent.traces.models import SubagentTrace, TraceTurnUsage
 
 HAIKU_55 = "claude-haiku-5-5"
@@ -122,7 +134,8 @@ class TestAdapterTierTable:
 
     def test_breakpoint_table_matches_upstream_rule_for_any_shape(self) -> None:
         """Keys tiered at different starts, with several tiers, or flat: the table built from
-        the union of starts agrees with genai-prices' per-key rule at every prompt size."""
+        the union of starts agrees with genai-prices' own ``calc_unit_price`` at every prompt
+        size -- an upstream oracle, not this module's ``_rate_for_prompt``."""
         values: dict[str, Decimal | TieredPrices | None] = {
             "input_mtok": TieredPrices(
                 base=Decimal("1"),
@@ -146,7 +159,12 @@ class TestAdapterTierTable:
             for tier in table:
                 if prompt > tier.start:
                     selected = tier.rates
-            expected = {key: _rate_for_prompt(value, prompt) for key, value in values.items()}
+            # calc_unit_price(price, count, total_input_tokens, per): 1M tokens at
+            # per=1M gives the rate itself.
+            expected = {
+                key: float(calc_unit_price(value, 1_000_000, prompt, 1_000_000))
+                for key, value in values.items()
+            }
             got = (
                 {
                     "input_mtok": selected.input,
@@ -158,6 +176,8 @@ class TestAdapterTierTable:
                 else {key: _rate_for_prompt(value, 0) for key, value in values.items()}
             )
             assert got == expected, prompt
+        # Hand-checked at the highest band: both input tiers apply, the higher one wins.
+        assert (table[-1].rates.input, table[-1].rates.output) == (4.0, 20.0)
 
 
 class TestModelPricingTiers:
@@ -337,7 +357,9 @@ class TestNonLinearityGuard:
 
 class TestReconciliationWithTiers:
     """AC4: Σ per-agent cost + ``trace_coverage`` nested + session_spawned cost ==
-    subagent-origin ``by_model`` cost, with every subagent turn over the haiku-5-5 tier."""
+    subagent-origin ``by_model`` cost, with haiku-5-5 subagent turns that are each UNDER the
+    100K threshold while every trace's sum is over it -- so any term priced on a sum tiers
+    and breaks the identity, and the per-request fold equals the base-rate fold."""
 
     def _tiered_copy(self, tmp_path: Path) -> Path:
         src = FIXTURES / "nested_session"
@@ -347,12 +369,12 @@ class TestReconciliationWithTiers:
             text = trace_file.read_text()
             text = text.replace("claude-haiku-4-5-20251001", HAIKU_55)
             text = re.sub(
-                r'"cache_read_input_tokens":\s*\d+', '"cache_read_input_tokens":150000', text,
+                r'"cache_read_input_tokens":\s*\d+', '"cache_read_input_tokens":90000', text,
             )
             trace_file.write_text(text)
         return dst / "nested-session-1.jsonl"
 
-    def test_invariant_holds_and_every_turn_is_tiered(
+    def test_invariant_holds_and_no_turn_is_tiered(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         path = self._tiered_copy(tmp_path)
@@ -370,14 +392,80 @@ class TestReconciliationWithTiers:
         assert fold(result.token_metrics) > 0
         assert agents + beyond == pytest.approx(fold(result.token_metrics))
 
-        # haiku-5-5's tier is exactly 5x base on every key, so a fold that tiered every turn
-        # is 5x the same fold priced at base.
+        # Precondition: each turn is under 100K and every trace's sum is over it.
+        traces = [
+            inv.trace for inv in result.invocations if inv.trace is not None
+        ]
+        assert traces
+        for trace in traces:
+            assert all(prompt_tokens(t.usage) <= 100_000 for t in trace.turn_usages)
+            assert prompt_tokens(trace.usage) > 100_000
+        # Per-request pricing tiers nothing here, so it equals the base-rate fold.
         monkeypatch.setattr(ModelPricing, "for_prompt", lambda self, _n: self)
         base_fold = fold(analyze_session(path).token_metrics)
-        assert fold(result.token_metrics) == pytest.approx(5 * base_fold)
+        assert fold(result.token_metrics) == pytest.approx(base_fold)
+
+
+def _assistant_line(n: int, cache_read: int) -> str:
+    return json.dumps({
+        "type": "assistant",
+        "message": {
+            "id": f"msg_b{n}",
+            "model": HAIKU_55,
+            "role": "assistant",
+            "content": [{
+                "type": "tool_use", "id": f"toolu_{n}", "name": "Read",
+                "input": {"file_path": f"/x/{n}.py"},
+            }],
+            "usage": {
+                "input_tokens": 1000, "output_tokens": 500,
+                "cache_creation_input_tokens": 0, "cache_read_input_tokens": cache_read,
+            },
+        },
+        "timestamp": f"2026-11-01T10:00:{10 + n:02d}.000Z",
+    })
+
+
+def _tool_result_line(n: int) -> str:
+    return json.dumps({
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": f"toolu_{n}", "content": "ok"}],
+        },
+        "timestamp": f"2026-11-01T10:00:{10 + n:02d}.500Z",
+    })
 
 
 class TestDiagnosticsPerRequest:
+    def test_offload_parent_side_prices_each_finalized_message(self, tmp_path: Path) -> None:
+        """F7/F8: a burst built by the real segmenter (``extract_bursts`` →
+        ``_OpenBurst.finalize``) keeps its per-message usages, and a tiered parent model
+        prices them one request at a time."""
+        session = tmp_path / "burst.jsonl"
+        session.write_text(
+            "\n".join(
+                [
+                    '{"type": "user", "message": {"role": "user", "content": "Read the files"}, '
+                    '"timestamp": "2026-11-01T10:00:00.000Z"}',
+                    _assistant_line(1, 119_000),  # 120K prompt: tiered
+                    _tool_result_line(1),
+                    _assistant_line(2, 59_000),  # 60K prompt: base
+                    _tool_result_line(2),
+                ]
+            )
+            + "\n"
+        )
+        [burst] = extract_bursts(parse_session(session))
+        assert [prompt_tokens(u) for u in burst.usages] == [120_000, 60_000]
+        estimate = estimate_burst_cost(burst, parent_model=HAIKU_55, alt_model=FLAT)
+        assert estimate is not None
+        # Hand-derived: 120K message at the 5x tier (500 + 1,250 + 5,950) / 1e6 = 0.0077,
+        # plus the 60K message at base (100 + 250 + 590) / 1e6 = 0.00094.
+        assert estimate[0] == pytest.approx(0.0077 + 0.00094)
+        # The summed burst (180K) would tier both messages: 0.0124.
+        assert _cost(burst.usage, HAIKU_55) == pytest.approx(0.0124)
+
     def test_offload_prices_each_message_and_alt_tiers_on_the_original_prompt(self) -> None:
         messages = [_request(120_000, cache_share=0.5), _request(60_000, cache_share=0.5)]
         burst = ToolBurst(
@@ -421,6 +509,41 @@ class TestDiagnosticsPerRequest:
         alt = _priced_at(haiku.for_prompt(110_000), alt_usage)
         assert alt == pytest.approx(5 * _priced_at(haiku, alt_usage))
         assert estimate[1] == pytest.approx(estimate[0] - alt)
+
+    def test_savings_never_tier_on_a_sum_of_turns(self) -> None:
+        """F6: two 60K-prompt turns in ONE observation price at the haiku base rate on the
+        alternative side, though their 120K sum would tier -- through the public estimator,
+        the trace path (``invocation_spend``), the duration-outlier signal path and the SDK
+        main-session path."""
+        turns = [_request(60_000), _request(60_000)]
+        haiku = get_pricing(HAIKU_55)
+        assert haiku is not None
+        alt_base = sum(_priced_at(haiku, t) for t in turns)
+        current = sum(_cost(t, FLAT) for t in turns)
+
+        direct = estimate_usage_savings([([ApiRequest.of(t) for t in turns], FLAT)], HAIKU_55)
+        assert direct is not None
+        assert direct.savings_usd == pytest.approx(current - alt_base)
+
+        trace = SubagentTrace(
+            agent_id="a", delegation_prompt="", model=FLAT, usage=sum(turns, Usage()),
+            turn_usages=[TraceTurnUsage(message_id=f"m{i}", usage=u) for i, u in enumerate(turns)],
+        )
+        inv = AgentInvocation(agent_type="pm", description="d", prompt="p", tool_use_id="t0")
+        inv.trace = trace
+        via_trace = estimate_model_savings([inv], HAIKU_55)
+        assert via_trace is not None
+        assert via_trace.savings_usd == pytest.approx(current - alt_base)
+
+        signal_requests = _trace_spend_requests(inv)
+        assert signal_requests is not None
+        assert [r.prompt_tokens for r in signal_requests] == [60_000, 60_000]
+
+        messages = parse_session(FIXTURES / "session_context_tier.jsonl")
+        main_spend = _main_session_spend(SimpleNamespace(messages=messages))  # type: ignore[arg-type]
+        assert [[r.prompt_tokens for r in reqs] for reqs, _ in main_spend] == [
+            [120_000], [60_000],
+        ]
 
     def test_model_switch_savings_tier_the_alternative_per_turn(self) -> None:
         turn = _request(150_000)

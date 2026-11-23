@@ -34,10 +34,13 @@ fork-duplicated message ids, so changes to those levers move no pinned cost.
 
 Version history:
 
-- ``1`` -- the v0.12.0 cost method: per-agent spend priced from subagent traces (#646), fork-
-  replayed turns counted once (#701), session totals fold every trace the session owns (#648),
-  1h cache writes derived as 2x input (#534). Envelopes from earlier releases carry no stamp.
-- ``2`` -- prompt-length (context) tiers priced per request (#682, D067): every dollar figure
+- ``1`` -- pre-release v0.12.0 development builds on ``main`` only (never in a tagged release;
+  the dogfood runner wrote envelopes stamped ``1``): per-agent spend priced from subagent traces
+  (#646), fork-replayed turns counted once (#701), session totals fold every trace the session
+  owns (#648), 1h cache writes derived as 2x input (#534). Envelopes from earlier releases carry
+  no stamp.
+- ``2`` -- the first released stamp (v0.12.0). Adds prompt-length (context) tiers priced per
+  request (#682, D067): every dollar figure
   prices one API request at a time, and a request whose prompt (``input + cache_creation +
   cache_read``) exceeds its model's threshold prices at the tier rate. Moves cost upward for
   ``claude-haiku-5-5`` requests over 100K, ``claude-sonnet-4-5-20250929`` requests over 200K,

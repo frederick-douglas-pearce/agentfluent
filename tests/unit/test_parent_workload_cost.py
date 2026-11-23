@@ -137,8 +137,8 @@ def _old_formula(
     ``compute_cost`` on the parent's observed usage, and on the alternative
     side the cache-dropping counterfactual (cache reads as fresh input, cache
     writes dropped). #707 moved the pricing onto ``price_usage`` (now
-    ``price_requests``); the figures must not move (AC2), whatever rates the
-    genai-prices pin carries.
+    ``price_requests``); the figures must not move (AC2) while these models are
+    flat-priced (no context tier at the latest date).
     """
     parent_pricing = get_pricing(parent_model)
     alt_pricing = get_pricing(alt_model)

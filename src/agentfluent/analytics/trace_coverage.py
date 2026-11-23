@@ -4,9 +4,10 @@ Built from ``traces.coverage.SessionTraces`` after the session dedup has run.
 Every number is per cohort, so attributed (``linked``) and unattributed
 (``nested``, ``session_spawned``) spend are never blended into one figure.
 
-``tokens`` and ``cost`` read ``trace_spend_usage`` -- the deduplicated usage the
-session fold sums -- so for the folded cohorts they are exactly what each
-cohort added to ``token_metrics``. That gives the reconciliation #648 AC3
+``tokens`` reads ``trace_spend_usage`` and ``cost`` reads ``price_trace``, which
+prices the same deduplicated turns one request at a time (``trace_spend_requests``,
+#682) -- exactly what the session fold counts and prices -- so for the folded
+cohorts they are what each cohort added to ``token_metrics``. That gives the reconciliation #648 AC3
 tests: Σ per-agent cost + ``nested.cost`` + ``session_spawned.cost`` equals
 the subagent-origin ``by_model`` cost.
 
