@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from agentfluent.agents.models import AgentInvocation
 from agentfluent.analytics.pricing import get_known_models
 from agentfluent.config.models import AgentConfig, Scope, Severity
@@ -551,8 +553,9 @@ class TestHelpers:
         # diagnosis. Neither half of #674 caused that alone: it needed pricing to make
         # Fable priceable AND the ladder to not know the family.
         #
-        # This pins the two ladders together over the whole curated registry, so the
-        # NEXT family added fails here instead of shipping a nonsense recommendation.
+        # This pins the two ladders together over the whole curated registry plus
+        # every alias, so the NEXT family added fails here instead of shipping a
+        # nonsense recommendation.
         # Consolidating them outright is #683 — it needs an explicit "unknown" result
         # from `classify_model_tier` first, since `faster_tier` currently maps an
         # unknown model to "simple" via the moderate default.
@@ -597,9 +600,13 @@ class TestHelpers:
         from agentfluent.analytics.pricing import _ALIASES
 
         prefixes = tuple(p for ps in _TIER_BY_FAMILY.values() for p in ps)
-        # Non-vacuity: at least one alias must be unreachable by prefix alone,
-        # or this test cannot detect a missing resolve step.
-        assert any(not alias.startswith(prefixes) for alias in _ALIASES)
+        # Non-vacuity: at least one alias must be unreachable by prefix alone AND
+        # target a non-default tier, or a missing resolve step (which yields the
+        # `moderate` default) would still agree with its target.
+        assert any(
+            not alias.startswith(prefixes) and classify_model_tier(target) != "moderate"
+            for alias, target in _ALIASES.items()
+        )
         for alias, target in _ALIASES.items():
             # Single hop: resolution is one lookup, so a chained alias would
             # silently resolve to another alias.
@@ -608,6 +615,20 @@ class TestHelpers:
             # which is also the unmatched default -- the #674 trap).
             assert target.startswith(prefixes), f"{alias} -> {target} has no family"
             assert classify_model_tier(alias) == classify_model_tier(target), alias
+
+    def test_classify_model_tier_reads_the_pricing_alias_map(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # #679 AC5: the classifier must resolve through pricing's alias map, not a
+        # copy -- an alias added only to `_ALIASES` must change the tier (and the
+        # price). A hard-coded table in `_complexity.py` would leave it `moderate`.
+        from agentfluent.analytics import pricing
+
+        haiku_id = "claude-haiku-4-5-20251001"
+        monkeypatch.setitem(pricing._ALIASES, "zz-test-alias", haiku_id)
+        assert classify_model_tier("zz-test-alias") == "simple"
+        assert pricing.get_pricing("zz-test-alias") == pricing.get_pricing(haiku_id)
+        assert pricing.get_pricing("zz-test-alias") is not None
 
     def test_classify_model_tier_unknown_family_defaults_moderate(self) -> None:
         assert classify_model_tier("claude-experimental-9000") == "moderate"

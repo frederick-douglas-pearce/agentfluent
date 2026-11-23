@@ -284,13 +284,18 @@ _ALIASES: dict[str, str] = {
     "claude-mythos-5-2[1m]": "claude-mythos-5-2",
 }
 
+
 def resolve_model_alias(model: str) -> str:
     """Resolve a model alias (bare ``opus``, a ``[1m]`` variant, ...) to its canonical id.
 
-    One lookup in ``_ALIASES``, never recursive -- an alias may not target another alias.
-    Unknown strings pass through unchanged. The one read path for "what does this model
-    string mean", shared by pricing (``get_pricing``) and tier classification
-    (``diagnostics._complexity.classify_model_tier``, #679) so the two cannot disagree.
+    One lookup in ``_ALIASES``, never recursive -- an alias may not target another alias
+    (pinned by the ``target not in _ALIASES`` assert in
+    ``tests/unit/test_model_routing.py::test_every_alias_classifies_like_its_target``).
+    Unknown strings pass through unchanged. Shared by pricing (``get_pricing``) and tier
+    classification (``diagnostics._complexity.classify_model_tier``, #679), so those two
+    cannot disagree. Not every model-string consumer reads through it yet:
+    ``config.scoring.EXPENSIVE_MODELS`` is an exact-id set (#680) and
+    ``diagnostics.parent_workload.pick_alternative_model`` is a substring ladder (#683).
     """
     return _ALIASES.get(model, model)
 
