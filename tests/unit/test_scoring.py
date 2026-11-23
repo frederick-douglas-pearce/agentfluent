@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from agentfluent.config import scoring
 from agentfluent.config.models import AgentConfig, Scope, Severity
 from agentfluent.config.scanner import parse_agent_file
 from agentfluent.config.scoring import score_agent
@@ -150,6 +151,7 @@ class TestModelSelectionScoring:
             "claude-opus-5-5",
             "claude-opus-4-5-20251101",
             "claude-fable-5-2",
+            "claude-mythos-5-2",
             "opus",
         ],
     )
@@ -159,6 +161,7 @@ class TestModelSelectionScoring:
         assert score.dimension_scores["model_selection"] == 15
         recs = [r for r in score.recommendations if r.dimension == "model_selection"]
         assert len(recs) == 1
+        assert recs[0].severity is Severity.INFO
         assert recs[0].current_value == model
 
     @pytest.mark.parametrize(
@@ -194,7 +197,8 @@ class TestModelSelectionScoring:
 
     def test_gate_reads_the_tier_map(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Mechanism pin (#680 AC4): a family added to the `complex` tier is flagged
-        # with no edit in config/scoring.py. Fails against any hard-coded list there.
+        # with no edit in config/scoring.py. Fails against a hard-coded list there;
+        # `test_gate_reads_only_the_tier_map` covers a list kept beside the tier.
         agent = _make_agent(model="claude-testfam-1", tools=["Read"])
         assert score_agent(agent).dimension_scores["model_selection"] == 25
 
@@ -205,17 +209,30 @@ class TestModelSelectionScoring:
         score = score_agent(agent)
         assert score.dimension_scores["model_selection"] == 15
 
+    def test_gate_reads_only_the_tier_map(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # #680 AC1: the tier is the only source. With Opus removed from `complex`, an
+        # Opus agent is no longer flagged -- fails if any id list or prefix check is
+        # kept alongside the classifier.
+        assert not hasattr(scoring, "EXPENSIVE_MODELS")
+        monkeypatch.setitem(_complexity._TIER_BY_FAMILY, "complex", ("claude-testfam",))
+        for model in ("claude-opus-5-5", "claude-opus-4-6"):
+            score = score_agent(_make_agent(model=model, tools=["Read"]))
+            assert score.dimension_scores["model_selection"] == 25
+            assert not [
+                r for r in score.recommendations if r.dimension == "model_selection"
+            ]
+
     def test_importing_scoring_does_not_load_diagnostics(self) -> None:
         # #680: the tier classifier is imported inside the function, so the config
         # package does not pull in the diagnostics pipeline (which imports config).
         code = (
             "import sys; import agentfluent.config.scoring; "
-            "assert 'agentfluent.diagnostics' not in sys.modules, 'diagnostics loaded'"
+            "sys.exit(3 if 'agentfluent.diagnostics' in sys.modules else 0)"
         )
         result = subprocess.run(
             [sys.executable, "-c", code], capture_output=True, text=True, check=False,
         )
-        assert result.returncode == 0, result.stderr
+        assert result.returncode == 0, result.stderr or "agentfluent.diagnostics was loaded"
 
 
 class TestPromptBodyScoring:

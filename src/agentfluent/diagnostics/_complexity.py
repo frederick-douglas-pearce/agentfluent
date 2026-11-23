@@ -93,8 +93,10 @@ _TIER_ORDER: tuple[ComplexityTier, ...] = ("simple", "moderate", "complex")
 # is NOT indifferent to the placement: `complex` is what makes a
 # read-only Fable/Mythos agent draw the `model_selection` "consider a
 # cheaper model" rec. That use asks a price question, so price rank is
-# the right evidence there -- but moving Fable out of `complex` (#678,
-# #683) would silently stop that rec. Scoped to this map
+# the right evidence there -- but moving Fable or Mythos out of `complex`
+# (#678, #683) would stop that rec (pinned by
+# `test_scoring.py::TestModelSelectionScoring::test_complex_tier_model_read_only_is_flagged`).
+# Scoped to this map
 # deliberately: `parent_workload.pick_alternative_model` is a SECOND
 # ladder that does not consult it, and tiering Fable here did not fix
 # it -- that needed its own branch (#674), and consolidating the two
