@@ -45,7 +45,7 @@ except ImportError:  # pragma: no cover — exercised via install-path test
     pass
 
 from agentfluent.agents.models import WRITE_TOOLS
-from agentfluent.analytics.tokens import price_usage
+from agentfluent.analytics.tokens import ApiRequest, price_requests
 from agentfluent.config.models import AgentConfig
 from agentfluent.core.session import (
     SessionMessage,
@@ -120,6 +120,10 @@ class ToolBurst:
     is missing (interrupted session) or its ``is_error`` is None/False
     (#264)."""
     usage: Usage = field(default_factory=Usage)
+    """Σ :attr:`usages` -- for token counts; dollars price :attr:`usages` per message."""
+    usages: list[Usage] = field(default_factory=list)
+    """Each contributing assistant message's usage -- one API request each, priced on its
+    own prompt-length tier by ``estimate_burst_cost`` (#682)."""
     model: str = ""
     """Model id from the first contributing assistant message. All messages
     in a single tool loop should share a model in practice; if they don't,
@@ -162,6 +166,7 @@ class _OpenBurst:
                 count_errors(self.tool_blocks) if count_errors is not None else 0
             ),
             usage=sum(self.usages, Usage()),
+            usages=list(self.usages),
             model=self.model,
         )
 
@@ -350,33 +355,52 @@ def estimate_burst_cost(
     zero — so callers can render negative-savings clusters with a
     distinct "do not offload" treatment.
 
-    Both sides are priced through ``analytics.tokens.price_usage`` (#707), so
+    Both sides are priced through ``analytics.tokens.price_requests`` (#707, #682), so
     every ``Usage`` -> rate mapping in the codebase runs through
-    ``analytics.tokens._cost_of``. The parent side prices the burst's
-    observed usage; the alternative side keeps this estimate's own
-    counterfactual (below), which is deliberately not the same-mix one
-    ``price_usage`` documents for the model-switch savings figures. Both are
-    priced at the latest rate (``timestamp=None``; session-dated pricing is
-    #735).
+    ``analytics.tokens._cost_of``, **one message at a time**: each assistant message
+    is one API request and selects its own prompt-length tier (#682), on both sides.
+    The parent side prices the burst's observed usage; the alternative side keeps this
+    estimate's own counterfactual (below), which is deliberately not the same-mix one
+    ``price_requests`` documents for the model-switch savings figures. Both are priced
+    at the latest rate (``timestamp=None``; session-dated pricing is #735).
+
+    **Alternative-side tier (#682).** Each alternative request tiers on the
+    *original* request's full prompt (``input + cache_creation + cache_read``), not
+    on its re-priced ``input + cache_read``: delegating does not shrink the context
+    the request carries, and this is the conservative reading -- a higher alternative
+    cost, so a smaller claimed saving.
 
     Returns ``None`` when either model is missing (empty or ``None`` id) or
     unpriced, and emits a debug log naming the side. ``None`` means "no
     estimate available", never "free".
     """
+    # A burst built without per-message usages (constructed directly, not via
+    # ``_OpenBurst.finalize``) prices its sum as one request at the base tier (prompt 0):
+    # tiering on a sum would over-price it (#682).
+    parent_requests = (
+        [ApiRequest.of(u) for u in burst.usages]
+        if burst.usages
+        else [ApiRequest(usage=burst.usage, prompt_tokens=0)]
+    )
     parent_cost = (
-        price_usage(burst.usage, parent_model, timestamp=None)
+        price_requests(parent_requests, parent_model, timestamp=None)
         if parent_model else None
     )
     # Alt-model has no cache benefit: cache_read becomes fresh input,
     # cache_creation drops out (a delegated subagent would re-fetch its
     # own context, not pay to write the parent's cache).
-    u = burst.usage
-    alt_usage = Usage(
-        input_tokens=u.input_tokens + u.cache_read_input_tokens,
-        output_tokens=u.output_tokens,
-    )
+    alt_requests = [
+        ApiRequest(
+            usage=Usage(
+                input_tokens=request.usage.input_tokens + request.usage.cache_read_input_tokens,
+                output_tokens=request.usage.output_tokens,
+            ),
+            prompt_tokens=request.prompt_tokens,
+        )
+        for request in parent_requests
+    ]
     alt_cost = (
-        price_usage(alt_usage, alt_model, timestamp=None)
+        price_requests(alt_requests, alt_model, timestamp=None)
         if alt_model else None
     )
     if parent_cost is None or alt_cost is None:
@@ -819,8 +843,8 @@ def build_offload_candidates(
     ``delegation.suggest_delegations`` placement.
 
     Each cluster is priced at ``cluster.members[0].model`` and its
-    alternative model, through ``analytics.tokens.price_usage``
-    (``estimate_burst_cost``); a cluster where either model is unknown or
+    alternative model, through ``analytics.tokens.price_requests``
+    (``estimate_burst_cost``, per message); a cluster where either model is unknown or
     unpriced ships with ``estimated_*_usd = 0.0``, ``cost_priced=False`` and
     a debug log.
     Returns ``[]`` when sklearn is missing OR no cluster meets

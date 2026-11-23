@@ -90,10 +90,42 @@ class ModelPricing:
     cache_creation_5m: float
     cache_read: float
     cache_creation_1h: float = -1.0
+    context_tiers: tuple[ContextTier, ...] = ()
+    """Prompt-length tiers (#682), ascending by ``threshold``. Empty for a flat-priced model.
+    A request whose prompt size exceeds a tier's threshold is priced -- every token of it,
+    output included -- at that tier's rates; see :meth:`for_prompt`."""
 
     def __post_init__(self) -> None:
         if self.cache_creation_1h < 0:
             object.__setattr__(self, "cache_creation_1h", self.input * 2.0)
+        thresholds = [tier.threshold for tier in self.context_tiers]
+        if thresholds != sorted(set(thresholds)):
+            raise ValueError(f"context tier thresholds must be strictly ascending: {thresholds}")
+        if any(tier.pricing.context_tiers for tier in self.context_tiers):
+            raise ValueError("a context tier's rates must be flat (no nested tiers)")
+
+    def for_prompt(self, prompt_tokens: int) -> ModelPricing:
+        """The rates for one request whose prompt is ``prompt_tokens`` tokens (#682).
+
+        The highest tier whose threshold is **strictly less than** ``prompt_tokens`` -- the rule
+        genai-prices' ``calc_unit_price`` applies -- else these base rates. ``prompt_tokens`` is
+        one request's prompt (``analytics.tokens.prompt_tokens``), never a sum over requests:
+        a sum crosses a threshold no single request did.
+        """
+        selected = self
+        for tier in self.context_tiers:
+            if prompt_tokens > tier.threshold:
+                selected = tier.pricing
+        return selected
+
+
+@dataclass(frozen=True)
+class ContextTier:
+    """One prompt-length tier of a :class:`ModelPricing` (#682): ``pricing`` applies to a
+    request whose prompt size is greater than ``threshold``. ``pricing`` is flat."""
+
+    threshold: int
+    pricing: ModelPricing
 
 
 # Curated model-id registry: the Anthropic models AgentFluent knows about. Rates are
@@ -116,18 +148,16 @@ class ModelPricing:
 #   Fable 5.2             -> $8 / $40 / $10.00 / $0.20                 (NEW at 0.2.3 -- #674)
 # so ``_RESIDUAL`` is still empty. The golden-rate regression test locks these values.
 #
-# CONTEXT TIERS: the rates above are the **standard (base) tier**. Where upstream prices a
-# model by prompt length, ``_genai_source._base_rate`` takes ``TieredPrices.base`` and
-# DISCARDS the tiers -- a documented contract of that adapter, not an oversight here. The
-# contract is stated rather than a list of which ids are tiered, because such a list is what
-# went stale: it named the one tiered id it knew and missed a live one.
-#   Known reachable case: ``claude-haiku-5-5`` is tiered at **5x above 100K prompt tokens**
-#   on all four rate keys, so long-prompt requests to it under-report. Tracked in **#682**;
-#   fixing it needs the per-request prompt size at the pricing call site, which is a behavior
-#   change with its own golden tests.
-#   Not reachable today: sonnet-4-5's >200K tier is historical (upstream retired the 1M beta
-#   on 2026-04-30 and >200k now errors), and opus-4-6 / sonnet-4-6 carry theirs only in a
-#   pre-2026-03-13 conditional price whose currently-active successor is flat.
+# CONTEXT TIERS (#682, D067): the rates above are the **standard (base) tier**. Where upstream
+# prices a model by prompt length, the adapter keeps the tiers (``_genai_source._tier_table``)
+# on ``ModelPricing.context_tiers``, and every dollar figure selects them per API request via
+# ``ModelPricing.for_prompt`` (prompt = input + cache_creation + cache_read, strict ``>``, the
+# whole request at the tier rate). No list of tiered ids is kept here -- such a list is what
+# went stale before. As measured at the 0.2.3 pin: ``claude-haiku-5-5`` is 5x above 100K at
+# every date; sonnet-4-5 carries a >200K tier at every date (upstream notes >200K now errors
+# since the 1M beta retired on 2026-04-30, so only older requests reach it); opus-4-6 /
+# sonnet-4-6 carry a >200K tier only for dates before 2026-03-13
+# (``TestForwardCompatGuard.test_tier_table_dates_only_where_expected`` pins which ids date).
 #
 # Why the 5.x family read $0 before #674, and why ONE fix was not enough: the pin sat at 0.1.4,
 # which carries none of those ids, AND this frozenset gated them out before upstream was
@@ -199,6 +229,8 @@ LEGACY_MODEL_PREFIXES: tuple[str, ...] = ("claude-v1", "claude-2", "claude-insta
 #: fixture in tests/unit/test_pricing.py -- which keeps them order-independent without adding a
 #: test-only surface to the package.
 _WARNED_UNCURATED: set[str] = set()
+_WARNED_UNPRICEABLE: set[str] = set()
+"""Curated ids already warned as having neither upstream nor residual pricing (#682)."""
 
 # Documented local residual: model id -> ModelPricing for any model genai-prices lacks.
 # Empty as of genai-prices==0.2.3 (see _KNOWN_MODELS above): upstream holds an exact record for
@@ -222,8 +254,8 @@ _RESIDUAL: dict[str, ModelPricing] = {}
 # (163 rows). Dollar impact is small at these volumes, but note the ranking is by RATIO and
 # the row counts run the other way. That staleness is its own concern, not this issue's.
 #
-# ``[1m]`` entries resolve the 1M-context variant string to its base id, which prices it at the
-# base tier (``_genai_source._base_rate`` discards context tiers for every model). The entries
+# ``[1m]`` entries resolve the 1M-context variant string to its base id. The id carries no tier
+# of its own: a long request is tiered by its prompt size like any other (#682). The entries
 # for the ids #674 added are DEFENSIVE: no ``[1m]`` form of any model appears in the corpus
 # today. They are inert if never emitted, and the alternative -- omitting them -- is the exact
 # fail-closed-to-$0 shape this issue exists to remove.
@@ -340,16 +372,13 @@ def get_pricing(model: str, timestamp: datetime | None = None) -> ModelPricing |
     a loosened pin or a broken install, and it is unrecoverable when it does happen — pricing
     cannot be done at all — so it surfaces rather than degrading.
 
-    ``timestamp`` selects the base rate in effect on that date via genai-prices' dated
+    ``timestamp`` selects the rates in effect on that date via genai-prices' dated
     constraints (#546); ``None``/omitted → the latest rate, preserving every existing
-    caller. Note (#546 falsifier finding, re-confirmed at genai-prices==0.1.4 in #661 and again
-    at 0.2.3 in #674, and again in #664 for the two ids curated there -- across all seventeen
-    curated ids): no model in
-    ``_KNOWN_MODELS`` currently carries a dated *base-rate* change -- the only dated
-    Anthropic constraints move the >200K context tier, which the adapter discards (see
-    ``_genai_source._base_rate``) -- so a timestamp is presently date-invariant at base-rate
-    granularity. The parameter is wired so a future upstream dated base-rate change applies
-    automatically; the forward-compat guard test in ``tests`` is the tripwire.
+    caller. No model in ``_KNOWN_MODELS`` carries a dated *base-rate* change (#546 falsifier
+    finding, re-confirmed through #674 and #664). The dated Anthropic constraints move the
+    >200K context tier of opus-4-6 / sonnet-4-6, which ``context_tiers`` now carries (#682),
+    so a long request in a session dated before 2026-03-13 prices at that tier. The
+    forward-compat guard tests in ``tests`` are the tripwire for both.
     """
     canonical = _ALIASES.get(model, model)
     if canonical not in _KNOWN_MODELS:
@@ -365,6 +394,18 @@ def get_pricing(model: str, timestamp: datetime | None = None) -> ModelPricing |
             output=rates.output,
             cache_creation_5m=rates.cache_write_5m,
             cache_read=rates.cache_read,
+            context_tiers=tuple(
+                ContextTier(
+                    threshold=tier.start,
+                    pricing=ModelPricing(
+                        input=tier.rates.input,
+                        output=tier.rates.output,
+                        cache_creation_5m=tier.rates.cache_write_5m,
+                        cache_read=tier.rates.cache_read,
+                    ),
+                )
+                for tier in rates.context_tiers
+            ),
         )
 
     residual = _RESIDUAL.get(canonical)
@@ -381,6 +422,11 @@ def get_pricing(model: str, timestamp: datetime | None = None) -> ModelPricing |
     # missing from `_KNOWN_MODELS`, so it exited at the uncurated branch and never reached here.
     # Curated-but-unpriceable is the case this covers; uncurated-but-priceable is handled by
     # `_warn_if_priceable_but_uncurated` (#664), which now warns rather than staying silent.
+    # Once per model per process: the offload estimate and the per-request fold look prices up
+    # many times per session, and the message carries no per-call information (#682 / #707).
+    if canonical in _WARNED_UNPRICEABLE:
+        return None
+    _WARNED_UNPRICEABLE.add(canonical)
     logger.warning(
         "Known model '%s' has neither upstream nor residual pricing -- it will contribute $0 "
         "to every cost figure. Upstream coverage may have changed; check _KNOWN_MODELS and "

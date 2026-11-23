@@ -15,7 +15,12 @@ from agentfluent.agents.models import AgentInvocation
 from agentfluent.analytics.agent_metrics import AgentMetrics
 from agentfluent.analytics.pipeline import SessionAnalysis
 from agentfluent.analytics.pricing import MODEL_HAIKU, MODEL_OPUS, MODEL_SONNET
-from agentfluent.analytics.tokens import TokenMetrics, price_usage, trace_spend
+from agentfluent.analytics.tokens import (
+    ApiRequest,
+    TokenMetrics,
+    price_requests,
+    trace_spend,
+)
 from agentfluent.analytics.tools import ToolMetrics
 from agentfluent.config.models import AgentConfig, Scope
 from agentfluent.core.session import SessionMessage, Usage
@@ -45,12 +50,12 @@ _SPEND = Usage(
     cache_creation_1h_input_tokens=10_000,
 )
 # What #701's fork dedup leaves of _SPEND: far smaller, so pricing the per-file
-# ``usage`` instead of ``spend_usage`` is unmistakable.
+# ``usage`` instead of ``spend_turns`` is unmistakable.
 _DEDUPED = Usage(input_tokens=100, output_tokens=50)
 
 
 def _cost(usage: Usage, model: str) -> float:
-    cost = price_usage(usage, model, timestamp=None)
+    cost = price_requests([ApiRequest.of(usage)], model, timestamp=None)
     assert cost is not None
     return cost
 
@@ -60,7 +65,7 @@ def _trace(model: str, *, agent_id: str = "a", deduped: bool = False) -> Subagen
         agent_id=agent_id, agent_type="pm", delegation_prompt="", model=model, usage=_SPEND,
     )
     if deduped:
-        trace.spend_usage = _DEDUPED
+        trace.spend_turns = [_DEDUPED]
     return trace
 
 
@@ -113,10 +118,12 @@ def correlate(
 
 class TestDedupedSpend:
     """g1 — broken: pricing ``trace.usage`` (per-file) instead of the #701-deduped
-    ``spend_usage`` would double-count fork-replayed turns."""
+    ``spend_turns`` would double-count fork-replayed turns."""
 
     def test_trace_spend_returns_the_deduped_usage(self) -> None:
-        assert trace_spend(_trace(MODEL_OPUS, deduped=True)) == (_DEDUPED, MODEL_OPUS)
+        assert trace_spend(_trace(MODEL_OPUS, deduped=True)) == (
+            [ApiRequest.of(_DEDUPED)], MODEL_OPUS,
+        )
 
     def test_savings_price_the_deduped_usage(self) -> None:
         estimate = estimate_model_savings(
@@ -134,7 +141,7 @@ class TestDedupedSpend:
             invs.append(inv)
         signals = _extract_duration_outliers(invs)
         assert len(signals) == 1
-        assert signals[0].spend_usage == _DEDUPED
+        assert signals[0].spend_requests == (ApiRequest.of(_DEDUPED),)
 
 
 class TestSignalPathCurrentModel:

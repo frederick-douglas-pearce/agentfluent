@@ -1,6 +1,7 @@
 """Tests for model pricing lookup."""
 
 import logging
+import sys
 from datetime import UTC, datetime
 
 import pytest
@@ -10,6 +11,7 @@ from agentfluent.analytics._genai_source import classify_upstream_match
 from agentfluent.analytics.pricing import (
     LEGACY_MODEL_PREFIXES,
     SYNTHETIC_MODELS,
+    ContextTier,
     ModelPricing,
     compute_cost,
     get_known_models,
@@ -811,6 +813,52 @@ class TestForwardCompatGuard:
             "restatement note in docs/COST_MODEL.md and activate #543's diff caveat."
         )
 
+    # The curated models whose prompt-length TIER TABLE changes by date (#682, architect I3).
+    # The base-rate guard above cannot see a tier, so this one compares the tier table.
+    # opus-4-6 / sonnet-4-6 dropped their >200K tier on 2026-03-13; it now prices them
+    # per request, so historical sessions on either side of that date legitimately differ.
+    _EXPECTED_DATED_TIERS = frozenset({"claude-opus-4-6", "claude-sonnet-4-6"})
+
+    @staticmethod
+    def _tiers(model: str, when: datetime | None) -> tuple[ContextTier, ...]:
+        # The whole tier (threshold + every rate, cache writes and reads included):
+        # ``ContextTier`` / ``ModelPricing`` are frozen dataclasses, so they compare by value.
+        rates = get_pricing(model, when)
+        assert rates is not None
+        return rates.context_tiers
+
+    def test_tier_comparison_sees_cache_rates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """F3: a dated change to a tier's cache-read rate ALONE changes what ``_tiers`` returns,
+        so ``test_tier_table_dates_only_where_expected`` would see it. Drives ``_tiers`` itself
+        through a patched ``get_pricing`` whose two dates differ only in that one rate."""
+        def priced(tier_cache_read: float) -> ModelPricing:
+            tier = ModelPricing(
+                input=10, output=37.5, cache_creation_5m=12.5, cache_read=tier_cache_read,
+            )
+            return ModelPricing(
+                input=5, output=25, cache_creation_5m=6.25, cache_read=0.5,
+                context_tiers=(ContextTier(threshold=200_000, pricing=tier),),
+            )
+
+        early = datetime(2026, 1, 1, tzinfo=UTC)
+        monkeypatch.setattr(
+            sys.modules[__name__], "get_pricing",
+            lambda _model, when=None: priced(1.0 if when == early else 0.5),
+        )
+        assert self._tiers("m", early) != self._tiers("m", None)
+
+    @pytest.mark.parametrize("model", list(_GOLDEN_RATES))
+    def test_tier_table_dates_only_where_expected(self, model: str) -> None:
+        dates = [self._EARLY, datetime(2026, 1, 1, tzinfo=UTC), None]
+        tables = {self._tiers(model, when) for when in dates}
+        dated = len(tables) > 1
+        assert dated == (model in self._EXPECTED_DATED_TIERS), (
+            f"{model}: tier table {'changes' if dated else 'does not change'} by date "
+            f"({tables}). genai-prices moved a dated context tier: update "
+            "_EXPECTED_DATED_TIERS and the historical-cost note in docs/COST_MODEL.md, and "
+            "bump COST_METHOD_VERSION if any already-priced figure moves (#682)."
+        )
+
 
 @pytest.fixture(autouse=True)
 def _reset_warn_dedup(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -827,6 +875,7 @@ def _reset_warn_dedup(monkeypatch: pytest.MonkeyPatch) -> None:
     the fixture keeps every such test order-independent.
     """
     monkeypatch.setattr(pricing, "_WARNED_UNCURATED", set())
+    monkeypatch.setattr(pricing, "_WARNED_UNPRICEABLE", set())
 
 
 class TestUncuratedButPriceableWarning:

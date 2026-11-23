@@ -198,20 +198,29 @@ class SubagentTrace(BaseModel):
 
     turn_usages: list[TraceTurnUsage] = Field(default_factory=list, exclude=True)
     """Per-turn ``(message_id, usage)`` in file order (#701). Excluded from JSON
-    output (D055): it is the input to cross-file deduplication, not a published
-    metric. A plain list rather than a dedup-only id set so per-turn pricing
-    (#682's >200K tier) can reuse it. Empty for a trace not built by the parser
-    (e.g. constructed in a test), in which case spend falls back to ``usage``."""
+    output (D055): it is the input to cross-file deduplication and to per-request
+    pricing (#682 -- each turn is one API request, priced on its own prompt-length
+    tier), not a published metric. Empty for a trace not built by the parser (e.g.
+    constructed in a test), in which case spend falls back to ``usage``."""
 
-    spend_usage: Usage | None = Field(default=None, exclude=True)
-    """This trace's usage with turns already counted elsewhere in the session
-    removed -- set by ``analytics.tokens.dedupe_trace_turns`` (#701). ``None``
-    until that runs -- and permanently for a trace dedup skips (no
-    ``turn_usages``, or failing ``analytics.tokens.trace_counts_as_spend``) --
-    meaning "not deduplicated": consumers read it through
-    ``analytics.tokens.trace_spend_usage``, which falls back to ``usage``.
-    Excluded from JSON output; the session fold and per-agent pricing both read
-    it, so they cannot disagree on which turns count."""
+    spend_turns: list[Usage] | None = Field(default=None, exclude=True)
+    """The usage of each turn this trace contributes to spend, with turns already
+    counted elsewhere in the session removed -- set by
+    ``analytics.tokens.dedupe_trace_turns`` (#701, #682). ``None`` until that runs --
+    and permanently for a trace dedup skips (no ``turn_usages``, or failing
+    ``analytics.tokens.trace_counts_as_spend``) -- meaning "not deduplicated":
+    consumers read it through ``analytics.tokens.trace_spend_requests`` (dollars, per
+    request) and ``analytics.tokens.trace_spend_usage`` (tokens, summed). Excluded
+    from JSON output; the session fold and per-agent pricing both read it, so they
+    cannot disagree on which turns count."""
+
+    @property
+    def spend_usage(self) -> Usage | None:
+        """Σ ``spend_turns``, or ``None`` before deduplication -- derived, never stored,
+        so the summed and per-turn views cannot disagree (#682)."""
+        if self.spend_turns is None:
+            return None
+        return sum(self.spend_turns, Usage())
 
     duration_ms: int | None = None
     idle_gap_ms: int | None = None

@@ -82,7 +82,13 @@ def installed_version() -> str | None:
 
 @dataclass(frozen=True)
 class UpstreamRates:
-    """Anthropic base rates from genai-prices, in USD per 1M tokens.
+    """Anthropic rates from genai-prices, in USD per 1M tokens.
+
+    The four flat fields are the **base** (standard-context) rates. ``context_tiers`` carries
+    the prompt-length tiers (#682): each :class:`UpstreamTier` holds the rates that apply to a
+    request whose prompt size is **strictly greater than** its ``start`` (and at most the next
+    tier's), on every token of that request. Empty for a flat-priced model. See
+    ``_tier_table`` for how the table is built.
 
     ``cache_write_5m`` binds the upstream ``cache_write_mtok`` (the 5-minute-equivalent write
     rate). The 1-hour dimension (#534) is supplied by the local overlay
@@ -109,22 +115,90 @@ class UpstreamRates:
     output: float
     cache_write_5m: float
     cache_read: float
+    context_tiers: tuple[UpstreamTier, ...] = ()
 
 
-def _base_rate(value: Decimal | TieredPrices | None) -> float | None:
+@dataclass(frozen=True)
+class UpstreamTier:
+    """One prompt-length tier: ``rates`` apply when the prompt size is ``> start`` (#682).
+
+    ``rates`` is flat -- it never carries tiers of its own.
+    """
+
+    start: int
+    rates: UpstreamRates
+
+
+RateValue = Decimal | TieredPrices | None
+
+
+def _base_rate(value: RateValue) -> float | None:
     """Return the standard (below-first-tier) rate as a float.
 
     A genai-prices rate field is either a scalar ``Decimal`` (flat pricing) or a
     ``TieredPrices(base, tiers)`` where ``base`` is the standard-context rate and
-    ``tiers`` add context-length surcharges (e.g. the >200K tier on Sonnet). AgentFluent's
-    ``_PRICING`` historically encoded the standard rate, so #545 resolves to ``base``;
-    context-tier-aware pricing is future overlay work (``ModelPricing`` has no tier slot).
+    ``tiers`` add prompt-length surcharges (e.g. 5x above 100K on ``claude-haiku-5-5``).
+    This returns the base only; the tiers are read by ``_tier_table`` (#682).
     """
     if value is None:
         return None
     if isinstance(value, TieredPrices):
         return float(value.base)
     return float(value)  # scalar Decimal
+
+
+def _rate_for_prompt(value: RateValue, prompt_tokens: int) -> float | None:
+    """The rate genai-prices applies to a request of ``prompt_tokens`` prompt tokens.
+
+    Mirrors ``genai_prices.types.calc_unit_price``: the highest tier whose ``start`` is
+    **strictly less than** the prompt size wins, else the base.
+    """
+    if not isinstance(value, TieredPrices):
+        return _base_rate(value)
+    applicable = value.base
+    for tier in sorted(value.tiers, key=lambda tier: tier.start):
+        if prompt_tokens > tier.start:
+            applicable = tier.price
+    return float(applicable)
+
+
+def _tier_table(values: dict[str, RateValue]) -> tuple[UpstreamTier, ...]:
+    """Build the prompt-length tier table for the four required keys (#682).
+
+    Takes the **union** of every tier ``start`` across the keys and evaluates each key at each
+    breakpoint with genai-prices' own rule (``_rate_for_prompt``). The rate function is
+    piecewise-constant and changes only just above a ``start``, so evaluating at ``start + 1``
+    gives the exact rates for every prompt in ``(start, next start]``. This handles any upstream
+    shape -- keys tiered at different starts, several tiers, or some keys flat -- and agrees
+    with ``calc_price`` by construction. Empty when no key is tiered.
+    """
+    starts = sorted(
+        {
+            tier.start
+            for value in values.values()
+            if isinstance(value, TieredPrices)
+            for tier in value.tiers
+        }
+    )
+    table: list[UpstreamTier] = []
+    for start in starts:
+        at = {key: _rate_for_prompt(value, start + 1) for key, value in values.items()}
+        input_rate, output_rate = at["input_mtok"], at["output_mtok"]
+        cache_write, cache_read = at["cache_write_mtok"], at["cache_read_mtok"]
+        if input_rate is None or output_rate is None or cache_write is None or cache_read is None:
+            continue  # unreachable: the caller returns None on any unset key first
+        table.append(
+            UpstreamTier(
+                start=start,
+                rates=UpstreamRates(
+                    input=input_rate,
+                    output=output_rate,
+                    cache_write_5m=cache_write,
+                    cache_read=cache_read,
+                ),
+            )
+        )
+    return tuple(table)
 
 
 # The price keys this adapter REQUIRES upstream to supply -- a contract, not a convenience list.
@@ -151,7 +225,7 @@ REQUIRED_PRICE_KEYS: tuple[str, ...] = (
 )
 
 
-def _required_rate(price: ModelPrice, key: str) -> float | None:
+def _required_rate(price: ModelPrice, key: str) -> RateValue:
     """Read a **required** upstream rate key, failing loudly if it is deregistered.
 
     Distinguishes the two states the dynamic price-key registry exposes (see the module
@@ -176,10 +250,12 @@ def _required_rate(price: ModelPrice, key: str) -> float | None:
             key,
         )
         raise
-    # Deliberately OUTSIDE the try: only the attribute lookup can signal a deregistration.
-    # An AttributeError raised inside ``_base_rate`` (an unexpected *value* shape) would
-    # otherwise be reported as a registry break, pointing the reader at the wrong layer.
-    return _base_rate(value)
+    # Returns the raw value (scalar or ``TieredPrices``); the caller reads the base through
+    # ``_base_rate`` and the tiers through ``_tier_table`` -- both OUTSIDE the try, so an
+    # AttributeError from an unexpected *value* shape is never reported as a registry break.
+    if value is None or isinstance(value, (Decimal, TieredPrices)):
+        return value
+    return Decimal(str(value))
 
 
 def _resolve_rates(
@@ -211,11 +287,11 @@ def _resolve_rates(
     # (guarded by ``test_cache_write_binds_5m_field_not_1h`` in tests/unit/test_genai_source.py).
     # Every required key is read (not short-circuited) so a deregistration anywhere in the set
     # still raises, even when an earlier key is merely unset.
-    rates = {key: _required_rate(price, key) for key in REQUIRED_PRICE_KEYS}
-    input_rate = rates["input_mtok"]
-    output_rate = rates["output_mtok"]
-    cache_write = rates["cache_write_mtok"]
-    cache_read = rates["cache_read_mtok"]
+    values = {key: _required_rate(price, key) for key in REQUIRED_PRICE_KEYS}
+    input_rate = _base_rate(values["input_mtok"])
+    output_rate = _base_rate(values["output_mtok"])
+    cache_write = _base_rate(values["cache_write_mtok"])
+    cache_read = _base_rate(values["cache_read_mtok"])
     if input_rate is None or output_rate is None or cache_write is None or cache_read is None:
         # Partial upstream coverage. ``pricing.get_pricing`` surfaces this at WARNING rather
         # than DEBUG -- see the module docstring's "What the first row does NOT buy you".
@@ -225,6 +301,7 @@ def _resolve_rates(
         output=output_rate,
         cache_write_5m=cache_write,
         cache_read=cache_read,
+        context_tiers=_tier_table(values),
     )
 
 

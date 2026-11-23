@@ -744,7 +744,8 @@ For [#646][i646]'s design pass — not settled here.
    it would replace one non-spend number with four non-spend numbers. *Settled:
    #143 closed `not_planned` (D057(13)); its intent shipped in [#675][i675] —
    diagnostics dollar savings price each linked trace's deduplicated per-turn
-   usage at its own model and the alternative model (`analytics.tokens.price_usage`),
+   usage at its own model and the alternative model (`analytics.tokens.price_requests`,
+   one request per turn since #682),
    with no 50/50 split and no figure for invocations without trace spend.*
 5. **Blended rate.** §2 shows the rate is diluted independently of the quantity.
    Per-turn per-model pricing fixes both; confirm that is in scope.

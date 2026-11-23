@@ -393,16 +393,17 @@ class DurationOutlierRule:
         atypically high, so framing them as per-agent savings would
         overstate the typical case (architect review, #170).
 
-        The figure prices the invocation's trace spend (``signal.spend_usage``,
-        #675) at the model the trace ran on (``detail["current_model"]``) — not
+        The figure prices the invocation's trace spend (``signal.spend_requests``,
+        #675, one request per turn #682) at the model the trace ran on
+        (``detail["current_model"]``) — not
         the config-declared ``current_model`` used to choose the target — so
         "current cost" means what was spent, as on the mismatch path. No trace
         spend → no dollar figure.
         """
         trace_model = signal.detail.get("current_model")
         estimate = (
-            estimate_usage_savings([(signal.spend_usage, trace_model)], target_model)
-            if signal.spend_usage is not None and isinstance(trace_model, str)
+            estimate_usage_savings([(signal.spend_requests, trace_model)], target_model)
+            if signal.spend_requests is not None and isinstance(trace_model, str)
             else None
         )
         savings = estimate.savings_usd if estimate is not None else None

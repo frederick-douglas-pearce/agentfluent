@@ -592,7 +592,8 @@ def _dedupe_session_trace_turns(
     Supplies what only the pipeline knows -- invocation order -- and leaves the
     precedence rule itself to ``tokens.dedupe_trace_turns``. Must run before
     anything reads spend: the session fold, ``compute_agent_metrics`` and
-    ``trace_coverage`` all read ``trace_spend_usage``.
+    ``trace_coverage`` all read the deduplicated ``spend_turns`` -- tokens through
+    ``trace_spend_usage``, dollars per turn through ``trace_spend_requests`` (#682).
 
     Runs over every trace the session owns, **unfiltered** (``SessionTraces``
     carries both tiers before ``--agent`` is applied), so a type's spend is the

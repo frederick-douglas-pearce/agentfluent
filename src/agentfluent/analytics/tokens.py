@@ -82,10 +82,10 @@ class TokenMetrics:
 
     api_call_count: int = 0
     """Number of deduplicated assistant messages (API calls). Counts
-    parent-session messages only — subagent traces' per-call usage is
-    not reliably attributable per call, so we sum at the trace level
-    instead (see ``SubagentTrace.usage``; the spend a trace contributes, with
-    turns counted elsewhere in the session removed, is ``trace_spend_usage``)."""
+    parent-session messages only — subagent turns are counted at the trace
+    level (``SubagentTrace.turn_usages``), not here. Their spend, with turns
+    counted elsewhere in the session removed, is ``trace_spend_usage`` for tokens
+    and ``trace_spend_requests`` for dollars, priced per turn (#682)."""
 
     by_model: list[ModelTokenBreakdown] = field(default_factory=list)
     """Per-(model, origin) token breakdown. Schema v2: list, not dict.
@@ -118,47 +118,91 @@ def _accumulate_usage(breakdown: ModelTokenBreakdown, usage: Usage) -> None:
     breakdown.cache_creation_1h_tokens += usage.cache_creation_1h_input_tokens
 
 
+def prompt_tokens(usage: Usage) -> int:
+    """One request's prompt size: ``input + cache_creation + cache_read`` (#682).
+
+    The token count a prompt-length tier keys on -- genai-prices' Anthropic ``input_tokens``,
+    which folds cache writes and reads into the prompt. Uses the authoritative cache-write
+    total, not the 5m/1h split. Meaningful only for **one** API request's ``Usage``.
+    """
+    return (
+        usage.input_tokens
+        + usage.cache_creation_input_tokens
+        + usage.cache_read_input_tokens
+    )
+
+
+@dataclass(frozen=True)
+class ApiRequest:
+    """One API request to price: its usage and the prompt size that selects its tier (#682).
+
+    Build it with :meth:`of` from a single request's ``Usage``. The explicit ``prompt_tokens``
+    exists for the three callers that must not derive it from ``usage``: the parent-workload
+    offload counterfactual (its alternative request tiers on the *original* prompt), and two
+    aggregate fallbacks priced at the base tier (prompt ``0``) rather than tiered on a sum --
+    a trace with no per-turn usage (``trace_spend_requests``) and an offload burst built
+    without per-message usages (``diagnostics.parent_workload.estimate_burst_cost``).
+    """
+
+    usage: Usage
+    prompt_tokens: int
+
+    @classmethod
+    def of(cls, usage: Usage) -> ApiRequest:
+        return cls(usage=usage, prompt_tokens=prompt_tokens(usage))
+
+
+SpendObservation = tuple[Sequence[ApiRequest], str]
+"""Spend to price in a savings estimate: requests and the model they ran on (#675, #682)."""
+
+
 def _cost_of(
-    breakdown: ModelTokenBreakdown, timestamp: datetime | None = None,
+    model: str, requests: Iterable[ApiRequest], timestamp: datetime | None = None,
 ) -> float | None:
-    """Price one breakdown row at its model's rate; ``None`` iff the model is unpriced.
+    """Price API requests at ``model``'s rate, one request at a time; ``None`` iff unpriced.
 
     The single call site of ``get_pricing`` / ``compute_cost`` in this module (#646 AC1):
     parent rows, subagent rows, per-agent spend (``price_trace``) and every diagnostics
-    dollar figure (via ``price_usage`` -- model-switch savings and, since #707, the
-    parent-workload offload estimate) all price here, so the ``Usage`` -> rate mapping
-    (the 5m/1h cache-write split) lives on one path.
+    dollar figure (``price_requests`` -- model-switch savings and the parent-workload offload
+    estimate) all price here, so the ``Usage`` -> rate mapping (the 5m/1h cache-write split)
+    lives on one path.
 
-    **Linearity assumption.** Pricing is linear in tokens today (base tier only -- the
-    upstream adapter discards context tiers -- and no caller passes request multipliers
-    or surcharges), so pricing an aggregate equals summing per-trace prices up to float
-    rounding. Subagent rows are priced per trace and summed
-    (``compute_subagent_token_metrics``), so per-agent cost reconciles with the session
-    fold by construction. **No test guards linearity**: a non-linear change here moves
-    the session fold and per-agent attribution identically. Per-request levers --
-    context tiers (#682), multipliers or surcharges (#537-#539) -- need per-request
-    usage, which neither a trace's aggregated ``usage`` nor a parent-workload offload
-    burst's summed ``usage`` (``diagnostics.parent_workload.ToolBurst``) carries; #682
-    owns that guard.
+    **Per request, never on a sum (#682).** Each request's rates come from
+    ``ModelPricing.for_prompt(request.prompt_tokens)``, so a request over its model's
+    prompt-length threshold (e.g. ``claude-haiku-5-5`` above 100K) prices at the tier rate on
+    every token. Pricing is therefore **not linear in summed tokens**: two 60K-prompt requests
+    price at the base rate while their 120K sum would tier. Never collapse requests into one
+    ``Usage`` before calling this. The current callers are guarded against doing so by
+    ``TestNonLinearityGuard``, ``TestReconciliationWithTiers`` and
+    ``TestDiagnosticsPerRequest`` in ``tests/unit/test_context_tier_pricing.py``; a new
+    dollar figure needs its own per-request test.
+
+    **Rates are resolved once, at ``timestamp``** -- the session's price date -- so every
+    request in a session tiers against that date's table, not its own date (#738).
     """
-    pricing = get_pricing(breakdown.model, timestamp)
+    pricing = get_pricing(model, timestamp)
     if pricing is None:
         return None
-    return compute_cost(
-        pricing,
-        breakdown.input_tokens,
-        breakdown.output_tokens,
-        breakdown.cache_creation_5m_tokens,
-        breakdown.cache_read_input_tokens,
-        cache_creation_1h_tokens=breakdown.cache_creation_1h_tokens,
-    )
+    total = 0.0
+    for request in requests:
+        usage = request.usage
+        total += compute_cost(
+            pricing.for_prompt(request.prompt_tokens),
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.cache_creation_5m_input_tokens,
+            usage.cache_read_input_tokens,
+            cache_creation_1h_tokens=usage.cache_creation_1h_input_tokens,
+        )
+    return total
 
 
 def _populate_costs(
     by_model: dict[tuple[str, str], ModelTokenBreakdown],
+    requests_by_row: dict[tuple[str, str], list[ApiRequest]],
     timestamp: datetime | None = None,
 ) -> float:
-    """Compute per-row costs in place, return the summed total.
+    """Compute per-row costs in place from each row's requests, return the summed total.
 
     ``timestamp`` is the session's price date (first-message timestamp, #546); it is
     forwarded to ``get_pricing`` so each row is priced at the rate in effect when the
@@ -166,8 +210,8 @@ def _populate_costs(
     timestamp, and the default for callers that do not price by date).
     """
     total = 0.0
-    for breakdown in by_model.values():
-        cost = _cost_of(breakdown, timestamp)
+    for key, breakdown in by_model.items():
+        cost = _cost_of(breakdown.model, requests_by_row.get(key, []), timestamp)
         if cost is None:
             breakdown.unpriced_tokens = breakdown.total_tokens
         else:
@@ -190,32 +234,49 @@ def trace_counts_as_spend(trace: SubagentTrace) -> bool:
 
 
 def trace_spend_usage(trace: SubagentTrace) -> Usage:
-    """The usage a trace contributes to spend (#701).
+    """The usage a trace contributes to spend (#701), summed -- for token counts only.
 
-    ``trace.spend_usage`` once ``dedupe_trace_turns`` has run on the session,
-    else the per-file ``trace.usage`` -- which is also what a trace dedup skipped
+    ``trace.spend_usage`` (Σ ``spend_turns``) once ``dedupe_trace_turns`` has run on the
+    session, else the per-file ``trace.usage`` -- which is also what a trace dedup skipped
     returns (no ``turn_usages``, or failing ``trace_counts_as_spend``), so callers
-    must gate on ``trace_counts_as_spend`` first. Every spend reader goes through it: the
-    session fold (``compute_subagent_token_metrics``), ``price_trace``,
-    per-agent ``spend_tokens`` (``analytics.agent_metrics``) and the verbose
-    Per-Invocation Detail Tokens column (``cli.formatters.table``). So a turn
-    dropped as a duplicate is dropped from all of them, and #646's per-agent ↔
-    ``by_model`` reconciliation keeps holding.
+    must gate on ``trace_counts_as_spend`` first. Every spend *token* reader goes through it:
+    the session fold (``compute_subagent_token_metrics``), per-agent ``spend_tokens``
+    (``analytics.agent_metrics``), ``trace_coverage`` and the verbose Per-Invocation Detail
+    Tokens column (``cli.formatters.table``). **Dollars never price this sum** -- they price
+    ``trace_spend_requests`` one request at a time (#682).
     """
-    return trace.spend_usage if trace.spend_usage is not None else trace.usage
+    spend = trace.spend_usage
+    return spend if spend is not None else trace.usage
 
 
-def trace_spend(trace: SubagentTrace | None) -> tuple[Usage, str] | None:
-    """A trace's spend and the model it ran on, or ``None`` when it has none (#675).
+def trace_spend_requests(trace: SubagentTrace) -> list[ApiRequest]:
+    """The API requests a trace contributes to spend, one per turn (#682).
 
-    The ``trace_counts_as_spend`` / ``trace_spend_usage`` pair every spend reader
-    uses (#646, #701), packaged for the diagnostics savings estimates so their
+    The same turns as ``trace_spend_usage`` -- deduplicated ``spend_turns`` once
+    ``dedupe_trace_turns`` has run, else every ``turn_usages`` turn -- so dollars and tokens
+    cover one set of turns. A trace with no per-turn usage at all (not built by the parser;
+    the parser always records turns, and a turn-less parsed trace has zero usage) falls back
+    to its aggregate ``usage`` as **one request at the base tier** (prompt ``0``): tiering on
+    a sum would over-price it, so this under-prices instead, and says so here.
+    """
+    if trace.spend_turns is not None:
+        return [ApiRequest.of(usage) for usage in trace.spend_turns]
+    if trace.turn_usages:
+        return [ApiRequest.of(turn.usage) for turn in trace.turn_usages]
+    return [ApiRequest(usage=trace.usage, prompt_tokens=0)]
+
+
+def trace_spend(trace: SubagentTrace | None) -> SpendObservation | None:
+    """A trace's spend requests and the model it ran on, or ``None`` when it has none (#675).
+
+    The ``trace_counts_as_spend`` / ``trace_spend_requests`` pair every spend reader
+    uses (#646, #701, #682), packaged for the diagnostics savings estimates so their
     dollars and the analytics fold rest on one definition of spend. ``None`` for a
-    missing trace or one that does not count as spend -- never a zero usage.
+    missing trace or one that does not count as spend -- never an empty request list.
     """
     if trace is None or trace.model is None or not trace_counts_as_spend(trace):
         return None
-    return trace_spend_usage(trace), trace.model
+    return trace_spend_requests(trace), trace.model
 
 
 def counted_parent_message_ids(messages: Iterable[SessionMessage]) -> set[str]:
@@ -247,7 +308,7 @@ def dedupe_trace_turns(
     depth_one_in_invocation_order: Sequence[SubagentTrace],
     rest: Iterable[SubagentTrace] = (),
 ) -> TraceDedupStats:
-    """Set each trace's ``spend_usage`` so no API turn is counted twice (#701).
+    """Set each trace's ``spend_turns`` so no API turn is counted twice (#701).
 
     Exclusivity -- every turn's usage lives in exactly one file -- holds for
     almost every trace, but **not** for fork agents, which replay the spawning
@@ -270,11 +331,12 @@ def dedupe_trace_turns(
     **Only a trace that counts as spend may claim an id** -- the trace-side twin
     of ``counted_parent_message_ids``' rule for the main session. A trace failing
     ``trace_counts_as_spend`` (no model, or a ``<synthetic>`` first assistant
-    message -- the #692 shape) is skipped entirely and its ``spend_usage`` stays
+    message -- the #692 shape) is skipped entirely and its ``spend_turns`` stays
     ``None``: every spend reader excludes it anyway, so letting it claim a turn
     it shares with a later fork would leave that turn counted nowhere.
 
-    Mutates ``spend_usage`` only; the public per-file ``usage`` is unchanged.
+    Mutates ``spend_turns`` only (``spend_usage`` is derived from it); the public
+    per-file ``usage`` is unchanged.
     Returns how many turns, and how many tokens, were dropped as duplicates.
     """
     ordered = [
@@ -291,7 +353,7 @@ def dedupe_trace_turns(
         processed.add(id(trace))
         if not trace.turn_usages or not trace_counts_as_spend(trace):
             continue
-        spend = Usage()
+        kept: list[Usage] = []
         for turn in trace.turn_usages:
             if turn.message_id:
                 if turn.message_id in seen:
@@ -299,43 +361,41 @@ def dedupe_trace_turns(
                     dropped_tokens += turn.usage.total_tokens
                     continue
                 seen.add(turn.message_id)
-            spend = spend + turn.usage
-        trace.spend_usage = spend
+            kept.append(turn.usage)
+        trace.spend_turns = kept
     return TraceDedupStats(dropped_turns=dropped_turns, dropped_tokens=dropped_tokens)
 
 
-def price_usage(
-    usage: Usage, model: str, *, timestamp: datetime | None = None,
+def price_requests(
+    requests: Iterable[ApiRequest], model: str, *, timestamp: datetime | None = None,
 ) -> float | None:
-    """Price one ``Usage`` at ``model``'s rate; ``None`` iff ``model`` is unpriced.
+    """Price API requests at ``model``'s rate; ``None`` iff ``model`` is unpriced.
 
-    The public token -> dollar primitive (#675): ``price_trace``, the
+    The public token -> dollar primitive (#675, #682): ``price_trace``, the
     model-switch savings figures (``diagnostics.model_routing`` and the
     duration-outlier rule) and ``diagnostics.parent_workload``'s offload
-    estimate (#707) route through it -- and it routes through ``_cost_of``,
-    so all five usage components -- including the 5m/1h cache-write split -- map to
-    rates on a single path (#646 AC1).
+    estimate route through it -- and it routes through ``_cost_of``, so all five
+    usage components -- including the 5m/1h cache-write split -- map to rates on a
+    single path (#646 AC1), and each request selects its own prompt-length tier.
+    It replaced ``price_usage``, which took one ``Usage`` and so invited pricing a sum.
 
-    **Model-switch counterfactual.** A savings estimate prices the *same* usage at
+    **Model-switch counterfactual.** A savings estimate prices the *same* requests at
     two models: the token mix actually observed, cache reads and writes included, at
-    the alternative model's rates. That deliberately ignores tokenizer differences
-    between model generations, a different turn count on the other model, and
-    per-request levers (context tiers #682, multipliers and surcharges #537-#539).
-    ``diagnostics.parent_workload``'s offload estimate uses a *different*
-    counterfactual on purpose -- a delegated subagent loses the parent's cache, so
-    its alternative side re-prices cache reads as fresh input -- and the two are not
-    meant to converge (#707 routed that estimate's pricing, not its counterfactual,
-    through here).
+    the alternative model's rates, each request tiered on its own prompt at each model.
+    That deliberately ignores tokenizer differences between model generations, a
+    different turn count on the other model, and per-request overlay levers (multipliers
+    and surcharges #537-#539). ``diagnostics.parent_workload``'s offload estimate uses a
+    *different* counterfactual on purpose -- a delegated subagent loses the parent's
+    cache, so its alternative side re-prices cache reads as fresh input -- and the two
+    are not meant to converge.
     """
-    breakdown = ModelTokenBreakdown(model=model)
-    _accumulate_usage(breakdown, usage)
-    return _cost_of(breakdown, timestamp)
+    return _cost_of(model, requests, timestamp)
 
 
 def price_trace(
     trace: SubagentTrace, *, timestamp: datetime | None = None,
 ) -> float | None:
-    """Price one subagent trace's deduplicated per-turn usage at its model's rate.
+    """Price one subagent trace's deduplicated turns at its model's rate, one request per turn.
 
     Returns ``None`` only when the trace's model is unpriced. **Precondition:**
     ``trace_counts_as_spend(trace)`` -- a trace that does not count as spend raises
@@ -347,7 +407,7 @@ def price_trace(
             f"price_trace: trace {trace.agent_id!r} does not count as spend "
             f"(model={trace.model!r}); check trace_counts_as_spend first"
         )
-    return price_usage(trace_spend_usage(trace), trace.model, timestamp=timestamp)
+    return price_requests(trace_spend_requests(trace), trace.model, timestamp=timestamp)
 
 
 def _aggregate_totals(
@@ -432,6 +492,7 @@ def compute_token_metrics(
         (origin="parent"), cost, and cache efficiency.
     """
     by_model: dict[tuple[str, str], ModelTokenBreakdown] = {}
+    requests_by_row: dict[tuple[str, str], list[ApiRequest]] = {}
     api_call_count = 0
 
     for msg in messages:
@@ -449,8 +510,10 @@ def compute_token_metrics(
             by_model[key] = breakdown
 
         _accumulate_usage(breakdown, usage)
+        # Each message is one API request: priced on its own prompt-length tier (#682).
+        requests_by_row.setdefault(key, []).append(ApiRequest.of(usage))
 
-    _populate_costs(by_model, timestamp)
+    _populate_costs(by_model, requests_by_row, timestamp)
     rows = list(by_model.values())
     (
         total_input, total_output, total_cache_creation, total_cache_read,
@@ -474,8 +537,9 @@ def compute_subagent_token_metrics(
 ) -> list[ModelTokenBreakdown]:
     """Aggregate subagent-trace token usage into per-model breakdowns.
 
-    Uses ``trace_spend_usage`` -- the trace-level aggregate with turns already
-    counted elsewhere in the session removed (#701) -- as the
+    Tokens come from ``trace_spend_usage`` -- the trace-level sum with turns already
+    counted elsewhere in the session removed (#701); dollars from ``price_trace``,
+    which prices the same turns one request at a time (#682). This is the
     authoritative source — per-call ``SubagentToolCall.usage`` is left
     at zero by the parser (see traces/parser.py docstring). Skips
     traces that do not count as spend (``trace_counts_as_spend``: no model, or
@@ -503,8 +567,9 @@ def compute_subagent_token_metrics(
             breakdown = ModelTokenBreakdown(model=trace.model, origin="subagent")
             by_model[key] = breakdown
         _accumulate_usage(breakdown, usage)
-        # Priced per trace and summed (not aggregate-then-price), so per-agent cost
-        # reconciles with this row by construction (#646 AC8; see ``_cost_of``).
+        # Priced per trace -- one request per turn (#682) -- and summed, never
+        # aggregate-then-price, so per-agent cost reconciles with this row by
+        # construction (#646 AC8; see ``_cost_of``).
         cost = price_trace(trace, timestamp=timestamp)
         if cost is None:
             breakdown.unpriced_tokens += usage.total_tokens

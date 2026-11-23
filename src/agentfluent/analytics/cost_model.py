@@ -18,7 +18,7 @@ unchanged session while the genai-prices pin stays put:
 - where spend comes from or how it is folded (trace sourcing, the session fold, turn dedup);
 - the local overlay levers on the base ⊕ overlay seam (``pricing`` module docstring): 1h cache
   writes, fast mode, service tier, data residency, server-tool surcharges;
-- date-aware rate selection;
+- date-aware rate selection, and prompt-length tier selection (#682);
 - a rate-altering edit to ``pricing._KNOWN_MODELS``, ``pricing._ALIASES`` or
   ``pricing._RESIDUAL`` -- one that changes the price of an id that was already priced.
 
@@ -27,15 +27,24 @@ coverage already discloses unpriced tokens. A change that is provably price-neut
 either. Bumping is a review-time rule: no test can force it.
 ``tests/unit/test_cost_model.py::test_cost_method_tripwire`` pins fixture costs together with this
 constant, so it fails when costs move on the code paths its fixtures exercise and prompts the
-bump decision; re-pinning the costs without bumping still passes. Its fixtures carry no 1h cache
-writes, fast mode (``speed``), ``service_tier``, server-tool use, ``inference_geo``, or
+bump decision; re-pinning the costs without bumping still passes. Its fixtures carry tiered
+requests on both sides of a threshold (#682) but no 1h cache writes, fast mode (``speed``),
+``service_tier``, server-tool use, ``inference_geo``, or
 fork-duplicated message ids, so changes to those levers move no pinned cost.
 
 Version history:
 
-- ``1`` -- the v0.12.0 cost method: per-agent spend priced from subagent traces (#646), fork-
-  replayed turns counted once (#701), session totals fold every trace the session owns (#648),
-  1h cache writes derived as 2x input (#534). Envelopes from earlier releases carry no stamp.
+- ``1`` -- pre-release v0.12.0 development builds on ``main`` only (never in a tagged release;
+  the dogfood runner wrote envelopes stamped ``1``): per-agent spend priced from subagent traces
+  (#646), fork-replayed turns counted once (#701), session totals fold every trace the session
+  owns (#648), 1h cache writes derived as 2x input (#534). Envelopes from earlier releases carry
+  no stamp.
+- ``2`` -- the first released stamp (v0.12.0). Adds prompt-length (context) tiers priced per
+  request (#682, D067): every dollar figure
+  prices one API request at a time, and a request whose prompt (``input + cache_creation +
+  cache_read``) exceeds its model's threshold prices at the tier rate. Moves cost upward for
+  ``claude-haiku-5-5`` requests over 100K, ``claude-sonnet-4-5-20250929`` requests over 200K,
+  and ``claude-opus-4-6`` / ``claude-sonnet-4-6`` requests over 200K dated before 2026-03-13.
 """
 
 from __future__ import annotations
@@ -44,7 +53,7 @@ from pydantic import BaseModel
 
 from agentfluent.analytics._genai_source import installed_version
 
-COST_METHOD_VERSION = 1
+COST_METHOD_VERSION = 2
 """How AgentFluent computes cost, beyond the upstream rate table. See the module docstring for
 when to bump it."""
 

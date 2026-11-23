@@ -12,9 +12,8 @@ from collections import defaultdict
 from collections.abc import Callable, Iterator
 
 from agentfluent.agents.models import AgentInvocation
-from agentfluent.analytics.tokens import trace_spend
+from agentfluent.analytics.tokens import ApiRequest, trace_spend
 from agentfluent.config.models import Severity
-from agentfluent.core.session import Usage
 from agentfluent.diagnostics.models import DiagnosticSignal, SignalType
 
 # Error keywords and their severity. "blocked"/"permission denied" are critical;
@@ -209,7 +208,9 @@ def _detect_outliers(
     signal_type: SignalType,
     format_message: Callable[[AgentInvocation, float, float, float], str],
     extra_detail: Callable[[AgentInvocation], dict[str, object]] | None = None,
-    spend_usage: Callable[[AgentInvocation], Usage | None] | None = None,
+    spend_requests: (
+        Callable[[AgentInvocation], tuple[ApiRequest, ...] | None] | None
+    ) = None,
 ) -> list[DiagnosticSignal]:
     """Generic per-agent-type outlier detector (Tukey IQR rule).
 
@@ -222,8 +223,8 @@ def _detect_outliers(
     Callers supply ``format_message(inv, value, q3, iqr)`` and may supply
     ``extra_detail(inv)`` to merge per-invocation keys into the signal's
     ``detail`` (e.g. the duration path attaches the current model the
-    correlator needs to name a concrete model switch), and ``spend_usage(inv)``
-    to attach the invocation's trace spend for pricing it (#675).
+    correlator needs to name a concrete model switch), and ``spend_requests(inv)``
+    to attach the invocation's trace spend, per request, for pricing it (#675, #682).
     """
     signals: list[DiagnosticSignal] = []
 
@@ -272,7 +273,7 @@ def _detect_outliers(
                 invocation_id=inv.invocation_id,
                 message=format_message(inv, val, q3, iqr),
                 detail=detail,
-                spend_usage=spend_usage(inv) if spend_usage is not None else None,
+                spend_requests=spend_requests(inv) if spend_requests is not None else None,
             ))
 
     return signals
@@ -318,14 +319,15 @@ def _extract_duration_outliers(invocations: list[AgentInvocation]) -> list[Diagn
             "current_model": inv.trace.model if inv.trace else None,
             "total_tokens": inv.total_tokens,
         },
-        spend_usage=_trace_spend_usage,
+        spend_requests=_trace_spend_requests,
     )
 
 
-def _trace_spend_usage(inv: AgentInvocation) -> Usage | None:
-    """The invocation's trace spend, or ``None`` when it has none (#675)."""
+def _trace_spend_requests(inv: AgentInvocation) -> tuple[ApiRequest, ...] | None:
+    """The invocation's trace spend, one request per turn, or ``None`` when it has none
+    (#675, #682)."""
     spend = trace_spend(inv.trace)
-    return spend[0] if spend is not None else None
+    return tuple(spend[0]) if spend is not None else None
 
 
 def extract_signals(invocations: list[AgentInvocation]) -> list[DiagnosticSignal]:

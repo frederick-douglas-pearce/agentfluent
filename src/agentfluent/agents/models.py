@@ -83,8 +83,9 @@ class AgentInvocation(BaseModel):
     Retained unchanged under D029 (it has shipped). For spend use
     ``analytics.tokens.trace_spend_usage(trace)`` -- per-turn usage deduplicated
     within the file (#696) and across the session's files (#701), which is what
-    per-agent spend and cost are built from (#646,
-    ``AgentTypeMetrics.spend_tokens``)."""
+    per-agent spend tokens are built from (#646, ``AgentTypeMetrics.spend_tokens``).
+    Per-agent cost prices the same turns one request at a time
+    (``analytics.tokens.trace_spend_requests``, #682)."""
 
     tool_uses: int | None = None
     """Tool calls this invocation made. **One source per invocation (#690):**

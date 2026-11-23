@@ -24,15 +24,25 @@ _TRIPWIRE_SESSIONS = [
     FIXTURES / "session_with_agent.jsonl",
     FIXTURES / "nested_session" / "nested-session-1.jsonl",
     FIXTURES / "parent_workload_session.jsonl",
+    # Prompt-length tiers (#682): haiku-5-5 requests either side of 100K, and an opus-4-6
+    # request over 200K dated before the 2026-03-13 price change.
+    FIXTURES / "session_context_tier.jsonl",
+    FIXTURES / "session_context_tier_dated.jsonl",
 ]
 
 # (COST_METHOD_VERSION, total cost, {(model, origin): cost}, {agent_type: cost}).
+#
+# Version 2 (#682) adds two tiered fixtures. Hand-derived: haiku-5-5 parent row = 0.0094 (a
+# 120K-prompt request at the 5x tier) + 0.00094 (a 60K-prompt request at base) = 0.01034; the
+# 2026-01-15 opus-4-6 request (250K prompt) prices at its >200K tier, 0.415, on top of the
+# 0.13575 the other fixtures put on that row.
 _PINNED = (
-    1,
-    0.21237365,
+    2,
+    0.63771365,
     {
         ("claude-sonnet-4-20250514", "parent"): 0.022125,
-        ("claude-opus-4-6", "parent"): 0.13575,
+        ("claude-opus-4-6", "parent"): 0.55075,
+        ("claude-haiku-5-5", "parent"): 0.01034,
         ("claude-haiku-4-5-20251001", "parent"): 0.000138,
         ("claude-haiku-4-5-20251001", "subagent"): 0.02221065,
         ("claude-opus-4-7", "parent"): 0.03215,

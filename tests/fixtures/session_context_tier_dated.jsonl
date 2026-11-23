@@ -1,0 +1,2 @@
+{"type": "user", "message": {"role": "user", "content": "Review the whole repository"}, "timestamp": "2026-01-15T09:00:00.000Z"}
+{"type": "assistant", "message": {"id": "msg_tier_dated_01", "model": "claude-opus-4-6", "role": "assistant", "content": [{"type": "text", "text": "Review complete."}], "usage": {"input_tokens": 10000, "output_tokens": 2000, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 240000}}, "timestamp": "2026-01-15T09:00:05.000Z"}

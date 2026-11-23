@@ -18,9 +18,10 @@ from agentfluent.analytics.pricing import (
     get_pricing,
 )
 from agentfluent.analytics.tokens import (
+    ApiRequest,
     TokenMetrics,
+    price_requests,
     price_trace,
-    price_usage,
     trace_spend,
 )
 from agentfluent.analytics.tools import ToolMetrics
@@ -121,26 +122,33 @@ def _config(model: str) -> AgentConfig:
     )
 
 
-class TestPriceUsage:
+def _one(usage: Usage) -> list[ApiRequest]:
+    return [ApiRequest.of(usage)]
+
+
+class TestPriceRequests:
     def test_prices_every_usage_component_including_cache_split(self) -> None:
-        assert price_usage(_SPEND, MODEL_OPUS, timestamp=None) == pytest.approx(
+        assert price_requests(_one(_SPEND), MODEL_OPUS, timestamp=None) == pytest.approx(
             _manual_cost(_SPEND, MODEL_OPUS),
         )
 
     def test_unpriced_model_is_none(self) -> None:
-        assert price_usage(_SPEND, "claude-mystery-model-9", timestamp=None) is None
+        assert price_requests(_one(_SPEND), "claude-mystery-model-9", timestamp=None) is None
 
-    def test_price_trace_is_price_usage_at_the_trace_model(self) -> None:
+    def test_price_trace_is_price_requests_at_the_trace_model(self) -> None:
         trace = _trace(MODEL_SONNET)
         assert price_trace(trace) == pytest.approx(
-            price_usage(_SPEND, MODEL_SONNET, timestamp=None),
+            price_requests(_one(_SPEND), MODEL_SONNET, timestamp=None),
         )
 
     def test_trace_spend_is_none_without_a_spend_trace(self) -> None:
         assert trace_spend(None) is None
         assert trace_spend(_trace(None)) is None
         assert trace_spend(_trace("<synthetic>")) is None
-        assert trace_spend(_trace(MODEL_OPUS)) == (_SPEND, MODEL_OPUS)
+        # A turn-less (test-built) trace: its aggregate is one request at the base tier.
+        assert trace_spend(_trace(MODEL_OPUS)) == (
+            [ApiRequest(usage=_SPEND, prompt_tokens=0)], MODEL_OPUS,
+        )
 
 
 class TestEstimateModelSavings:
@@ -190,7 +198,7 @@ class TestEstimateModelSavings:
         assert estimate_model_savings(invs, "claude-mystery-model-9") is None
 
     def test_savings_never_negative(self) -> None:
-        estimate = estimate_usage_savings([(_SPEND, MODEL_HAIKU)], MODEL_OPUS)
+        estimate = estimate_usage_savings([(_one(_SPEND), MODEL_HAIKU)], MODEL_OPUS)
         assert estimate is not None
         assert estimate.savings_usd == 0.0
 
@@ -307,7 +315,7 @@ def _duration_signal(spend: Usage | None, trace_model: str | None) -> Diagnostic
         agent_type="pm",
         message="slow",
         detail={"current_model": trace_model, "total_tokens": 500_000},
-        spend_usage=spend,
+        spend_requests=tuple(_one(spend)) if spend is not None else None,
     )
 
 
@@ -332,12 +340,12 @@ class TestDurationOutlierSavings:
         assert "claude-sonnet" in recs[0].action
         assert "$" not in recs[0].action
 
-    def test_spend_usage_is_not_serialized(self) -> None:
+    def test_spend_requests_is_not_serialized(self) -> None:
         signal = _duration_signal(_SPEND, MODEL_OPUS)
-        assert "spend_usage" not in signal.model_dump()
-        assert "spend_usage" not in json.loads(signal.model_dump_json())
+        assert "spend_requests" not in signal.model_dump()
+        assert "spend_requests" not in json.loads(signal.model_dump_json())
         reloaded = DiagnosticSignal.model_validate_json(signal.model_dump_json())
-        assert reloaded.spend_usage is None
+        assert reloaded.spend_requests is None
 
     def test_extractor_attaches_spend_only_for_spend_traces(self) -> None:
         # Trace-linked (duration_reliable) invocations; the last is the outlier.
@@ -355,12 +363,12 @@ class TestDurationOutlierSavings:
 
         signals = run(MODEL_OPUS)
         assert len(signals) == 1
-        assert signals[0].spend_usage == _SPEND
+        assert signals[0].spend_requests == (ApiRequest(usage=_SPEND, prompt_tokens=0),)
         assert signals[0].detail["current_model"] == MODEL_OPUS
 
         synthetic = run("<synthetic>")
         assert len(synthetic) == 1
-        assert synthetic[0].spend_usage is None
+        assert synthetic[0].spend_requests is None
 
 
 class TestSimpleBranchCoverage:
