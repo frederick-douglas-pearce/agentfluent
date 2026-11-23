@@ -171,8 +171,9 @@ class TokenMetricsDelta(BaseModel):
     by_model: list[ModelTokenDelta] = Field(default_factory=list)
     """One entry per model that appears in either baseline or current. A
     model present on only one side has zero tokens and cost on the missing
-    side; its ``*_unpriced_tokens`` there is ``0`` on a side that carries the
-    field and ``None`` (unknown) on a legacy side."""
+    side; its ``*_unpriced_tokens`` there is ``0`` on a field-bearing side and
+    ``None`` (unknown) on a side that is not
+    (:func:`agentfluent.analytics.tokens.side_unpriced_tokens` is ``None``)."""
 
     baseline_unpriced_tokens: int | None = None
     """Baseline tokens whose model had no price, summed over the raw

@@ -1874,10 +1874,14 @@ since subtracting the priced parts would read a pricing gap as a cost
 change. Its JSON carries `baseline_unpriced_tokens` and
 `current_unpriced_tokens` on each `by_model` row and on `token_metrics`,
 where the total is summed over the raw rows exactly as `report` sums
-it. A value is `null` (unknown, never 0) when that side's envelope
-predates the field or a count can't be read: missing, null, negative,
-fractional or non-numeric (a whole-number float such as `10.0` is
-read). (#723) Upgrading agentfluent usually adds the missing price.
+it. A row's value is `null` (unknown, never 0) when its count can't
+be read: missing, null, negative, fractional or non-numeric, or the
+row is not an object (a whole-number float such as `10.0` is read).
+A side's `token_metrics` total, and the value for a model missing
+from that side, are also `null` when its `by_model` is missing, not a
+list, empty although the side has tokens, or has any row whose count
+can't be read. (#723) Upgrading agentfluent usually adds the missing
+price.
 
 **Related:** [`cost_coverage`](#cost_coverage), [`total_cost`](#total_cost)
 

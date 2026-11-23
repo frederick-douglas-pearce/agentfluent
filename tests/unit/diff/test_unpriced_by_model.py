@@ -12,6 +12,7 @@ import pytest
 
 from agentfluent.analytics.tokens import (
     row_unpriced_tokens,
+    serialized_total_tokens,
     side_unpriced_tokens,
     sum_unpriced_tokens,
 )
@@ -105,6 +106,21 @@ class TestSumUnpricedTokens:
 
     def test_a_non_mapping_row_makes_the_sum_unknown(self) -> None:
         assert sum_unpriced_tokens([{"unpriced_tokens": 10}, "m"]) is None
+
+
+class TestSerializedTotalTokens:
+    def test_sums_the_four_components(self) -> None:
+        block = {
+            "input_tokens": 1,
+            "output_tokens": 20,
+            "cache_creation_input_tokens": 300,
+            "cache_read_input_tokens": 4000,
+            "cost": 9.0,
+        }
+        assert serialized_total_tokens(block) == 4321
+
+    def test_missing_or_null_components_count_as_zero(self) -> None:
+        assert serialized_total_tokens({"input_tokens": 5, "output_tokens": None}) == 5
 
 
 class TestSideUnpricedTokens:

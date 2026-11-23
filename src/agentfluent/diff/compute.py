@@ -21,6 +21,7 @@ from agentfluent.analytics.cost_model import CostModelStamp
 from agentfluent.analytics.tokens import (
     Origin,
     row_unpriced_tokens,
+    serialized_total_tokens,
     side_unpriced_tokens,
 )
 from agentfluent.config.models import SEVERITY_RANK, Severity
@@ -289,8 +290,8 @@ def _diff_token_metrics(
     baseline_tm = baseline.get("token_metrics") or {}
     current_tm = current.get("token_metrics") or {}
 
-    baseline_total_tokens = _sum_token_components(baseline_tm)
-    current_total_tokens = _sum_token_components(current_tm)
+    baseline_total_tokens = serialized_total_tokens(baseline_tm)
+    current_total_tokens = serialized_total_tokens(current_tm)
 
     baseline_cost = float(baseline_tm.get("total_cost", 0.0) or 0.0)
     current_cost = float(current_tm.get("total_cost", 0.0) or 0.0)
@@ -330,18 +331,6 @@ def _diff_token_metrics(
         by_model=by_model,
         baseline_unpriced_tokens=baseline_unpriced,
         current_unpriced_tokens=current_unpriced,
-    )
-
-
-def _sum_token_components(d: dict[str, Any]) -> int:
-    # ``TokenMetrics.total_tokens`` and ``ModelTokenBreakdown.total_tokens``
-    # are ``@property`` accessors; Pydantic's ``model_dump`` skips them.
-    # Reconstruct from the four serialized fields shared by both shapes.
-    return (
-        int(d.get("input_tokens", 0) or 0)
-        + int(d.get("output_tokens", 0) or 0)
-        + int(d.get("cache_creation_input_tokens", 0) or 0)
-        + int(d.get("cache_read_input_tokens", 0) or 0)
     )
 
 
@@ -393,8 +382,8 @@ def _diff_by_model(
     for model, origin in keys:
         b = baseline_map.get((model, origin)) or {}
         c = current_map.get((model, origin)) or {}
-        b_tokens = _sum_token_components(b)
-        c_tokens = _sum_token_components(c)
+        b_tokens = serialized_total_tokens(b)
+        c_tokens = serialized_total_tokens(c)
         b_cost = float(b.get("cost", 0.0) or 0.0)
         c_cost = float(c.get("cost", 0.0) or 0.0)
         deltas.append(

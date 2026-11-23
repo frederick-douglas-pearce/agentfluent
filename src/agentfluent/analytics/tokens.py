@@ -80,16 +80,21 @@ def side_unpriced_tokens(token_metrics: Mapping[str, Any]) -> int | None:
     rows = token_metrics.get("by_model")
     if not isinstance(rows, list):
         return None
-    if not rows and _serialized_total_tokens(token_metrics) > 0:
+    if not rows and serialized_total_tokens(token_metrics) > 0:
         return None
     return sum_unpriced_tokens(rows)
 
 
-def _serialized_total_tokens(token_metrics: Mapping[str, Any]) -> int:
-    # ``total_tokens`` is a property that ``model_dump`` skips; rebuild it
-    # from the four serialized components.
+def serialized_total_tokens(serialized: Mapping[str, Any]) -> int:
+    """Total tokens of a serialized ``token_metrics`` block or ``by_model`` row.
+
+    ``TokenMetrics.total_tokens`` and ``ModelTokenBreakdown.total_tokens`` are
+    properties that ``model_dump`` skips, so the total is rebuilt from the
+    four serialized components both shapes share; a missing or null
+    component counts as ``0``. The one copy ``report`` and ``diff`` use.
+    """
     return sum(
-        int(token_metrics.get(key, 0) or 0)
+        int(serialized.get(key, 0) or 0)
         for key in (
             "input_tokens",
             "output_tokens",
