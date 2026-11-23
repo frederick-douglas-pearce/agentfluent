@@ -187,6 +187,20 @@ class TestDiffByModelUnpriced:
         )
         assert rows[(_UNPRICED, "parent")].baseline_unpriced_tokens is None
 
+    def test_model_absent_on_a_legacy_current_side_is_unknown(self) -> None:
+        # Mirrors the baseline case: each side's field-bearing flag is wired
+        # from that side's own count, not assumed.
+        rows = _by_model(
+            [_row(_PRICED, cost=1.0, unpriced=0), _row(_UNPRICED, cost=0.0, unpriced=1000)],
+            [_row(_PRICED, cost=1.0)],
+        )
+        assert rows[(_UNPRICED, "parent")].current_unpriced_tokens is None
+        assert rows[(_UNPRICED, "parent")].baseline_unpriced_tokens == 1000
+
+    def test_model_absent_on_a_field_bearing_current_side_is_a_measured_zero(self) -> None:
+        rows = _by_model([_row(_UNPRICED, cost=0.0, unpriced=1000)], [])
+        assert rows[(_UNPRICED, "parent")].current_unpriced_tokens == 0
+
     def test_v1_dict_shaped_side_is_unknown(self) -> None:
         baseline = {_PRICED: {"input_tokens": 100, "cost": 1.0, "unpriced_tokens": 0}}
         rows = _by_model(baseline, [_row(_UNPRICED, cost=0.0, unpriced=1000)])

@@ -152,6 +152,17 @@ def test_each_cell_uses_its_own_sides_token_total() -> None:
     assert "no price" not in line
 
 
+def test_current_cell_uses_its_own_sides_token_total() -> None:
+    # Current 400 of 1000 unpriced is partial; measured against the baseline
+    # side's 300 tokens it would wrongly read as wholly unpriced.
+    line = _row_line(_render([_unpriced_row(
+        baseline_cost=1.0, current_cost=3.0, baseline_unpriced=0, current_unpriced=400,
+        tokens=300, current_tokens=1000,
+    )]), "claude-opus-4-7")
+    assert "$3.00 (partial)" in line
+    assert "no price" not in line
+
+
 def test_current_side_marked_alone() -> None:
     line = _row_line(_render([_unpriced_row(
         baseline_cost=1.0, current_cost=3.0, baseline_unpriced=0, current_unpriced=400,
@@ -223,6 +234,15 @@ def test_total_cost_row_uses_each_sides_token_total() -> None:
         baseline_tokens=1000, current_tokens=300,
     )
     assert "$1.00 (partial)" in line
+    assert "no price" not in line
+
+
+def test_total_cost_row_current_uses_its_own_token_total() -> None:
+    line = _render_totals(
+        baseline_cost=1.0, current_cost=3.0, baseline_unpriced=0, current_unpriced=400,
+        baseline_tokens=300, current_tokens=1000,
+    )
+    assert "$3.00 (partial)" in line
     assert "no price" not in line
 
 
