@@ -27,9 +27,8 @@ from agentfluent.cli.formatters.helpers import (
     average_score,
     axis_label,
     format_agent_duration_cell,
-    format_cost,
     format_date,
-    format_row_cost,
+    format_priced_cost,
     format_size,
     format_tokens,
     render_environment_warnings,
@@ -178,10 +177,10 @@ def format_analysis_table(
     token_table.add_row("Total tokens", format_tokens(tm.total_tokens))
     token_table.add_row(
         "Total cost (API rate)",
-        format_row_cost(
+        format_priced_cost(
             tm.total_cost,
             total_tokens=tm.total_tokens,
-            unpriced_tokens=sum(b.unpriced_tokens for b in tm.by_model),
+            unpriced_tokens=tm.unpriced_tokens,
         ),
     )
     token_table.add_row("Cache efficiency", f"{tm.cache_efficiency}%")
@@ -226,7 +225,7 @@ def format_analysis_table(
                 breakdown.model,
                 breakdown.origin,
                 format_tokens(breakdown.total_tokens),
-                format_row_cost(
+                format_priced_cost(
                     breakdown.cost,
                     total_tokens=breakdown.total_tokens,
                     unpriced_tokens=breakdown.unpriced_tokens,
@@ -330,7 +329,11 @@ def format_analysis_table(
                 s.session_path.name,
                 session_kind_label(s.session_kind) or SESSION_KIND_UNKNOWN_CELL,
                 format_tokens(s.token_metrics.total_tokens),
-                format_cost(s.token_metrics.total_cost),
+                format_priced_cost(
+                    s.token_metrics.total_cost,
+                    total_tokens=s.token_metrics.total_tokens,
+                    unpriced_tokens=s.token_metrics.unpriced_tokens,
+                ),
                 str(s.model_turns),
                 str(s.tool_metrics.total_tool_calls),
                 str(s.agent_metrics.total_invocations),

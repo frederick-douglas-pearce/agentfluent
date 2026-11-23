@@ -23,6 +23,13 @@ logger = logging.getLogger(__name__)
 
 Origin = Literal["parent", "subagent"]
 
+NO_PRICE = "no price"
+"""Rendered in place of a dollar figure whose model had no price (#715).
+
+Distinct from the ``-`` the agent table uses for *unknown*: an unpriced
+figure is known to be missing, and ``$0.00`` would read as free. Lives
+here so both ``cli`` and ``diagnostics`` render the same token."""
+
 
 @dataclass
 class ModelTokenBreakdown:
@@ -100,6 +107,14 @@ class TokenMetrics:
             + self.cache_creation_input_tokens
             + self.cache_read_input_tokens
         )
+
+    @property
+    def unpriced_tokens(self) -> int:
+        """Unpriced tokens summed over ``by_model`` (#715).
+
+        A plain property, not a field: it is not serialized, so the JSON
+        envelope is unchanged (the same reason ``total_tokens`` is one)."""
+        return sum(row.unpriced_tokens for row in self.by_model)
 
 
 def _accumulate_usage(breakdown: ModelTokenBreakdown, usage: Usage) -> None:

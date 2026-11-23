@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from rich.console import Console
 from rich.markup import escape
 
+from agentfluent.analytics.tokens import NO_PRICE as NO_PRICE  # re-export (#715)
 from agentfluent.config.models import Severity
 from agentfluent.diagnostics.models import Axis
 
@@ -135,14 +136,7 @@ def format_cost(cost: float) -> str:
     return f"${cost:.2f}"
 
 
-NO_PRICE = "no price"
-"""Rendered in place of a dollar figure whose model had no price (#715).
-
-Distinct from the ``-`` the agent table uses for *unknown*: an unpriced
-figure is known to be missing, and ``$0.00`` would read as free."""
-
-
-def format_row_cost(
+def format_priced_cost(
     cost: float, *, total_tokens: int, unpriced_tokens: int | None,
 ) -> str:
     """Format a cost whose tokens may be partly or wholly unpriced (#715).

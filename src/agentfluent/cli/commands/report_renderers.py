@@ -23,7 +23,7 @@ from agentfluent.cli.formatters.helpers import (
     GLOBAL_AGENT_LABEL,
     format_agent_duration_cell,
     format_cost,
-    format_row_cost,
+    format_priced_cost,
     format_tokens,
 )
 from agentfluent.config.models import Severity
@@ -123,7 +123,7 @@ def render_summary(data: dict[str, Any]) -> str:
         f"- **Project:** {project}",
         f"- **Sessions analyzed:** {session_count}",
         f"- **Window:** {_format_window(data.get('window'))}",
-        "- **Total cost (API rate):** " + format_row_cost(
+        "- **Total cost (API rate):** " + format_priced_cost(
             total_cost,
             total_tokens=total_tokens,
             unpriced_tokens=_unpriced_tokens(tm.get("by_model") or []),
@@ -170,7 +170,7 @@ def render_token_metrics(data: dict[str, Any]) -> str:
             format_tokens(r.get("input_tokens", 0)),
             format_tokens(r.get("output_tokens", 0)),
             format_tokens(cache),
-            format_row_cost(
+            format_priced_cost(
                 r.get("cost", 0.0),
                 total_tokens=_total_tokens(r),
                 unpriced_tokens=_unpriced_tokens([r]),
@@ -187,7 +187,7 @@ def render_token_metrics(data: dict[str, Any]) -> str:
         f"**{format_tokens(tm.get('input_tokens', 0))}**",
         f"**{format_tokens(tm.get('output_tokens', 0))}**",
         f"**{format_tokens(total_cache)}**",
-        "**" + format_row_cost(
+        "**" + format_priced_cost(
             tm.get("total_cost", 0.0),
             total_tokens=_total_tokens(tm),
             unpriced_tokens=_unpriced_tokens(by_model),

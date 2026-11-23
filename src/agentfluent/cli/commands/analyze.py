@@ -17,7 +17,7 @@ from agentfluent.analytics.pipeline import AnalysisResult, analyze_sessions
 from agentfluent.cli._time_args import parse_time_window
 from agentfluent.cli.exit_codes import EXIT_NO_DATA, EXIT_USER_ERROR
 from agentfluent.cli.formatters.helpers import (
-    format_cost,
+    format_priced_cost,
     format_tokens,
     render_environment_warnings,
 )
@@ -213,9 +213,14 @@ def _print_quiet(result: AnalysisResult, project_name: str) -> None:
     tm = result.token_metrics
     am = result.agent_metrics
     signal_count = len(result.diagnostics.signals) if result.diagnostics else 0
+    cost = format_priced_cost(
+        tm.total_cost,
+        total_tokens=tm.total_tokens,
+        unpriced_tokens=tm.unpriced_tokens,
+    )
     console.print(
         f"Project {project_name}: "
-        f"{format_cost(tm.total_cost)} cost, "
+        f"{cost} cost, "
         f"{format_tokens(tm.total_tokens)} tokens, "
         f"{am.total_invocations} agent invocations, "
         f"{signal_count} diagnostic signals"
