@@ -18,6 +18,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from agentfluent.analytics.tokens import (
+    serialized_total_tokens,
+    side_unpriced_tokens,
+    sum_unpriced_tokens,
+)
 from agentfluent.cli.formatters.coverage import CoverageFooter, cost_coverage_footer
 from agentfluent.cli.formatters.helpers import (
     GLOBAL_AGENT_LABEL,
@@ -37,30 +42,6 @@ SEVERITY_ORDER: tuple[Severity, ...] = (
     Severity.WARNING,
     Severity.INFO,
 )
-
-
-def _unpriced_tokens(rows: list[dict[str, Any]]) -> int | None:
-    """Sum ``unpriced_tokens`` over ``by_model`` rows (#715).
-
-    ``None`` when any row lacks the field -- a pre-v0.12.0 envelope, where
-    whether a ``0.0`` cost was unpriced is unknown, so it renders as before.
-    """
-    if any("unpriced_tokens" not in row for row in rows):
-        return None
-    return sum(int(row["unpriced_tokens"]) for row in rows)
-
-
-def _total_tokens(row: dict[str, Any]) -> int:
-    """Sum the four token components; pydantic's ``model_dump`` skips the
-    ``total_tokens`` ``@property`` accessor."""
-    # int(...) at the helper boundary satisfies mypy-strict on the
-    # ``dict[str, Any]`` source; callsites stay coercion-free.
-    return int(
-        row.get("input_tokens", 0)
-        + row.get("output_tokens", 0)
-        + row.get("cache_creation_input_tokens", 0)
-        + row.get("cache_read_input_tokens", 0),
-    )
 
 
 def _avg_spend_tokens_per_invocation(row: dict[str, Any]) -> float | None:
@@ -112,7 +93,7 @@ def render_summary(data: dict[str, Any]) -> str:
     tm = data.get("token_metrics") or {}
     diag_version = data.get("diagnostics_version")
 
-    total_tokens = _total_tokens(tm)
+    total_tokens = serialized_total_tokens(tm)
     total_cost = tm.get("total_cost", 0.0)
     input_tokens = tm.get("input_tokens", 0)
     output_tokens = tm.get("output_tokens", 0)
@@ -126,7 +107,7 @@ def render_summary(data: dict[str, Any]) -> str:
         "- **Total cost (API rate):** " + format_priced_cost(
             total_cost,
             total_tokens=total_tokens,
-            unpriced_tokens=_unpriced_tokens(tm.get("by_model") or []),
+            unpriced_tokens=side_unpriced_tokens(tm),
         ),
         (
             f"- **Total tokens:** {format_tokens(total_tokens)} "
@@ -172,8 +153,8 @@ def render_token_metrics(data: dict[str, Any]) -> str:
             format_tokens(cache),
             format_priced_cost(
                 r.get("cost", 0.0),
-                total_tokens=_total_tokens(r),
-                unpriced_tokens=_unpriced_tokens([r]),
+                total_tokens=serialized_total_tokens(r),
+                unpriced_tokens=sum_unpriced_tokens([r]),
             ),
         ])
 
@@ -189,8 +170,8 @@ def render_token_metrics(data: dict[str, Any]) -> str:
         f"**{format_tokens(total_cache)}**",
         "**" + format_priced_cost(
             tm.get("total_cost", 0.0),
-            total_tokens=_total_tokens(tm),
-            unpriced_tokens=_unpriced_tokens(by_model),
+            total_tokens=serialized_total_tokens(tm),
+            unpriced_tokens=side_unpriced_tokens(tm),
         ) + "**",
     ])
 

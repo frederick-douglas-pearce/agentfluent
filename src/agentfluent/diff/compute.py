@@ -18,7 +18,12 @@ from typing import Any
 from pydantic import ValidationError
 
 from agentfluent.analytics.cost_model import CostModelStamp
-from agentfluent.analytics.tokens import Origin
+from agentfluent.analytics.tokens import (
+    Origin,
+    row_unpriced_tokens,
+    serialized_total_tokens,
+    side_unpriced_tokens,
+)
 from agentfluent.config.models import SEVERITY_RANK, Severity
 from agentfluent.core.filtering import WindowMetadata
 from agentfluent.diagnostics.models import Axis, SignalType
@@ -285,8 +290,8 @@ def _diff_token_metrics(
     baseline_tm = baseline.get("token_metrics") or {}
     current_tm = current.get("token_metrics") or {}
 
-    baseline_total_tokens = _sum_token_components(baseline_tm)
-    current_total_tokens = _sum_token_components(current_tm)
+    baseline_total_tokens = serialized_total_tokens(baseline_tm)
+    current_total_tokens = serialized_total_tokens(current_tm)
 
     baseline_cost = float(baseline_tm.get("total_cost", 0.0) or 0.0)
     current_cost = float(current_tm.get("total_cost", 0.0) or 0.0)
@@ -301,9 +306,13 @@ def _diff_token_metrics(
     baseline_turns = int(baseline.get("total_model_turns", 0) or 0)
     current_turns = int(current.get("total_model_turns", 0) or 0)
 
+    baseline_unpriced = side_unpriced_tokens(baseline_tm)
+    current_unpriced = side_unpriced_tokens(current_tm)
     by_model = _diff_by_model(
         baseline_tm.get("by_model") or [],
         current_tm.get("by_model") or [],
+        baseline_field_bearing=baseline_unpriced is not None,
+        current_field_bearing=current_unpriced is not None,
     )
 
     return TokenMetricsDelta(
@@ -320,18 +329,8 @@ def _diff_token_metrics(
         current_model_turns=current_turns,
         model_turns_delta=current_turns - baseline_turns,
         by_model=by_model,
-    )
-
-
-def _sum_token_components(d: dict[str, Any]) -> int:
-    # ``TokenMetrics.total_tokens`` and ``ModelTokenBreakdown.total_tokens``
-    # are ``@property`` accessors; Pydantic's ``model_dump`` skips them.
-    # Reconstruct from the four serialized fields shared by both shapes.
-    return (
-        int(d.get("input_tokens", 0) or 0)
-        + int(d.get("output_tokens", 0) or 0)
-        + int(d.get("cache_creation_input_tokens", 0) or 0)
-        + int(d.get("cache_read_input_tokens", 0) or 0)
+        baseline_unpriced_tokens=baseline_unpriced,
+        current_unpriced_tokens=current_unpriced,
     )
 
 
@@ -369,7 +368,13 @@ def _normalize_by_model(
 def _diff_by_model(
     baseline: dict[str, Any] | list[Any],
     current: dict[str, Any] | list[Any],
+    *,
+    baseline_field_bearing: bool,
+    current_field_bearing: bool,
 ) -> list[ModelTokenDelta]:
+    """Per-``(model, origin)`` deltas. ``*_field_bearing`` says whether each
+    side carries ``unpriced_tokens`` (:func:`side_unpriced_tokens` is not
+    ``None``), which decides an absent row's count (#723)."""
     baseline_map = _normalize_by_model(baseline)
     current_map = _normalize_by_model(current)
     keys = sorted(set(baseline_map.keys()) | set(current_map.keys()))
@@ -377,8 +382,8 @@ def _diff_by_model(
     for model, origin in keys:
         b = baseline_map.get((model, origin)) or {}
         c = current_map.get((model, origin)) or {}
-        b_tokens = _sum_token_components(b)
-        c_tokens = _sum_token_components(c)
+        b_tokens = serialized_total_tokens(b)
+        c_tokens = serialized_total_tokens(c)
         b_cost = float(b.get("cost", 0.0) or 0.0)
         c_cost = float(c.get("cost", 0.0) or 0.0)
         deltas.append(
@@ -391,9 +396,27 @@ def _diff_by_model(
                 baseline_cost=b_cost,
                 current_cost=c_cost,
                 cost_delta=c_cost - b_cost,
+                baseline_unpriced_tokens=_side_unpriced(
+                    baseline_map.get((model, origin)), baseline_field_bearing,
+                ),
+                current_unpriced_tokens=_side_unpriced(
+                    current_map.get((model, origin)), current_field_bearing,
+                ),
             ),
         )
     return deltas
+
+
+def _side_unpriced(row: dict[str, Any] | None, field_bearing: bool) -> int | None:
+    """One side's unpriced count for a ``(model, origin)`` key (#723).
+
+    A present row reports its own count (``None`` if missing or malformed);
+    an absent row is a measured ``0`` on a field-bearing side and unknown on a
+    legacy one -- the same contract as ``_side_spend_tokens`` (#693).
+    """
+    if row is None:
+        return 0 if field_bearing else None
+    return row_unpriced_tokens(row)
 
 
 # ---------------------------------------------------------------------------

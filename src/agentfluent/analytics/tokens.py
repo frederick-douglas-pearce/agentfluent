@@ -8,10 +8,10 @@ cost breakdown and parent-vs-subagent origin attribution.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from agentfluent.analytics.pricing import SYNTHETIC_MODELS, compute_cost, get_pricing
 from agentfluent.core.session import SessionMessage, Usage
@@ -29,6 +29,79 @@ NO_PRICE = "no price"
 Distinct from the ``-`` the agent table uses for *unknown*: an unpriced
 figure is known to be missing, and ``$0.00`` would read as free. Lives
 here so both ``cli`` and ``diagnostics`` render the same token."""
+
+
+def row_unpriced_tokens(row: object) -> int | None:
+    """A serialized ``by_model`` row's ``unpriced_tokens``, or ``None`` if unknown.
+
+    ``None`` when the row is not a mapping, the key is missing (a pre-v0.12.0
+    envelope), or the value is not a non-negative whole number -- a
+    hand-edited envelope reads as unknown instead of crashing ``report`` or
+    ``diff`` (#723). A whole-number float such as ``10.0`` counts as ``10``;
+    a bool, a string, a negative or a fractional value does not.
+    """
+    if not isinstance(row, Mapping):
+        return None
+    value = row.get("unpriced_tokens")
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def sum_unpriced_tokens(rows: Iterable[object]) -> int | None:
+    """Sum ``unpriced_tokens`` over serialized ``by_model`` rows (#715, #723).
+
+    ``None`` when any row's count is unknown (:func:`row_unpriced_tokens`):
+    whether that row's ``0.0`` cost was unpriced cannot be told, so the sum is
+    unknown too.
+    """
+    total = 0
+    for row in rows:
+        count = row_unpriced_tokens(row)
+        if count is None:
+            return None
+        total += count
+    return total
+
+
+def side_unpriced_tokens(token_metrics: Mapping[str, Any]) -> int | None:
+    """A serialized ``token_metrics`` block's total unpriced tokens (#723).
+
+    The one rule ``report`` and ``diff`` share for a whole side, applied to
+    the raw ``by_model`` rows so the two agree on both whether a side is
+    legacy and its count. ``None`` (unknown) when ``by_model`` is missing or
+    not a list (a v1 dict-shaped ``by_model`` predates the field), when it is
+    empty although the side has tokens, or when any row's count is unknown.
+    """
+    rows = token_metrics.get("by_model")
+    if not isinstance(rows, list):
+        return None
+    if not rows and serialized_total_tokens(token_metrics) > 0:
+        return None
+    return sum_unpriced_tokens(rows)
+
+
+def serialized_total_tokens(serialized: Mapping[str, Any]) -> int:
+    """Total tokens of a serialized ``token_metrics`` block or ``by_model`` row.
+
+    ``TokenMetrics.total_tokens`` and ``ModelTokenBreakdown.total_tokens`` are
+    properties that ``model_dump`` skips, so the total is rebuilt from the
+    four serialized components both shapes share; a missing or null
+    component counts as ``0``. The one copy ``report`` and ``diff`` use.
+    """
+    return sum(
+        int(serialized.get(key, 0) or 0)
+        for key in (
+            "input_tokens",
+            "output_tokens",
+            "cache_creation_input_tokens",
+            "cache_read_input_tokens",
+        )
+    )
 
 
 @dataclass
