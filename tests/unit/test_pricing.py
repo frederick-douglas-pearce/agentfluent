@@ -1,6 +1,7 @@
 """Tests for model pricing lookup."""
 
 import logging
+import sys
 from datetime import UTC, datetime
 
 import pytest
@@ -826,11 +827,25 @@ class TestForwardCompatGuard:
         assert rates is not None
         return rates.context_tiers
 
-    def test_tier_comparison_sees_cache_rates(self) -> None:
-        """F3: a dated change to a tier's cache rate alone must change what is compared."""
-        tier = ModelPricing(input=10, output=37.5, cache_creation_5m=12.5, cache_read=1.0)
-        moved = ModelPricing(input=10, output=37.5, cache_creation_5m=12.5, cache_read=0.5)
-        assert ContextTier(200_000, tier) != ContextTier(200_000, moved)
+    def test_tier_comparison_sees_cache_rates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """F3: a dated change to a tier's cache-read rate ALONE changes what ``_tiers`` returns,
+        so ``test_tier_table_dates_only_where_expected`` would see it. Drives ``_tiers`` itself
+        through a patched ``get_pricing`` whose two dates differ only in that one rate."""
+        def priced(tier_cache_read: float) -> ModelPricing:
+            tier = ModelPricing(
+                input=10, output=37.5, cache_creation_5m=12.5, cache_read=tier_cache_read,
+            )
+            return ModelPricing(
+                input=5, output=25, cache_creation_5m=6.25, cache_read=0.5,
+                context_tiers=(ContextTier(threshold=200_000, pricing=tier),),
+            )
+
+        early = datetime(2026, 1, 1, tzinfo=UTC)
+        monkeypatch.setattr(
+            sys.modules[__name__], "get_pricing",
+            lambda _model, when=None: priced(1.0 if when == early else 0.5),
+        )
+        assert self._tiers("m", early) != self._tiers("m", None)
 
     @pytest.mark.parametrize("model", list(_GOLDEN_RATES))
     def test_tier_table_dates_only_where_expected(self, model: str) -> None:

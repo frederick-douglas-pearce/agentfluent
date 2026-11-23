@@ -512,9 +512,11 @@ class TestDiagnosticsPerRequest:
 
     def test_savings_never_tier_on_a_sum_of_turns(self) -> None:
         """F6: two 60K-prompt turns in ONE observation price at the haiku base rate on the
-        alternative side, though their 120K sum would tier -- through the public estimator,
-        the trace path (``invocation_spend``), the duration-outlier signal path and the SDK
-        main-session path."""
+        alternative side, though their 120K sum would tier -- checked as dollars through the
+        public estimator and the trace path (``invocation_spend``). The duration-outlier
+        signal path and the SDK main-session path are checked only as request lists: one
+        request per trace turn (``_trace_spend_requests``) and one observation per message
+        (``_main_session_spend``); their pricing is the estimator already checked here."""
         turns = [_request(60_000), _request(60_000)]
         haiku = get_pricing(HAIKU_55)
         assert haiku is not None
