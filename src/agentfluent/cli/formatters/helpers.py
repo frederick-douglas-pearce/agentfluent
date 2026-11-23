@@ -135,6 +135,31 @@ def format_cost(cost: float) -> str:
     return f"${cost:.2f}"
 
 
+NO_PRICE = "no price"
+"""Rendered in place of a dollar figure whose model had no price (#715).
+
+Distinct from the ``-`` the agent table uses for *unknown*: an unpriced
+figure is known to be missing, and ``$0.00`` would read as free."""
+
+
+def format_row_cost(
+    cost: float, *, total_tokens: int, unpriced_tokens: int | None,
+) -> str:
+    """Format a cost whose tokens may be partly or wholly unpriced (#715).
+
+    ``unpriced_tokens`` is ``None`` when the source predates the field
+    (pre-v0.12.0 envelope), which renders the cost as before. A cost
+    covering no unpriced tokens renders plainly; one whose every token is
+    unpriced renders :data:`NO_PRICE`; anything between is the priced
+    part, marked ``(partial)``.
+    """
+    if unpriced_tokens is None or unpriced_tokens <= 0:
+        return format_cost(cost)
+    if unpriced_tokens >= total_tokens:
+        return NO_PRICE
+    return f"{format_cost(cost)} (partial)"
+
+
 def format_tokens(tokens: int) -> str:
     """Format token count with comma separator."""
     return f"{tokens:,}"

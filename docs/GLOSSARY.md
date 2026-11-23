@@ -1861,7 +1861,9 @@ field is the only way to tell "unpriced" from "free". It is set on
 every `token_metrics.by_model` row and summed into
 [`cost_coverage`](#cost_coverage). Prices are looked up by session
 date, so one model id can be priced in one session and unpriced in
-another. A merged row can therefore be partly unpriced. Upgrading
+another. A merged row can therefore be partly unpriced. `analyze` and
+`report` show a wholly unpriced cost as `no price` and a partly
+unpriced one as `$X (partial)`, never `$0.00` (#715). Upgrading
 agentfluent usually adds the missing price.
 
 **Related:** [`cost_coverage`](#cost_coverage), [`total_cost`](#total_cost)

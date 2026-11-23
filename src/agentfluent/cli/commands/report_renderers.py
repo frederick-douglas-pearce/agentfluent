@@ -23,6 +23,7 @@ from agentfluent.cli.formatters.helpers import (
     GLOBAL_AGENT_LABEL,
     format_agent_duration_cell,
     format_cost,
+    format_row_cost,
     format_tokens,
 )
 from agentfluent.config.models import Severity
@@ -36,6 +37,17 @@ SEVERITY_ORDER: tuple[Severity, ...] = (
     Severity.WARNING,
     Severity.INFO,
 )
+
+
+def _unpriced_tokens(rows: list[dict[str, Any]]) -> int | None:
+    """Sum ``unpriced_tokens`` over ``by_model`` rows (#715).
+
+    ``None`` when any row lacks the field -- a pre-v0.12.0 envelope, where
+    whether a ``0.0`` cost was unpriced is unknown, so it renders as before.
+    """
+    if any("unpriced_tokens" not in row for row in rows):
+        return None
+    return sum(int(row["unpriced_tokens"]) for row in rows)
 
 
 def _total_tokens(row: dict[str, Any]) -> int:
@@ -111,7 +123,11 @@ def render_summary(data: dict[str, Any]) -> str:
         f"- **Project:** {project}",
         f"- **Sessions analyzed:** {session_count}",
         f"- **Window:** {_format_window(data.get('window'))}",
-        f"- **Total cost (API rate):** {format_cost(total_cost)}",
+        "- **Total cost (API rate):** " + format_row_cost(
+            total_cost,
+            total_tokens=total_tokens,
+            unpriced_tokens=_unpriced_tokens(tm.get("by_model") or []),
+        ),
         (
             f"- **Total tokens:** {format_tokens(total_tokens)} "
             f"(input {format_tokens(input_tokens)}, "
@@ -154,7 +170,11 @@ def render_token_metrics(data: dict[str, Any]) -> str:
             format_tokens(r.get("input_tokens", 0)),
             format_tokens(r.get("output_tokens", 0)),
             format_tokens(cache),
-            format_cost(r.get("cost", 0.0)),
+            format_row_cost(
+                r.get("cost", 0.0),
+                total_tokens=_total_tokens(r),
+                unpriced_tokens=_unpriced_tokens([r]),
+            ),
         ])
 
     total_cache = (
@@ -167,7 +187,11 @@ def render_token_metrics(data: dict[str, Any]) -> str:
         f"**{format_tokens(tm.get('input_tokens', 0))}**",
         f"**{format_tokens(tm.get('output_tokens', 0))}**",
         f"**{format_tokens(total_cache)}**",
-        f"**{format_cost(tm.get('total_cost', 0.0))}**",
+        "**" + format_row_cost(
+            tm.get("total_cost", 0.0),
+            total_tokens=_total_tokens(tm),
+            unpriced_tokens=_unpriced_tokens(by_model),
+        ) + "**",
     ])
 
     section = "## Token Metrics\n\n" + _md_table(headers, rows, align)

@@ -545,14 +545,26 @@ class OffloadCandidate(BaseModel):
             )
         else:
             preamble.append(f"# Recommended model: {self.alternative_model}")
+        # An unpriced candidate's 0.0 figures mean "no estimate", not free
+        # (#715). Pricing is all-or-nothing per cluster, so both go together.
+        unpriced = self.cost_priced is False
         if self.estimated_parent_tokens:
+            parent_cost = (
+                "no price" if unpriced
+                else f"${self.estimated_parent_cost_usd:.4f}"
+            )
             preamble.append(
-                f"# Parent-thread cost: ${self.estimated_parent_cost_usd:.4f} "
+                f"# Parent-thread cost: {parent_cost} "
                 f"({self.estimated_parent_tokens:,} tokens)",
             )
         # Signed savings: positive renders as a savings figure, negative
         # renders as the actionable "do not offload" signal.
-        if self.estimated_savings_usd >= 0:
+        if unpriced:
+            preamble.append(
+                "# Estimated savings: no price "
+                "(parent or alternative model has no price)",
+            )
+        elif self.estimated_savings_usd >= 0:
             preamble.append(
                 f"# Estimated savings: ${self.estimated_savings_usd:.4f}",
             )
