@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from rich.console import Console
 from rich.markup import escape
 
+from agentfluent.analytics.tokens import NO_PRICE as NO_PRICE  # re-export (#715)
 from agentfluent.config.models import Severity
 from agentfluent.diagnostics.models import Axis
 
@@ -133,6 +134,24 @@ def format_cost(cost: float) -> str:
     if cost < 0.01:
         return f"${cost:.4f}"
     return f"${cost:.2f}"
+
+
+def format_priced_cost(
+    cost: float, *, total_tokens: int, unpriced_tokens: int | None,
+) -> str:
+    """Format a cost whose tokens may be partly or wholly unpriced (#715).
+
+    ``unpriced_tokens`` is ``None`` when the source predates the field
+    (pre-v0.12.0 envelope), which renders the cost as before. A cost
+    covering no unpriced tokens renders plainly; one whose every token is
+    unpriced renders :data:`NO_PRICE`; anything between is the priced
+    part, marked ``(partial)``.
+    """
+    if unpriced_tokens is None or unpriced_tokens <= 0:
+        return format_cost(cost)
+    if unpriced_tokens >= total_tokens:
+        return NO_PRICE
+    return f"{format_cost(cost)} (partial)"
 
 
 def format_tokens(tokens: int) -> str:

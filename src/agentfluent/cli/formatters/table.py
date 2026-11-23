@@ -20,14 +20,15 @@ from agentfluent.cli.formatters.coverage import CoverageFooter, cost_coverage_fo
 from agentfluent.cli.formatters.helpers import (
     CONFIDENCE_COLORS,
     GLOBAL_AGENT_LABEL,
+    NO_PRICE,
     SESSION_KIND_UNCLASSIFIED,
     SESSION_KIND_UNKNOWN_CELL,
     SEVERITY_COLORS,
     average_score,
     axis_label,
     format_agent_duration_cell,
-    format_cost,
     format_date,
+    format_priced_cost,
     format_size,
     format_tokens,
     render_environment_warnings,
@@ -174,7 +175,14 @@ def format_analysis_table(
     token_table.add_row("Cache creation tokens", format_tokens(tm.cache_creation_input_tokens))
     token_table.add_row("Cache read tokens", format_tokens(tm.cache_read_input_tokens))
     token_table.add_row("Total tokens", format_tokens(tm.total_tokens))
-    token_table.add_row("Total cost (API rate)", format_cost(tm.total_cost))
+    token_table.add_row(
+        "Total cost (API rate)",
+        format_priced_cost(
+            tm.total_cost,
+            total_tokens=tm.total_tokens,
+            unpriced_tokens=tm.unpriced_tokens,
+        ),
+    )
     token_table.add_row("Cache efficiency", f"{tm.cache_efficiency}%")
     token_table.add_row("API calls", str(tm.api_call_count))
     token_table.add_row("Model turns", str(result.total_model_turns))
@@ -217,7 +225,11 @@ def format_analysis_table(
                 breakdown.model,
                 breakdown.origin,
                 format_tokens(breakdown.total_tokens),
-                format_cost(breakdown.cost),
+                format_priced_cost(
+                    breakdown.cost,
+                    total_tokens=breakdown.total_tokens,
+                    unpriced_tokens=breakdown.unpriced_tokens,
+                ),
             )
         console.print(model_table)
 
@@ -317,7 +329,11 @@ def format_analysis_table(
                 s.session_path.name,
                 session_kind_label(s.session_kind) or SESSION_KIND_UNKNOWN_CELL,
                 format_tokens(s.token_metrics.total_tokens),
-                format_cost(s.token_metrics.total_cost),
+                format_priced_cost(
+                    s.token_metrics.total_cost,
+                    total_tokens=s.token_metrics.total_tokens,
+                    unpriced_tokens=s.token_metrics.unpriced_tokens,
+                ),
                 str(s.model_turns),
                 str(s.tool_metrics.total_tool_calls),
                 str(s.agent_metrics.total_invocations),
@@ -838,7 +854,10 @@ def _format_offload_candidates(
         # to "+$X.XX" magnitude in red; the Note column carries the
         # "cost MORE" warning so the meaning isn't lost on a quick scan.
         savings = cand.estimated_savings_usd
-        if savings >= 0:
+        if cand.cost_priced is False:
+            # 0.0 here means "no estimate", not a zero saving (#715).
+            savings_display = NO_PRICE
+        elif savings >= 0:
             savings_display = f"${savings:.2f}"
         else:
             savings_display = f"[red]+${-savings:.2f}[/red]"

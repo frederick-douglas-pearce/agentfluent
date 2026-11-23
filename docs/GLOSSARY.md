@@ -163,9 +163,10 @@ edits, or fast-changing system prompt) and merit a look at where the
 **Detail:** Computed by multiplying each token category by its per-million-token
 rate (see `pricing.py`). Output tokens typically dominate per-call
 cost; cache_read tokens dominate by volume on long sessions. Reported
-in USD, two decimals.
+in USD; shown as `no price` when every token is unpriced and
+`$X (partial)` when some are (see [`unpriced_tokens`](#unpriced_tokens)).
 
-**Related:** [`output`](#output), [`cache_read`](#cache_read)
+**Related:** [`output`](#output), [`cache_read`](#cache_read), [`unpriced_tokens`](#unpriced_tokens)
 
 
 ---
@@ -1647,7 +1648,9 @@ cleanly and skips the warning.
 had no price, so the candidate's `0.0` figures mean "no estimate",
 not "free". `null` on candidates from envelopes written before this
 field existed. Counted in [`cost_coverage`](#cost_coverage)'s
-`unpriced_figures`.
+`unpriced_figures`. `analyze` shows such a candidate's savings, and
+the `--verbose` draft its parent-thread cost and savings, as
+`no price` (#715).
 
 **Related:** [`offload_candidate`](#offload_candidate), [`cost_coverage`](#cost_coverage)
 
@@ -1861,7 +1864,10 @@ field is the only way to tell "unpriced" from "free". It is set on
 every `token_metrics.by_model` row and summed into
 [`cost_coverage`](#cost_coverage). Prices are looked up by session
 date, so one model id can be priced in one session and unpriced in
-another. A merged row can therefore be partly unpriced. Upgrading
+another. A merged row can therefore be partly unpriced. `analyze` and
+`report` show a wholly unpriced cost as `no price` and a partly
+unpriced one as `$X (partial)`, never `$0.00` (#715); an envelope
+written before v0.12.0 has no unpriced count and renders as before. Upgrading
 agentfluent usually adds the missing price.
 
 **Related:** [`cost_coverage`](#cost_coverage), [`total_cost`](#total_cost)
