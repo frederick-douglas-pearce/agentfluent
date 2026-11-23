@@ -103,9 +103,14 @@ def _line(text: str, needle: str) -> str:
     return next(line for line in text.splitlines() if needle in line)
 
 
-def _table_row(text: str, model: str) -> str:
-    """The Cost by Model row for ``model`` (the footer also names unpriced models)."""
-    return next(line for line in text.splitlines() if model in line and "│" in line)
+def _table_row(text: str, needle: str) -> str:
+    """The first Rich table row (a line containing ``│``) that mentions ``needle``.
+
+    Used for Cost by Model rows (by model id) and Per-Session Breakdown rows (by
+    session file name). Requiring ``│`` skips the coverage footer, which also
+    names unpriced models.
+    """
+    return next(line for line in text.splitlines() if needle in line and "│" in line)
 
 
 class TestAnalyzeCostByModel:
@@ -187,7 +192,7 @@ class TestAnalyzePerSessionCost:
 
     def test_unpriced_session_says_no_price(self) -> None:
         text = self._text([
-            _session("priced.jsonl", [_breakdown("claude-opus-4-7", cost=2.0, unpriced=0)]),
+            _session("cheap.jsonl", [_breakdown("claude-opus-4-7", cost=2.0, unpriced=0)]),
             _session("unpriced.jsonl", [
                 _breakdown(_UNPRICED, cost=0.0, unpriced=1000),
                 _breakdown(_UNPRICED_2, cost=0.0, unpriced=1000),
@@ -196,17 +201,17 @@ class TestAnalyzePerSessionCost:
         row = _table_row(text, "unpriced.jsonl")
         assert NO_PRICE in row
         assert "$0" not in row
-        assert "$2.00" in _table_row(text, "priced.jsonl")
+        assert "$2.00" in _table_row(text, "cheap.jsonl")
 
     def test_cache_heavy_partly_unpriced_session_is_partial(self) -> None:
         text = self._text([
             _session("partial.jsonl", [_breakdown("claude-opus-4-7", **_CACHE_HEAVY)]),
-            _session("priced.jsonl", [_breakdown("claude-opus-4-7", cost=2.0, unpriced=0)]),
+            _session("cheap.jsonl", [_breakdown("claude-opus-4-7", cost=2.0, unpriced=0)]),
         ])
         row = _table_row(text, "partial.jsonl")
         assert "$1.00 (partial)" in row
         assert NO_PRICE not in row
-        assert "(partial)" not in _table_row(text, "priced.jsonl")
+        assert "(partial)" not in _table_row(text, "cheap.jsonl")
 
 
 class TestAnalyzeQuietLine:
