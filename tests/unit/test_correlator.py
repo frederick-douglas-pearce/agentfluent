@@ -189,6 +189,27 @@ class TestDurationOutlierCorrelation:
         assert len(recs) == 1
         assert recs[0].target == "prompt"
 
+    @pytest.mark.parametrize("bare", ["opus", "fable"])
+    def test_bare_complex_alias_steps_down_to_sonnet_not_haiku(self, bare: str) -> None:
+        # #679: bare `opus`/`fable` used to classify `moderate`, so the "one tier
+        # faster" target was Haiku -- two tiers down.
+        signals = [_duration_signal()]
+        configs = {"pm": _config(model=bare)}
+        recs = correlate(signals, configs)
+        assert len(recs) == 1
+        assert recs[0].target == "model"
+        assert "claude-sonnet-4-6" in recs[0].action
+        assert "claude-haiku" not in recs[0].action
+
+    def test_bare_haiku_config_falls_back_to_prompt(self) -> None:
+        # #679: bare `haiku` used to classify `moderate` and was told to switch
+        # to Haiku -- itself. It is the fastest tier, so task scoping instead.
+        signals = [_duration_signal()]
+        configs = {"pm": _config(model="haiku")}
+        recs = correlate(signals, configs)
+        assert len(recs) == 1
+        assert recs[0].target == "prompt"
+
     def test_current_model_resolved_from_signal_when_no_config(self) -> None:
         # config → trace precedence: trace model on the signal still yields
         # a concrete model rec when there's no AgentConfig.
