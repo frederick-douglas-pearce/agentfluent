@@ -284,6 +284,22 @@ _ALIASES: dict[str, str] = {
     "claude-mythos-5-2[1m]": "claude-mythos-5-2",
 }
 
+
+def resolve_model_alias(model: str) -> str:
+    """Resolve a model alias (bare ``opus``, a ``[1m]`` variant, ...) to its canonical id.
+
+    One lookup in ``_ALIASES``, never recursive -- an alias may not target another alias
+    (pinned by the ``target not in _ALIASES`` assert in
+    ``tests/unit/test_model_routing.py::TestHelpers::test_every_alias_classifies_like_its_target``).
+    Unknown strings pass through unchanged. Shared by pricing (``get_pricing``) and tier
+    classification (``diagnostics._complexity.classify_model_tier``, #679), so those two
+    cannot disagree. Not every model-string consumer reads through it yet:
+    ``config.scoring.EXPENSIVE_MODELS`` is an exact-id set (#680) and
+    ``diagnostics.parent_workload.pick_alternative_model`` is a substring ladder (#683).
+    """
+    return _ALIASES.get(model, model)
+
+
 # Sentinel model names emitted by Claude Code for synthetic/internal messages.
 # These are not real API model calls and should be skipped before pricing lookup.
 SYNTHETIC_MODELS: frozenset[str] = frozenset({"<synthetic>"})
@@ -380,7 +396,7 @@ def get_pricing(model: str, timestamp: datetime | None = None) -> ModelPricing |
     so a long request in a session dated before 2026-03-13 prices at that tier. The
     forward-compat guard tests in ``tests`` are the tripwire for both.
     """
-    canonical = _ALIASES.get(model, model)
+    canonical = resolve_model_alias(model)
     if canonical not in _KNOWN_MODELS:
         _warn_if_priceable_but_uncurated(canonical, timestamp)
         return None

@@ -307,7 +307,8 @@ def pick_alternative_model(parent_model: str) -> str:
     offload candidate recommending the model the parent was *already running* —
     with a large negative saving that also tripped the "cache appears load-bearing"
     note, a false diagnosis. ``test_ladders_agree_for_every_curated_model`` pins the
-    agreement for every id in the curated registry, so the next new family fails
+    agreement for every id in the curated registry and every ``pricing._ALIASES`` key
+    (#679), so the next new family fails
     here instead of shipping a nonsense recommendation.
 
     It is deliberately NOT rewritten to delegate to ``faster_tier``: that helper

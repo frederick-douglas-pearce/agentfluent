@@ -16,6 +16,7 @@ from agentfluent.analytics.pricing import (
     compute_cost,
     get_known_models,
     get_pricing,
+    resolve_model_alias,
 )
 
 
@@ -124,6 +125,24 @@ class TestGetPricing:
         assert any("claude-opus-5" in r.getMessage() for r in warnings), (
             "a curated model that cannot be priced must surface at WARNING, not DEBUG"
         )
+
+
+class TestResolveModelAlias:
+    def test_bare_alias_resolves_to_its_target(self) -> None:
+        # #679: the one read path shared by pricing and tier classification.
+        assert resolve_model_alias("opus") == "claude-opus-4-8"
+        assert resolve_model_alias("haiku") == "claude-haiku-4-5-20251001"
+        assert resolve_model_alias("claude-opus-4-8[1m]") == "claude-opus-4-8"
+
+    def test_unknown_passes_through(self) -> None:
+        assert resolve_model_alias("claude-opus-4-8") == "claude-opus-4-8"
+        assert resolve_model_alias("not-a-model") == "not-a-model"
+
+    def test_get_pricing_reads_through_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Pricing and tiering must share one lookup: redirect the resolver and
+        # get_pricing must follow it.
+        monkeypatch.setattr(pricing, "resolve_model_alias", lambda m: "claude-sonnet-4-6")
+        assert get_pricing("opus") == get_pricing("claude-sonnet-4-6")
 
 
 class TestSyntheticModels:

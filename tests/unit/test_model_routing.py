@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from agentfluent.agents.models import AgentInvocation
 from agentfluent.analytics.pricing import get_known_models
 from agentfluent.config.models import AgentConfig, Scope, Severity
@@ -356,6 +358,27 @@ class TestDetectMismatch:
         assert signals[0].detail["mismatch_type"] == "underspec"
         assert signals[0].detail["recommended_model"] == MODEL_SONNET
 
+    def test_bare_haiku_simple_task_is_not_overspec(self) -> None:
+        # #679: bare `haiku` used to classify `moderate` (no `claude-` prefix), so a
+        # simple task on it was flagged overspec with a self-recommendation to Haiku.
+        invs = [_inv(agent_type="pm", tool_uses=2, total_tokens=500) for _ in range(5)]
+        configs = {"pm": _config(model="haiku")}
+        assert extract_model_routing_signals(invs, configs) == []
+
+    def test_bare_haiku_can_be_underspec(self) -> None:
+        # #679: once bare `haiku` classifies `simple`, complex + failing work on it
+        # reaches the underspec branch, exactly like the full id.
+        trace = _trace_with_tools_and_errors(["Read"] * 5, error_count=3)
+        invs = [
+            _inv(agent_type="pm", tool_uses=12, total_tokens=1000, trace=trace)
+            for _ in range(5)
+        ]
+        configs = {"pm": _config(model="haiku")}
+        signals = extract_model_routing_signals(invs, configs)
+        assert len(signals) == 1
+        assert signals[0].detail["mismatch_type"] == "underspec"
+        assert signals[0].detail["recommended_model"] == MODEL_SONNET
+
     def test_underspec_skipped_without_high_error_rate(self) -> None:
         # Complex but error rate low — quietly accepted.
         invs = [_inv(agent_type="pm", tool_uses=12) for _ in range(5)]
@@ -530,15 +553,19 @@ class TestHelpers:
         # diagnosis. Neither half of #674 caused that alone: it needed pricing to make
         # Fable priceable AND the ladder to not know the family.
         #
-        # This pins the two ladders together over the whole curated registry, so the
-        # NEXT family added fails here instead of shipping a nonsense recommendation.
+        # This pins the two ladders together over the whole curated registry plus
+        # every alias, so the NEXT family added fails here instead of shipping a
+        # nonsense recommendation.
         # Consolidating them outright is #683 — it needs an explicit "unknown" result
         # from `classify_model_tier` first, since `faster_tier` currently maps an
         # unknown model to "simple" via the moderate default.
+        from agentfluent.analytics.pricing import _ALIASES
         from agentfluent.diagnostics.parent_workload import pick_alternative_model
 
+        # #679: aliases too. `get_known_models()` excludes them by design, so the bare
+        # `opus`/`haiku` disagreement between the two ladders was invisible here.
         mismatched = []
-        for model in get_known_models():
+        for model in [*get_known_models(), *_ALIASES]:
             tier = faster_tier(model)
             expected = _TIER_TO_MODEL[tier] if tier is not None else model
             actual = pick_alternative_model(model)
@@ -548,6 +575,60 @@ class TestHelpers:
             "pick_alternative_model disagrees with faster_tier/_TIER_TO_MODEL for: "
             f"{mismatched}"
         )
+
+    def test_classify_model_tier_resolves_bare_aliases(self) -> None:
+        # #679: bare names carry no `claude-<family>` prefix; they resolve through
+        # the pricing alias map before prefix matching.
+        assert classify_model_tier("opus") == "complex"
+        assert classify_model_tier("fable") == "complex"
+        assert classify_model_tier("haiku") == "simple"
+        assert classify_model_tier("sonnet") == "moderate"
+
+    def test_faster_tier_steps_bare_aliases_down_one_tier(self) -> None:
+        # #679: `faster_tier("opus")` was `simple` (two tiers down, to Haiku) --
+        # the same failure #674 fixed for Fable.
+        assert faster_tier("opus") == "moderate"
+        assert faster_tier("fable") == "moderate"
+        assert faster_tier("sonnet") == "simple"
+        assert faster_tier("haiku") is None
+
+    def test_every_alias_classifies_like_its_target(self) -> None:
+        # #679 guard. `test_every_priced_model_classifies_by_family` iterates
+        # `get_known_models()`, which excludes aliases, so it was structurally
+        # blind to bare names. This one is derived over `_ALIASES`, so a future
+        # alias is covered without an edit.
+        from agentfluent.analytics.pricing import _ALIASES
+
+        prefixes = tuple(p for ps in _TIER_BY_FAMILY.values() for p in ps)
+        # Non-vacuity: at least one alias must be unreachable by prefix alone AND
+        # target a non-default tier, or a missing resolve step (which yields the
+        # `moderate` default) would still agree with its target.
+        assert any(
+            not alias.startswith(prefixes) and classify_model_tier(target) != "moderate"
+            for alias, target in _ALIASES.items()
+        )
+        for alias, target in _ALIASES.items():
+            # Single hop: resolution is one lookup, so a chained alias would
+            # silently resolve to another alias.
+            assert target not in _ALIASES, f"{alias} -> {target} chains to an alias"
+            # Target is claimed by a family prefix (never compare to "moderate",
+            # which is also the unmatched default -- the #674 trap).
+            assert target.startswith(prefixes), f"{alias} -> {target} has no family"
+            assert classify_model_tier(alias) == classify_model_tier(target), alias
+
+    def test_classify_model_tier_reads_the_pricing_alias_map(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # #679 AC5: the classifier must resolve through pricing's alias map, not a
+        # copy -- an alias added only to `_ALIASES` must change the tier (and the
+        # price). A hard-coded table in `_complexity.py` would leave it `moderate`.
+        from agentfluent.analytics import pricing
+
+        haiku_id = "claude-haiku-4-5-20251001"
+        monkeypatch.setitem(pricing._ALIASES, "zz-test-alias", haiku_id)
+        assert classify_model_tier("zz-test-alias") == "simple"
+        assert pricing.get_pricing("zz-test-alias") == pricing.get_pricing(haiku_id)
+        assert pricing.get_pricing("zz-test-alias") is not None
 
     def test_classify_model_tier_unknown_family_defaults_moderate(self) -> None:
         assert classify_model_tier("claude-experimental-9000") == "moderate"

@@ -19,7 +19,12 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import BaseModel
 
 from agentfluent.agents.models import WRITE_TOOLS
-from agentfluent.analytics.pricing import MODEL_HAIKU, MODEL_OPUS, MODEL_SONNET
+from agentfluent.analytics.pricing import (
+    MODEL_HAIKU,
+    MODEL_OPUS,
+    MODEL_SONNET,
+    resolve_model_alias,
+)
 from agentfluent.diagnostics.signals import iter_error_matches
 
 if TYPE_CHECKING:
@@ -61,8 +66,10 @@ _TIER_ORDER: tuple[ComplexityTier, ...] = ("simple", "moderate", "complex")
 
 # Complexity tier by Claude model family. Model IDs follow the pattern
 # `claude-<family>-<version>[-<date>]`, so a prefix match covers both
-# short aliases (`claude-opus-4-7`) and dated pinned forms
+# undated ids (`claude-opus-4-7`) and dated pinned forms
 # (`claude-haiku-4-5-20251001`) that subagent traces record at runtime.
+# Bare names (`opus`, `fable`, `haiku`, `sonnet`) carry no prefix; they are
+# resolved through `pricing.resolve_model_alias` first (#679).
 # Lives here (not in the pricing module) so all model↔tier knowledge is
 # co-located with the tier→model mapping above (#170).
 #
@@ -105,12 +112,18 @@ _TIER_BY_FAMILY: dict[ComplexityTier, tuple[str, ...]] = {
 def classify_model_tier(model: str) -> ComplexityTier:
     """Classify a Claude model ID into a complexity tier by family prefix.
 
+    The model is first resolved through ``pricing.resolve_model_alias``, so a
+    bare alias (``model: opus`` in agent frontmatter) classifies the same as
+    the id pricing resolves it to (#679). Resolution lives here, not at the
+    callers, so ``faster_tier`` and ``select_target_model`` inherit it.
+
     Returns "moderate" for anything that doesn't match a known family —
     a safe default that doesn't emit MODEL_MISMATCH signals against
     unrecognized models.
     """
+    canonical = resolve_model_alias(model)
     for tier, prefixes in _TIER_BY_FAMILY.items():
-        if any(model.startswith(p) for p in prefixes):
+        if any(canonical.startswith(p) for p in prefixes):
             return tier
     return "moderate"
 
