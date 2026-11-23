@@ -1,10 +1,15 @@
 """Tests for config scoring rubric."""
 
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 from agentfluent.config.models import AgentConfig, Scope, Severity
 from agentfluent.config.scanner import parse_agent_file
 from agentfluent.config.scoring import score_agent
+from agentfluent.diagnostics import _complexity
 
 AGENTS_FIXTURES = Path(__file__).parent.parent / "fixtures" / "agents"
 
@@ -136,6 +141,81 @@ class TestModelSelectionScoring:
         )
         score = score_agent(agent)
         assert score.dimension_scores["model_selection"] == 25
+
+    # #680: "expensive" is the `complex` tier, not a hand-kept id list.
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "claude-opus-4-7",
+            "claude-opus-5-5",
+            "claude-opus-4-5-20251101",
+            "claude-fable-5-2",
+            "opus",
+        ],
+    )
+    def test_complex_tier_model_read_only_is_flagged(self, model: str) -> None:
+        agent = _make_agent(model=model, tools=["Read", "Glob", "Grep"])
+        score = score_agent(agent)
+        assert score.dimension_scores["model_selection"] == 15
+        recs = [r for r in score.recommendations if r.dimension == "model_selection"]
+        assert len(recs) == 1
+        assert recs[0].current_value == model
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5",
+            "sonnet",
+            "inherit",
+            "claude-experimental-9000",
+            # #745 gap: bare `[1m]` aliases do not resolve yet; flips when #745 lands.
+            "opus[1m]",
+        ],
+    )
+    def test_non_complex_model_read_only_is_not_flagged(self, model: str) -> None:
+        agent = _make_agent(model=model, tools=["Read", "Glob", "Grep"])
+        score = score_agent(agent)
+        assert score.dimension_scores["model_selection"] == 25
+        assert not [r for r in score.recommendations if r.dimension == "model_selection"]
+
+    def test_complex_model_with_mcp_tool_is_not_flagged(self) -> None:
+        agent = _make_agent(
+            model="claude-opus-5-5",
+            tools=["Read", "Grep", "mcp__github__get_issue"],
+        )
+        score = score_agent(agent)
+        assert score.dimension_scores["model_selection"] == 25
+
+    def test_complex_model_with_no_tools_is_not_flagged(self) -> None:
+        agent = _make_agent(model="claude-opus-5-5", tools=[])
+        score = score_agent(agent)
+        assert score.dimension_scores["model_selection"] == 25
+
+    def test_gate_reads_the_tier_map(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Mechanism pin (#680 AC4): a family added to the `complex` tier is flagged
+        # with no edit in config/scoring.py. Fails against any hard-coded list there.
+        agent = _make_agent(model="claude-testfam-1", tools=["Read"])
+        assert score_agent(agent).dimension_scores["model_selection"] == 25
+
+        complex_prefixes = _complexity._TIER_BY_FAMILY["complex"]
+        monkeypatch.setitem(
+            _complexity._TIER_BY_FAMILY, "complex", (*complex_prefixes, "claude-testfam"),
+        )
+        score = score_agent(agent)
+        assert score.dimension_scores["model_selection"] == 15
+
+    def test_importing_scoring_does_not_load_diagnostics(self) -> None:
+        # #680: the tier classifier is imported inside the function, so the config
+        # package does not pull in the diagnostics pipeline (which imports config).
+        code = (
+            "import sys; import agentfluent.config.scoring; "
+            "assert 'agentfluent.diagnostics' not in sys.modules, 'diagnostics loaded'"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, check=False,
+        )
+        assert result.returncode == 0, result.stderr
 
 
 class TestPromptBodyScoring:

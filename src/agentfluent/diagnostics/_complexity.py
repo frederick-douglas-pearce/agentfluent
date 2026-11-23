@@ -4,6 +4,8 @@ Single source of truth for "what model fits this workload" — consumed
 by both ``diagnostics/model_routing.py`` (classifying real agents from
 their declared config) and ``diagnostics/delegation.py`` (classifying
 proposed delegation clusters and parent-thread offload candidates).
+``config/scoring.py`` also reads ``classify_model_tier`` to decide which
+models are "expensive" for its ``model_selection`` rubric (#680).
 
 Pre-#185, the two paths diverged: model_routing classified agents into
 ``simple/moderate/complex`` tiers using observed metrics, while
@@ -79,7 +81,7 @@ _TIER_ORDER: tuple[ComplexityTier, ...] = ("simple", "moderate", "complex")
 # that placement is PROVISIONAL: we do not know Fable is more capable
 # than Opus, only that it is more expensive, and it could be a
 # specialized line rather than a higher tier. `complex` is the safe
-# choice on all three consumers OF THIS MAP -- `_detect_mismatch`
+# choice on the three diagnostics consumers OF THIS MAP -- `_detect_mismatch`
 # treats `complex` and the unmatched-family `moderate` default
 # identically at both its `current_tier` uses; `select_target_model`
 # returns the same target either way (its `model_routing` call sites
@@ -87,7 +89,12 @@ _TIER_ORDER: tuple[ComplexityTier, ...] = ("simple", "moderate", "complex")
 # `faster_tier` computed, which is `moderate` for Fable in both
 # readings); and `faster_tier` itself yields one step down (Sonnet)
 # instead of two (Haiku), which is what "one tier faster" is meant to
-# mean. Scoped to this map
+# mean. A fourth consumer, `config.scoring._is_expensive_model` (#680),
+# is NOT indifferent to the placement: `complex` is what makes a
+# read-only Fable/Mythos agent draw the `model_selection` "consider a
+# cheaper model" rec. That use asks a price question, so price rank is
+# the right evidence there -- but moving Fable out of `complex` (#678,
+# #683) would silently stop that rec. Scoped to this map
 # deliberately: `parent_workload.pick_alternative_model` is a SECOND
 # ladder that does not consult it, and tiering Fable here did not fix
 # it -- that needed its own branch (#674), and consolidating the two
