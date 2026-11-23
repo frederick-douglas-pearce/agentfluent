@@ -1687,9 +1687,12 @@
     and shows the Cost Δ as `—` when either side has unpriced tokens,
     since subtracting the priced parts would read a pricing gap as a cost
     change. Its JSON carries `baseline_unpriced_tokens` and
-    `current_unpriced_tokens` on each `by_model` row (`null` when that
-    side's envelope predates the field) (#723). Upgrading agentfluent
-    usually adds the missing price.
+    `current_unpriced_tokens` on each `by_model` row and on `token_metrics`,
+    where the total is summed over the raw rows exactly as `report` sums
+    it. A value is `null` (unknown, never 0) when that side's envelope
+    predates the field or a count can't be read: missing, null, negative,
+    fractional or non-numeric (a whole-number float such as `10.0` is
+    read). (#723) Upgrading agentfluent usually adds the missing price.
   related: [cost_coverage, total_cost]
 
 - name: cost_model

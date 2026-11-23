@@ -10,7 +10,11 @@ from typing import Any
 
 import pytest
 
-from agentfluent.analytics.tokens import row_unpriced_tokens, sum_unpriced_tokens
+from agentfluent.analytics.tokens import (
+    row_unpriced_tokens,
+    side_unpriced_tokens,
+    sum_unpriced_tokens,
+)
 from agentfluent.diff import compute_diff
 from agentfluent.diff.models import ModelTokenDelta, TokenMetricsDelta
 
@@ -35,18 +39,23 @@ def _row(
     return row
 
 
-def _envelope(by_model: list[dict[str, Any]] | dict[str, Any]) -> dict[str, Any]:
+def _envelope(
+    by_model: Any, *, input_tokens: int = 0, omit_by_model: bool = False,
+) -> dict[str, Any]:
+    token_metrics: dict[str, Any] = {
+        "input_tokens": input_tokens,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "total_cost": 0.0,
+        "cache_efficiency": 0.0,
+        "by_model": by_model,
+    }
+    if omit_by_model:
+        del token_metrics["by_model"]
     return {
         "session_count": 1,
-        "token_metrics": {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cache_creation_input_tokens": 0,
-            "cache_read_input_tokens": 0,
-            "total_cost": 0.0,
-            "cache_efficiency": 0.0,
-            "by_model": by_model,
-        },
+        "token_metrics": token_metrics,
         "agent_metrics": {"by_agent_type": {}, "total_invocations": 0},
         "diagnostics": None,
     }
@@ -67,9 +76,18 @@ class TestRowUnpricedTokens:
     def test_missing_key_is_unknown(self) -> None:
         assert row_unpriced_tokens({}) is None
 
-    @pytest.mark.parametrize("value", [None, "40", -1, True, 4.0])
+    @pytest.mark.parametrize("value", [None, "40", -1, True, 4.5, -1.0, float("nan")])
     def test_malformed_value_is_unknown(self, value: Any) -> None:
         assert row_unpriced_tokens({"unpriced_tokens": value}) is None
+
+    def test_whole_number_float_counts(self) -> None:
+        count = row_unpriced_tokens({"unpriced_tokens": 10.0})
+        assert count == 10
+        assert isinstance(count, int)
+
+    @pytest.mark.parametrize("row", ["m", 3, None, ["unpriced_tokens"]])
+    def test_non_mapping_row_is_unknown(self, row: Any) -> None:
+        assert row_unpriced_tokens(row) is None
 
 
 class TestSumUnpricedTokens:
@@ -84,6 +102,30 @@ class TestSumUnpricedTokens:
 
     def test_empty_is_zero(self) -> None:
         assert sum_unpriced_tokens([]) == 0
+
+    def test_a_non_mapping_row_makes_the_sum_unknown(self) -> None:
+        assert sum_unpriced_tokens([{"unpriced_tokens": 10}, "m"]) is None
+
+
+class TestSideUnpricedTokens:
+    def test_sums_the_raw_rows(self) -> None:
+        rows = [{"unpriced_tokens": 3}, {"unpriced_tokens": 4}]
+        assert side_unpriced_tokens({"by_model": rows}) == 7
+
+    def test_missing_by_model_is_unknown(self) -> None:
+        assert side_unpriced_tokens({"input_tokens": 5}) is None
+
+    def test_null_by_model_is_unknown(self) -> None:
+        assert side_unpriced_tokens({"by_model": None}) is None
+
+    def test_v1_dict_shaped_by_model_is_unknown(self) -> None:
+        assert side_unpriced_tokens({"by_model": {"m": {"unpriced_tokens": 0}}}) is None
+
+    def test_empty_by_model_with_tokens_is_unknown(self) -> None:
+        assert side_unpriced_tokens({"input_tokens": 5, "by_model": []}) is None
+
+    def test_empty_by_model_without_tokens_is_a_measured_zero(self) -> None:
+        assert side_unpriced_tokens({"input_tokens": 0, "by_model": []}) == 0
 
 
 class TestDiffByModelUnpriced:
@@ -107,7 +149,7 @@ class TestDiffByModelUnpriced:
         )[(_PRICED, "parent")]
         assert (row.baseline_unpriced_tokens, row.current_unpriced_tokens) == (400, 0)
         assert not row.cost_delta_measured
-        assert row.cost_delta == pytest.approx(1.0)  # JSON stays numeric (D029)
+        assert row.cost_delta == pytest.approx(1.0)  # the released JSON field stays a number
 
     def test_legacy_rows_are_unknown_never_zero(self) -> None:
         row = _by_model([_row(_PRICED, cost=0.0)], [_row(_PRICED, cost=2.0, unpriced=0)])[
@@ -142,6 +184,26 @@ class TestDiffByModelUnpriced:
         assert row.current_unpriced_tokens is None
         assert row.baseline_unpriced_tokens == 0
 
+    def test_mixed_side_keeps_present_counts_and_makes_absent_models_unknown(self) -> None:
+        rows = _by_model(
+            [_row(_PRICED, cost=1.0, unpriced=400), _row("claude-sonnet-4-6", cost=1.0)],
+            [_row(_PRICED, cost=1.0, unpriced=0), _row(_UNPRICED, cost=0.0, unpriced=1000)],
+        )
+        assert rows[(_PRICED, "parent")].baseline_unpriced_tokens == 400
+        assert rows[("claude-sonnet-4-6", "parent")].baseline_unpriced_tokens is None
+        assert rows[(_UNPRICED, "parent")].baseline_unpriced_tokens is None
+
+    def test_null_count_on_a_multi_row_side_makes_absent_models_unknown(self) -> None:
+        rows = _by_model(
+            [
+                _row(_PRICED, cost=1.0, unpriced=0),
+                {**_row("claude-sonnet-4-6", cost=1.0), "unpriced_tokens": None},
+            ],
+            [_row(_PRICED, cost=1.0, unpriced=0), _row(_UNPRICED, cost=0.0, unpriced=1000)],
+        )
+        assert rows[(_PRICED, "parent")].baseline_unpriced_tokens == 0
+        assert rows[(_UNPRICED, "parent")].baseline_unpriced_tokens is None
+
     def test_fields_reach_the_json_payload(self) -> None:
         result = compute_diff(
             _envelope([_row(_PRICED, cost=1.0)]),
@@ -174,28 +236,82 @@ class TestCostDeltaMeasured:
         assert row.cost_delta_measured is measured
 
 
-class TestTokenMetricsDeltaTotals:
-    def _delta(self, *pairs: tuple[int | None, int | None]) -> TokenMetricsDelta:
-        return TokenMetricsDelta(by_model=[
-            ModelTokenDelta(model=f"m{i}", baseline_unpriced_tokens=b, current_unpriced_tokens=c)
-            for i, (b, c) in enumerate(pairs)
-        ])
+class TestDiffTotalUnpriced:
+    def _tm(self, baseline: dict[str, Any], current: dict[str, Any]) -> TokenMetricsDelta:
+        return compute_diff(baseline, current).token_metrics
 
-    def test_sums_each_side(self) -> None:
-        tm = self._delta((10, 0), (5, 0))
-        assert (tm.baseline_unpriced_tokens, tm.current_unpriced_tokens) == (15, 0)
+    def test_sums_each_side_from_the_raw_rows(self) -> None:
+        tm = self._tm(
+            _envelope([
+                _row(_PRICED, cost=1.0, unpriced=0), _row(_UNPRICED, cost=0.0, unpriced=1000),
+            ]),
+            _envelope([_row(_PRICED, cost=1.0, unpriced=0)]),
+        )
+        assert (tm.baseline_unpriced_tokens, tm.current_unpriced_tokens) == (1000, 0)
         assert not tm.total_cost_delta_measured
 
+    def test_model_less_row_still_counts_in_the_total(self) -> None:
+        # The by-model delta drops a row with no model; the Total reads the raw
+        # rows, as report does, so its unpriced tokens are not lost (#723).
+        model_less = _row(_UNPRICED, cost=0.0, unpriced=10)
+        del model_less["model"]
+        tm = self._tm(
+            _envelope([_row(_PRICED, cost=1.0, unpriced=0), model_less]),
+            _envelope([_row(_PRICED, cost=1.0, unpriced=0)]),
+        )
+        assert [row.model for row in tm.by_model] == [_PRICED]
+        assert tm.baseline_unpriced_tokens == 10
+        assert not tm.total_cost_delta_measured
+
+    def test_duplicate_rows_both_count_in_the_total(self) -> None:
+        tm = self._tm(
+            _envelope([_row(_PRICED, cost=1.0, unpriced=4), _row(_PRICED, cost=1.0, unpriced=6)]),
+            _envelope([]),
+        )
+        assert tm.baseline_unpriced_tokens == 10
+
     def test_any_unknown_row_makes_the_side_unknown(self) -> None:
-        tm = self._delta((10, 0), (None, 0))
+        tm = self._tm(
+            _envelope([_row(_UNPRICED, cost=0.0, unpriced=10), _row(_PRICED, cost=1.0)]),
+            _envelope([_row(_PRICED, cost=1.0, unpriced=0)]),
+        )
         assert tm.baseline_unpriced_tokens is None
         assert tm.current_unpriced_tokens == 0
         assert tm.total_cost_delta_measured
 
-    def test_all_priced_is_measured(self) -> None:
-        assert self._delta((0, 0)).total_cost_delta_measured
+    def test_missing_by_model_is_unknown_not_zero(self) -> None:
+        tm = self._tm(
+            _envelope(None, input_tokens=5, omit_by_model=True),
+            _envelope([_row(_UNPRICED, cost=0.0, unpriced=1000)]),
+        )
+        assert tm.baseline_unpriced_tokens is None
+        assert tm.by_model[0].baseline_unpriced_tokens is None
 
-    def test_totals_are_not_serialized(self) -> None:
-        dumped = self._delta((10, 0)).model_dump(mode="json")
-        assert "baseline_unpriced_tokens" not in dumped
+    def test_empty_by_model_with_tokens_is_unknown_not_zero(self) -> None:
+        tm = self._tm(
+            _envelope([], input_tokens=5),
+            _envelope([_row(_UNPRICED, cost=0.0, unpriced=1000)]),
+        )
+        assert tm.baseline_unpriced_tokens is None
+        assert tm.by_model[0].baseline_unpriced_tokens is None
+
+    def test_totals_are_serialized_and_the_predicate_is_not(self) -> None:
+        dumped = self._tm(
+            _envelope([_row(_UNPRICED, cost=0.0, unpriced=1000)]), _envelope([]),
+        ).model_dump(mode="json")
+        assert dumped["baseline_unpriced_tokens"] == 1000
+        assert dumped["current_unpriced_tokens"] == 0
         assert "total_cost_delta_measured" not in dumped
+
+    @pytest.mark.parametrize(
+        ("baseline", "current", "measured"),
+        [
+            (0, 0, True), (None, None, True), (None, 0, True),
+            (5, 0, False), (0, 5, False), (None, 5, False),
+        ],
+    )
+    def test_total_cost_delta_measured(
+        self, baseline: int | None, current: int | None, measured: bool,
+    ) -> None:
+        tm = TokenMetricsDelta(baseline_unpriced_tokens=baseline, current_unpriced_tokens=current)
+        assert tm.total_cost_delta_measured is measured

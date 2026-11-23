@@ -378,7 +378,8 @@ class TestReportSummary:
 
     def test_mixed_legacy_rows_render_the_total_as_before(self) -> None:
         # One row carries the count, one predates it: the total's unpriced
-        # share is unknown, so no marker is claimed either way (#723, D2).
+        # share is unknown, so no marker is claimed either way (#723, carried
+        # over from the #715 review).
         out = render_summary(_report_data([
             _row(_UNPRICED, cost=0.0, unpriced=1000),
             _row("claude-opus-4-7", cost=2.0, unpriced=None),
@@ -387,6 +388,34 @@ class TestReportSummary:
         assert "$2.00" in line
         assert "(partial)" not in line
         assert NO_PRICE not in line
+
+    @pytest.mark.parametrize("bad", [None, "40", -5, 4.5])
+    def test_unreadable_count_reads_as_unknown_not_a_crash(self, bad: Any) -> None:
+        # report goes through the shared tolerant helper (#723): the old local
+        # int(row["unpriced_tokens"]) raised on null and coerced "40".
+        row = {**_row(_UNPRICED, cost=0.0, unpriced=None), "unpriced_tokens": bad}
+        line = _line(render_summary(_report_data([row])), "Total cost (API rate)")
+        assert "(partial)" not in line
+        assert NO_PRICE not in line
+
+    def test_whole_number_float_count_is_read(self) -> None:
+        row = {**_row(_UNPRICED, cost=0.0, unpriced=None), "unpriced_tokens": 1000.0}
+        line = _line(render_summary(_report_data([row])), "Total cost (API rate)")
+        assert NO_PRICE in line
+
+    def test_non_mapping_row_reads_as_unknown_not_a_crash(self) -> None:
+        data = _report_data([_row(_UNPRICED, cost=0.0, unpriced=1000)])
+        data["token_metrics"]["by_model"].append("not-a-row")
+        line = _line(render_summary(data), "Total cost (API rate)")
+        assert NO_PRICE not in line
+
+    def test_empty_by_model_with_tokens_reads_as_unknown(self) -> None:
+        data = _report_data([])
+        data["token_metrics"]["input_tokens"] = 500
+        data["token_metrics"]["total_cost"] = 1.0
+        line = _line(render_summary(data), "Total cost (API rate)")
+        assert "$1.00" in line
+        assert "(partial)" not in line
 
 
 # ---- offload table + --verbose YAML -----------------------------------------

@@ -111,16 +111,20 @@ class ModelTokenDelta(BaseModel):
     cost_delta: float = 0.0
     """``current_cost - baseline_cost``. Each cost covers priced tokens only,
     so this is not a measured change when either side has unpriced tokens
-    (:attr:`cost_delta_measured` is ``False``); it stays numeric for JSON
-    compatibility (D029)."""
+    (:attr:`cost_delta_measured` is ``False``). It stays a number so the
+    released JSON field keeps its type."""
 
     baseline_unpriced_tokens: int | None = None
     """Baseline tokens for this ``(model, origin)`` whose model had no price
-    (#723). ``None`` means **unknown, never 0**: the baseline envelope predates
-    the field (pre-v0.12.0, or a v1 dict-shaped ``by_model``), or its row
-    carries no readable count. A model absent from a field-bearing side is a
-    measured ``0`` there. No ``unpriced_tokens_delta`` exists by design: a
-    difference of unpriced counts measures nothing."""
+    (#723). ``None`` means **unknown, never 0**: the baseline row carries no
+    readable count (missing, null, negative, fractional, non-numeric, or not
+    an object), or the model is absent from a side that is not field-bearing
+    -- its ``by_model`` is missing, v1 dict-shaped, empty although it has
+    tokens, or has any row without a readable count
+    (:func:`agentfluent.analytics.tokens.side_unpriced_tokens`). A model
+    absent from a field-bearing side is a measured ``0`` there. No
+    ``unpriced_tokens_delta`` exists by design: a difference of unpriced
+    counts measures nothing."""
     current_unpriced_tokens: int | None = None
     """Current-side unpriced tokens; same ``None`` contract as
     ``baseline_unpriced_tokens``."""
@@ -138,12 +142,6 @@ class ModelTokenDelta(BaseModel):
 
 def _has_unpriced(unpriced_tokens: int | None) -> bool:
     return unpriced_tokens is not None and unpriced_tokens > 0
-
-
-def _sum_side(values: list[int | None]) -> int | None:
-    if any(value is None for value in values):
-        return None
-    return sum(value for value in values if value is not None)
 
 
 class TokenMetricsDelta(BaseModel):
@@ -176,16 +174,14 @@ class TokenMetricsDelta(BaseModel):
     side; its ``*_unpriced_tokens`` there is ``0`` on a side that carries the
     field and ``None`` (unknown) on a legacy side."""
 
-    @property
-    def baseline_unpriced_tokens(self) -> int | None:
-        """Baseline unpriced tokens summed over ``by_model`` (#723); ``None``
-        if any row's count is unknown. Derived, not serialized."""
-        return _sum_side([row.baseline_unpriced_tokens for row in self.by_model])
-
-    @property
-    def current_unpriced_tokens(self) -> int | None:
-        """Current-side counterpart of :attr:`baseline_unpriced_tokens`."""
-        return _sum_side([row.current_unpriced_tokens for row in self.by_model])
+    baseline_unpriced_tokens: int | None = None
+    """Baseline tokens whose model had no price, summed over the raw
+    ``by_model`` rows by the same rule ``report`` uses
+    (:func:`agentfluent.analytics.tokens.side_unpriced_tokens`, #723), so a
+    model-less or duplicate row a by-model delta drops still counts here.
+    ``None`` means unknown, never 0."""
+    current_unpriced_tokens: int | None = None
+    """Current-side counterpart of ``baseline_unpriced_tokens``."""
 
     @property
     def total_cost_delta_measured(self) -> bool:

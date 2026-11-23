@@ -21,7 +21,7 @@ from agentfluent.analytics.cost_model import CostModelStamp
 from agentfluent.analytics.tokens import (
     Origin,
     row_unpriced_tokens,
-    sum_unpriced_tokens,
+    side_unpriced_tokens,
 )
 from agentfluent.config.models import SEVERITY_RANK, Severity
 from agentfluent.core.filtering import WindowMetadata
@@ -305,9 +305,13 @@ def _diff_token_metrics(
     baseline_turns = int(baseline.get("total_model_turns", 0) or 0)
     current_turns = int(current.get("total_model_turns", 0) or 0)
 
+    baseline_unpriced = side_unpriced_tokens(baseline_tm)
+    current_unpriced = side_unpriced_tokens(current_tm)
     by_model = _diff_by_model(
         baseline_tm.get("by_model") or [],
         current_tm.get("by_model") or [],
+        baseline_field_bearing=baseline_unpriced is not None,
+        current_field_bearing=current_unpriced is not None,
     )
 
     return TokenMetricsDelta(
@@ -324,6 +328,8 @@ def _diff_token_metrics(
         current_model_turns=current_turns,
         model_turns_delta=current_turns - baseline_turns,
         by_model=by_model,
+        baseline_unpriced_tokens=baseline_unpriced,
+        current_unpriced_tokens=current_unpriced,
     )
 
 
@@ -373,11 +379,15 @@ def _normalize_by_model(
 def _diff_by_model(
     baseline: dict[str, Any] | list[Any],
     current: dict[str, Any] | list[Any],
+    *,
+    baseline_field_bearing: bool,
+    current_field_bearing: bool,
 ) -> list[ModelTokenDelta]:
+    """Per-``(model, origin)`` deltas. ``*_field_bearing`` says whether each
+    side carries ``unpriced_tokens`` (:func:`side_unpriced_tokens` is not
+    ``None``), which decides an absent row's count (#723)."""
     baseline_map = _normalize_by_model(baseline)
     current_map = _normalize_by_model(current)
-    baseline_field_bearing = _carries_unpriced(baseline)
-    current_field_bearing = _carries_unpriced(current)
     keys = sorted(set(baseline_map.keys()) | set(current_map.keys()))
     deltas: list[ModelTokenDelta] = []
     for model, origin in keys:
@@ -406,19 +416,6 @@ def _diff_by_model(
             ),
         )
     return deltas
-
-
-def _carries_unpriced(raw: dict[str, Any] | list[Any]) -> bool:
-    """Whether a side's ``by_model`` carries ``unpriced_tokens`` (#723).
-
-    A v1 dict-shaped ``by_model`` predates the field. A list carries it when
-    every row has a readable count -- the rule ``report`` uses
-    (:func:`sum_unpriced_tokens`), so the two cannot disagree.
-    """
-    if not isinstance(raw, list):
-        return False
-    rows = [row for row in raw if isinstance(row, dict)]
-    return sum_unpriced_tokens(rows) is not None
 
 
 def _side_unpriced(row: dict[str, Any] | None, field_bearing: bool) -> int | None:

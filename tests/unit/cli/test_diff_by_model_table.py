@@ -87,11 +87,12 @@ def _unpriced_row(
     current_unpriced: int | None,
     model: str = "claude-opus-4-7",
     tokens: int = 1000,
+    current_tokens: int | None = None,
 ) -> ModelTokenDelta:
     return ModelTokenDelta(
         model=model,
         baseline_total_tokens=tokens,
-        current_total_tokens=tokens,
+        current_total_tokens=tokens if current_tokens is None else current_tokens,
         baseline_cost=baseline_cost,
         current_cost=current_cost,
         cost_delta=current_cost - baseline_cost,
@@ -133,8 +134,31 @@ def test_partially_unpriced_row_is_marked_and_has_no_delta() -> None:
     )]), "claude-opus-4-7")
     assert "$1.00 (partial)" in line
     assert "$3.00" in line
+    # Each side is marked from its own count: the priced current cell is not.
+    assert "$3.00 (partial)" not in line
+    assert line.count("(partial)") == 1
     assert "+$2.00" not in line
     assert "—" in line
+
+
+def test_each_cell_uses_its_own_sides_token_total() -> None:
+    # Baseline 400 of 1000 unpriced is partial; measured against the current
+    # side's 300 tokens it would wrongly read as wholly unpriced.
+    line = _row_line(_render([_unpriced_row(
+        baseline_cost=1.0, current_cost=3.0, baseline_unpriced=400, current_unpriced=0,
+        tokens=1000, current_tokens=300,
+    )]), "claude-opus-4-7")
+    assert "$1.00 (partial)" in line
+    assert "no price" not in line
+
+
+def test_current_side_marked_alone() -> None:
+    line = _row_line(_render([_unpriced_row(
+        baseline_cost=1.0, current_cost=3.0, baseline_unpriced=0, current_unpriced=400,
+    )]), "claude-opus-4-7")
+    assert "$3.00 (partial)" in line
+    assert "$1.00 (partial)" not in line
+    assert line.count("(partial)") == 1
 
 
 def test_legacy_row_renders_as_before() -> None:
@@ -147,15 +171,23 @@ def test_legacy_row_renders_as_before() -> None:
     assert "no price" not in line
 
 
-def _render_totals(by_model: list[ModelTokenDelta], *, baseline: float, current: float) -> str:
-    tokens = sum(row.baseline_total_tokens for row in by_model)
+def _render_totals(
+    *,
+    baseline_cost: float,
+    current_cost: float,
+    baseline_unpriced: int | None,
+    current_unpriced: int | None,
+    baseline_tokens: int = 1000,
+    current_tokens: int = 1000,
+) -> str:
     result = DiffResult(token_metrics=TokenMetricsDelta(
-        baseline_total_tokens=tokens,
-        current_total_tokens=tokens,
-        baseline_total_cost=baseline,
-        current_total_cost=current,
-        total_cost_delta=current - baseline,
-        by_model=by_model,
+        baseline_total_tokens=baseline_tokens,
+        current_total_tokens=current_tokens,
+        baseline_total_cost=baseline_cost,
+        current_total_cost=current_cost,
+        total_cost_delta=current_cost - baseline_cost,
+        baseline_unpriced_tokens=baseline_unpriced,
+        current_unpriced_tokens=current_unpriced,
     ))
     buf = io.StringIO()
     console = Console(
@@ -166,38 +198,45 @@ def _render_totals(by_model: list[ModelTokenDelta], *, baseline: float, current:
 
 
 def test_total_cost_row_priced_is_plain() -> None:
-    line = _render_totals([_unpriced_row(
+    line = _render_totals(
         baseline_cost=1.0, current_cost=3.0, baseline_unpriced=0, current_unpriced=0,
-    )], baseline=1.0, current=3.0)
+    )
     assert "+$2.00" in line
     assert "(partial)" not in line
 
 
 def test_total_cost_row_partly_unpriced_is_marked_with_no_delta() -> None:
-    line = _render_totals([
-        _unpriced_row(baseline_cost=1.0, current_cost=3.0, baseline_unpriced=0, current_unpriced=0),
-        _unpriced_row(
-            model=_UNPRICED, baseline_cost=0.0, current_cost=0.0,
-            baseline_unpriced=1000, current_unpriced=0,
-        ),
-    ], baseline=1.0, current=3.0)
+    line = _render_totals(
+        baseline_cost=1.0, current_cost=3.0, baseline_unpriced=400, current_unpriced=0,
+    )
     assert "$1.00 (partial)" in line
+    assert "$3.00" in line
+    assert "$3.00 (partial)" not in line
+    assert line.count("(partial)") == 1
     assert "+$2.00" not in line
     assert "—" in line
 
 
+def test_total_cost_row_uses_each_sides_token_total() -> None:
+    line = _render_totals(
+        baseline_cost=1.0, current_cost=3.0, baseline_unpriced=400, current_unpriced=0,
+        baseline_tokens=1000, current_tokens=300,
+    )
+    assert "$1.00 (partial)" in line
+    assert "no price" not in line
+
+
 def test_total_cost_row_fully_unpriced_says_no_price() -> None:
-    line = _render_totals([_unpriced_row(
-        model=_UNPRICED, baseline_cost=0.0, current_cost=0.0,
-        baseline_unpriced=1000, current_unpriced=1000,
-    )], baseline=0.0, current=0.0)
+    line = _render_totals(
+        baseline_cost=0.0, current_cost=0.0, baseline_unpriced=1000, current_unpriced=1000,
+    )
     assert line.count("no price") == 2
     assert "—" in line
 
 
 def test_total_cost_row_legacy_renders_as_before() -> None:
-    line = _render_totals([_unpriced_row(
+    line = _render_totals(
         baseline_cost=0.0, current_cost=2.0, baseline_unpriced=None, current_unpriced=0,
-    )], baseline=0.0, current=2.0)
+    )
     assert "$0.00" in line
     assert "+$2.00" in line
