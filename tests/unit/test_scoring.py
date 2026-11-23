@@ -14,6 +14,17 @@ from agentfluent.diagnostics import _complexity
 
 AGENTS_FIXTURES = Path(__file__).parent.parent / "fixtures" / "agents"
 
+# #680: one id per `complex` family (Opus, Fable, Mythos), undated + dated, and
+# the bare alias. Flagged by default; unflagged once the tier no longer holds them.
+COMPLEX_TIER_MODELS: tuple[str, ...] = (
+    "claude-opus-4-7",
+    "claude-opus-5-5",
+    "claude-opus-4-5-20251101",
+    "claude-fable-5-2",
+    "claude-mythos-5-2",
+    "opus",
+)
+
 
 def _make_agent(**kwargs: object) -> AgentConfig:
     """Helper to create an AgentConfig with defaults."""
@@ -144,17 +155,7 @@ class TestModelSelectionScoring:
         assert score.dimension_scores["model_selection"] == 25
 
     # #680: "expensive" is the `complex` tier, not a hand-kept id list.
-    @pytest.mark.parametrize(
-        "model",
-        [
-            "claude-opus-4-7",
-            "claude-opus-5-5",
-            "claude-opus-4-5-20251101",
-            "claude-fable-5-2",
-            "claude-mythos-5-2",
-            "opus",
-        ],
-    )
+    @pytest.mark.parametrize("model", COMPLEX_TIER_MODELS)
     def test_complex_tier_model_read_only_is_flagged(self, model: str) -> None:
         agent = _make_agent(model=model, tools=["Read", "Glob", "Grep"])
         score = score_agent(agent)
@@ -210,12 +211,13 @@ class TestModelSelectionScoring:
         assert score.dimension_scores["model_selection"] == 15
 
     def test_gate_reads_only_the_tier_map(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # #680 AC1: the tier is the only source. With Opus removed from `complex`, an
-        # Opus agent is no longer flagged -- fails if any id list or prefix check is
-        # kept alongside the classifier.
+        # #680 AC1: the tier is the only source. With every real family removed from
+        # `complex`, none of COMPLEX_TIER_MODELS (nor the old list's claude-opus-4-6) is
+        # flagged -- fails if an id list or a family-prefix check covering any of them
+        # (Opus, Fable, Mythos, bare `opus`) is kept alongside the classifier.
         assert not hasattr(scoring, "EXPENSIVE_MODELS")
         monkeypatch.setitem(_complexity._TIER_BY_FAMILY, "complex", ("claude-testfam",))
-        for model in ("claude-opus-5-5", "claude-opus-4-6"):
+        for model in (*COMPLEX_TIER_MODELS, "claude-opus-4-6"):
             score = score_agent(_make_agent(model=model, tools=["Read"]))
             assert score.dimension_scores["model_selection"] == 25
             assert not [
