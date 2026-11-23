@@ -14,8 +14,9 @@ from agentfluent.diagnostics import _complexity
 
 AGENTS_FIXTURES = Path(__file__).parent.parent / "fixtures" / "agents"
 
-# #680: one id per `complex` family (Opus, Fable, Mythos), undated + dated, and
-# the bare alias. Flagged by default; unflagged once the tier no longer holds them.
+# #680: ids from every `complex` family -- Opus (two undated, one dated), Fable and
+# Mythos (undated) -- plus the bare `opus` alias. Flagged by default; unflagged once
+# the tier no longer holds them.
 COMPLEX_TIER_MODELS: tuple[str, ...] = (
     "claude-opus-4-7",
     "claude-opus-5-5",
