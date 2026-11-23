@@ -290,7 +290,7 @@ def resolve_model_alias(model: str) -> str:
 
     One lookup in ``_ALIASES``, never recursive -- an alias may not target another alias
     (pinned by the ``target not in _ALIASES`` assert in
-    ``tests/unit/test_model_routing.py::test_every_alias_classifies_like_its_target``).
+    ``tests/unit/test_model_routing.py::TestHelpers::test_every_alias_classifies_like_its_target``).
     Unknown strings pass through unchanged. Shared by pricing (``get_pricing``) and tier
     classification (``diagnostics._complexity.classify_model_tier``, #679), so those two
     cannot disagree. Not every model-string consumer reads through it yet:
