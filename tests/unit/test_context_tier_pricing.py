@@ -27,7 +27,7 @@ from genai_prices.types import Tier, TieredPrices, calc_unit_price
 from agentfluent.agents.models import AgentInvocation
 from agentfluent.analytics import pricing
 from agentfluent.analytics._genai_source import _rate_for_prompt, _resolve_rates, _tier_table
-from agentfluent.analytics.pipeline import analyze_session
+from agentfluent.analytics.pipeline import SessionAnalysis, analyze_session
 from agentfluent.analytics.pricing import (
     ContextTier,
     ModelPricing,
@@ -356,12 +356,16 @@ class TestNonLinearityGuard:
 
 
 class TestReconciliationWithTiers:
-    """AC4: Σ per-agent cost + ``trace_coverage`` nested + session_spawned cost ==
-    subagent-origin ``by_model`` cost, with haiku-5-5 subagent turns that are each UNDER the
-    100K threshold while every trace's sum is over it -- so any term priced on a sum tiers
-    and breaks the identity, and the per-request fold equals the base-rate fold."""
+    """AC4/AC4′: Σ per-agent cost + ``trace_coverage`` nested + session_spawned cost ==
+    subagent-origin ``by_model`` cost, on haiku-5-5 subagent traces in two shapes:
 
-    def _tiered_copy(self, tmp_path: Path) -> Path:
+    - every turn UNDER the 100K threshold while every trace's sum is over it -- so any term
+      priced on a sum tiers and breaks the identity, and the fold equals the base-rate fold;
+    - every turn OVER the threshold ("with tiered turns present") -- the identity still holds,
+      and the fold is exactly 5x the base-rate fold (haiku-5-5's tier is 5x on every key).
+    """
+
+    def _tiered_copy(self, tmp_path: Path, cache_read: int) -> Path:
         src = FIXTURES / "nested_session"
         dst = tmp_path / "nested_session"
         shutil.copytree(src, dst)
@@ -369,19 +373,18 @@ class TestReconciliationWithTiers:
             text = trace_file.read_text()
             text = text.replace("claude-haiku-4-5-20251001", HAIKU_55)
             text = re.sub(
-                r'"cache_read_input_tokens":\s*\d+', '"cache_read_input_tokens":90000', text,
+                r'"cache_read_input_tokens":\s*\d+',
+                f'"cache_read_input_tokens":{cache_read}',
+                text,
             )
             trace_file.write_text(text)
         return dst / "nested-session-1.jsonl"
 
-    def test_invariant_holds_and_no_turn_is_tiered(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        path = self._tiered_copy(tmp_path)
+    @staticmethod
+    def _fold(tm: TokenMetrics) -> float:
+        return sum(r.cost for r in tm.by_model if r.origin == "subagent")
 
-        def fold(tm: TokenMetrics) -> float:
-            return sum(r.cost for r in tm.by_model if r.origin == "subagent")
-
+    def _assert_invariant(self, path: Path) -> SessionAnalysis:
         result = analyze_session(path)
         agents = sum(
             m.estimated_total_cost_usd for m in result.agent_metrics.by_agent_type.values()
@@ -389,8 +392,29 @@ class TestReconciliationWithTiers:
         coverage = result.trace_coverage
         assert coverage is not None
         beyond = coverage.nested.cost + coverage.session_spawned.cost
-        assert fold(result.token_metrics) > 0
-        assert agents + beyond == pytest.approx(fold(result.token_metrics))
+        assert self._fold(result.token_metrics) > 0
+        assert agents + beyond == pytest.approx(self._fold(result.token_metrics))
+        return result
+
+    def test_invariant_holds_with_every_turn_tiered(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        path = self._tiered_copy(tmp_path, cache_read=150_000)
+        result = self._assert_invariant(path)
+        traces = [inv.trace for inv in result.invocations if inv.trace is not None]
+        assert traces
+        for trace in traces:
+            assert all(prompt_tokens(t.usage) > 100_000 for t in trace.turn_usages)
+        monkeypatch.setattr(ModelPricing, "for_prompt", lambda self, _n: self)
+        base_fold = self._fold(analyze_session(path).token_metrics)
+        assert self._fold(result.token_metrics) == pytest.approx(5 * base_fold)
+
+    def test_invariant_holds_and_no_turn_is_tiered(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        path = self._tiered_copy(tmp_path, cache_read=90_000)
+        result = self._assert_invariant(path)
+        fold = self._fold
 
         # Precondition: each turn is under 100K and every trace's sum is over it.
         traces = [
