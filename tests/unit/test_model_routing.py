@@ -592,6 +592,23 @@ class TestHelpers:
         assert faster_tier("sonnet") == "simple"
         assert faster_tier("haiku") is None
 
+    def test_bare_1m_aliases_classify_like_their_bare_alias(self) -> None:
+        # #745 AC1.
+        assert classify_model_tier("opus[1m]") == "complex"
+        assert faster_tier("opus[1m]") == "moderate"
+        assert classify_model_tier("sonnet[1m]") == "moderate"
+
+    @pytest.mark.parametrize(
+        "variant", ["Opus", "HAIKU", "FABLE", "Claude-Haiku-4-5", "OPUS[1M]"],
+    )
+    def test_case_variant_classifies_like_lowercase(self, variant: str) -> None:
+        # #745 AC2 (tiering half). Sonnet is deliberately absent: it is `moderate`, which is also
+        # the unmatched default, so a missing case fold would agree with it by accident. Every
+        # variant here lands on a non-default tier instead.
+        assert classify_model_tier(variant.lower()) in {"simple", "complex"}
+        assert classify_model_tier(variant) == classify_model_tier(variant.lower())
+        assert faster_tier(variant) == faster_tier(variant.lower())
+
     def test_every_alias_classifies_like_its_target(self) -> None:
         # #679 guard. `test_every_priced_model_classifies_by_family` iterates
         # `get_known_models()`, which excludes aliases, so it was structurally

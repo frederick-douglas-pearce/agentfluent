@@ -358,10 +358,10 @@ def classify_upstream_match(
     # are lowercase, so comparing to the raw ref would report a mere case variant as a *different*
     # record (#664 review r1).
     #
-    # Scope of this fix, stated because an earlier version of this comment overclaimed it: it
-    # corrects the KIND reported here. It does NOT make a case variant price -- ``_ALIASES`` and
-    # the ``_KNOWN_MODELS`` membership test in ``get_pricing`` are both case-sensitive, so
-    # ``CLAUDE-SONNET-5`` still reads as uncurated and still warns, and ``_WARNED_UNCURATED`` is
-    # keyed per spelling. Normalizing case at the ``get_pricing`` entry would change which ids
-    # price, which is out of scope for a cost-neutral change (#683).
+    # Scope of this comparison: it corrects the KIND reported here, nothing more. Making a case
+    # variant price is ``pricing.resolve_model_alias``'s job, which lowercases before the
+    # ``_KNOWN_MODELS`` test in ``get_pricing`` (#745) -- so ``CLAUDE-SONNET-5`` prices as its
+    # curated id, and ``get_pricing`` reaches the uncurated path with an already-lowercased id.
+    # The comparison stays here anyway: this function is public, and
+    # ``tests/unit/test_pricing.py::TestClassifyUpstreamMatch`` calls it with mixed case directly.
     return ("exact" if model.id == model_ref.lower() else "inexact"), model.id

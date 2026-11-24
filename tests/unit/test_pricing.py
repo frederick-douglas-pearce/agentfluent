@@ -138,6 +138,48 @@ class TestResolveModelAlias:
         assert resolve_model_alias("claude-opus-4-8") == "claude-opus-4-8"
         assert resolve_model_alias("not-a-model") == "not-a-model"
 
+    def test_unknown_passes_through_lowercased(self) -> None:
+        # #745: resolution is case-insensitive, so an unknown string comes back lowercased.
+        assert resolve_model_alias("Not-A-Model") == "not-a-model"
+
+    def test_bare_1m_aliases_bind_to_their_bare_targets(self) -> None:
+        # #745 AC3, MECHANISM: observe WHICH id resolves, not only the rate -- two ids sharing a
+        # rate would hide a wrong binding from a rate comparison.
+        assert resolve_model_alias("opus[1m]") == resolve_model_alias("opus") == "claude-opus-4-8"
+        assert (
+            resolve_model_alias("sonnet[1m]")
+            == resolve_model_alias("sonnet")
+            == "claude-sonnet-4-6"
+        )
+
+    @pytest.mark.parametrize("variant", ["opus[1m]", "sonnet[1m]"])
+    def test_bare_1m_alias_prices_like_its_bare_alias(self, variant: str) -> None:
+        # #745 AC3. `is not None` first: `None == None` would read as agreement.
+        assert get_pricing(variant) is not None
+        assert get_pricing(variant) == get_pricing(variant.removesuffix("[1m]"))
+
+    @pytest.mark.parametrize(
+        "variant", ["Opus", "HAIKU", "Sonnet", "FABLE", "Claude-Opus-4-8", "OPUS[1M]"],
+    )
+    def test_case_variant_resolves_and_prices_like_lowercase(self, variant: str) -> None:
+        # #745 AC2 (pricing half; the tiering half is in test_model_routing.py).
+        lower = variant.lower()
+        assert resolve_model_alias(variant) == resolve_model_alias(lower)
+        assert get_pricing(lower) is not None
+        assert get_pricing(variant) == get_pricing(lower)
+
+    def test_registry_keys_are_lowercase(self) -> None:
+        # #745: `resolve_model_alias` lowercases its input before the lookup, so a mixed-case
+        # alias key or curated id could never be matched -- it would silently fail closed to
+        # $0 / the `moderate` default. The COST_METHOD_VERSION no-bump for #745 also rests on
+        # this: lowercasing is identity on every id that already priced.
+        from agentfluent.analytics.pricing import _ALIASES, _KNOWN_MODELS
+        from agentfluent.diagnostics._complexity import _TIER_BY_FAMILY
+
+        keys = [*_ALIASES, *_ALIASES.values(), *_KNOWN_MODELS]
+        prefixes = [p for ps in _TIER_BY_FAMILY.values() for p in ps]
+        assert [k for k in [*keys, *prefixes] if k != k.lower()] == []
+
     def test_get_pricing_reads_through_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Pricing and tiering must share one lookup: redirect the resolver and
         # get_pricing must follow it.
@@ -622,13 +664,16 @@ class TestCurrentFamilyRegression:
             "claude-fable-5-2[1m]",
             "claude-fable-5[1m]",
             "claude-mythos-5-2[1m]",
+            # #745: the bare forms; their base is the bare alias itself.
+            "opus[1m]",
+            "sonnet[1m]",
         ],
     )
     def test_1m_variants_resolve_to_base(self, variant: str) -> None:
-        # EVERY `[1m]` alias, never a subset: #674's six plus #664's two. Two of #674's were
-        # once untested and deleting either alias line left the suite green (#674 review) --
-        # #664 then added two more aliases and again did not extend this list, which round 2
-        # caught. If you add an alias, add it here.
+        # EVERY `[1m]` alias, never a subset: #674's six, #664's two, #745's two bare forms.
+        # Two of #674's were once untested and deleting either alias line left the suite
+        # green (#674 review) -- #664 then added two more aliases and again did not extend
+        # this list, which round 2 caught. If you add an alias, add it here.
         base = variant.removesuffix("[1m]")
         # `is not None` first -- `==` alone is satisfied by `None == None`, so a variant
         # and base that BOTH failed to resolve would read as agreement.
@@ -653,7 +698,7 @@ class TestCurrentFamilyRegression:
         # Know what it does NOT cover, because it is a structural invariant over the mechanism's
         # data table rather than an observation of which code path runs (#664 acceptance-gate
         # re-check): it proves the table is self-consistent, not that alias resolution consults
-        # the table. Gut `canonical = _ALIASES.get(model, model)` in `get_pricing` and this test
+        # the table. Gut the `_ALIASES.get(...)` lookup in `resolve_model_alias` and this test
         # still passes against a perfectly tidy table. That half is pinned by
         # `test_1m_variants_resolve_to_base` and the other alias-resolution tests in
         # `TestGetPricing` -- verified: gutting that lookup fails eight of them. So the mechanism
@@ -662,11 +707,16 @@ class TestCurrentFamilyRegression:
 
         one_m = {k: v for k, v in _ALIASES.items() if k.endswith("[1m]")}
         assert one_m, "no `[1m]` aliases found -- the registry shape changed"
-        mismatched = {k: v for k, v in one_m.items() if v != k.removesuffix("[1m]")}
+        # A bare `[1m]` key (#745) binds to whatever its bare base resolves to (`opus[1m]` ->
+        # `_ALIASES["opus"]`); for a full-id key the base is not an alias, so this is the base.
+        mismatched = {
+            k: v for k, v in one_m.items()
+            if v != _ALIASES.get(k.removesuffix("[1m]"), k.removesuffix("[1m]"))
+        }
         assert mismatched == {}, (
             f"`[1m]` alias(es) bound to the wrong base: {mismatched}. Each must map to its own "
-            "base id; a cross-binding is invisible to any rate comparison whenever the two ids "
-            "happen to share a rate."
+            "base id (a bare key: its bare alias's target); a cross-binding is invisible to any "
+            "rate comparison whenever the two ids happen to share a rate."
         )
 
     def test_bare_fable_alias_resolves_to_the_pinned_generation(self) -> None:

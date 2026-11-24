@@ -282,6 +282,11 @@ _ALIASES: dict[str, str] = {
     # WARNING cannot see them -- the alias is the only thing that makes them price.
     "claude-fable-5[1m]": "claude-fable-5",
     "claude-mythos-5-2[1m]": "claude-mythos-5-2",
+    # #745: the bare 1M-context aliases Claude Code accepts for `model:` in agent frontmatter.
+    # Each targets the id its bare alias resolves to, directly -- an alias may not target another
+    # alias. DEFENSIVE: zero corpus rows as of 2026-11-23.
+    "opus[1m]": "claude-opus-4-8",
+    "sonnet[1m]": "claude-sonnet-4-6",
 }
 
 
@@ -291,13 +296,19 @@ def resolve_model_alias(model: str) -> str:
     One lookup in ``_ALIASES``, never recursive -- an alias may not target another alias
     (pinned by the ``target not in _ALIASES`` assert in
     ``tests/unit/test_model_routing.py::TestHelpers::test_every_alias_classifies_like_its_target``).
-    Unknown strings pass through unchanged. Shared by pricing (``get_pricing``) and tier
+    Case-insensitive (#745): the input is lowercased before the lookup, so ``Opus``,
+    ``HAIKU`` and ``Claude-Opus-4-8`` resolve like their lowercase forms, and unknown strings
+    pass through **lowercased**. Every ``_ALIASES`` key must therefore be lowercase -- a
+    mixed-case key could never be reached (pinned by
+    ``tests/unit/test_pricing.py::TestResolveModelAlias::test_registry_keys_are_lowercase``).
+    Shared by pricing (``get_pricing``) and tier
     classification (``diagnostics._complexity.classify_model_tier``, #679), so those two
     cannot disagree; ``config.scoring._is_expensive_model`` reads through the tier
     classifier (#680). Not every model-string consumer reads through it yet:
     ``diagnostics.parent_workload.pick_alternative_model`` is a substring ladder (#683).
     """
-    return _ALIASES.get(model, model)
+    lowered = model.lower()
+    return _ALIASES.get(lowered, lowered)
 
 
 # Sentinel model names emitted by Claude Code for synthetic/internal messages.

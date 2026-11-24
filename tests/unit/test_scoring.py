@@ -24,6 +24,9 @@ COMPLEX_TIER_MODELS: tuple[str, ...] = (
     "claude-fable-5-2",
     "claude-mythos-5-2",
     "opus",
+    # #745: bare `[1m]` alias and a case variant resolve like `opus`.
+    "opus[1m]",
+    "Opus",
 )
 
 
@@ -174,8 +177,6 @@ class TestModelSelectionScoring:
             "sonnet",
             "inherit",
             "claude-experimental-9000",
-            # #745 gap: bare `[1m]` aliases do not resolve yet; flips when #745 lands.
-            "opus[1m]",
         ],
     )
     def test_non_complex_model_read_only_is_not_flagged(self, model: str) -> None:
