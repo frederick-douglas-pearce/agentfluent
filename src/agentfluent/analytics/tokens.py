@@ -8,6 +8,7 @@ cost breakdown and parent-vs-subagent origin attribution.
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -85,16 +86,60 @@ def side_unpriced_tokens(token_metrics: Mapping[str, Any]) -> int | None:
     return sum_unpriced_tokens(rows)
 
 
+def serialized_count(serialized: Mapping[str, Any], key: str) -> int:
+    """A serialized token count, ``0`` when missing or not a number (#742).
+
+    A saved envelope may be hand-edited, so a null, string or other
+    non-numeric value reads as ``0`` instead of crashing ``report``. An int
+    or finite float is truncated to ``int``, and a numeric string such as
+    ``"5"`` is parsed, as ``int(...)`` accepted before. A bool is not a count.
+    """
+    value = serialized.get(key)
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if math.isfinite(value) else 0
+    if isinstance(value, str):
+        try:
+            parsed = float(value)
+        except ValueError:
+            return 0
+        return int(parsed) if math.isfinite(parsed) else 0
+    return 0
+
+
+def serialized_cost(serialized: Mapping[str, Any], key: str) -> float:
+    """A serialized dollar figure, ``0.0`` when missing or not a number (#742).
+
+    Same rule as :func:`serialized_count`, kept as a ``float``.
+    """
+    value = serialized.get(key)
+    if isinstance(value, bool):
+        return 0.0
+    if isinstance(value, int | float):
+        return float(value) if math.isfinite(value) else 0.0
+    if isinstance(value, str):
+        try:
+            parsed = float(value)
+        except ValueError:
+            return 0.0
+        return parsed if math.isfinite(parsed) else 0.0
+    return 0.0
+
+
 def serialized_total_tokens(serialized: Mapping[str, Any]) -> int:
     """Total tokens of a serialized ``token_metrics`` block or ``by_model`` row.
 
     ``TokenMetrics.total_tokens`` and ``ModelTokenBreakdown.total_tokens`` are
     properties that ``model_dump`` skips, so the total is rebuilt from the
-    four serialized components both shapes share; a missing or null
-    component counts as ``0``. The one copy ``report`` and ``diff`` use.
+    four serialized components both shapes share; a component that is
+    missing, null or not a number counts as ``0`` (:func:`serialized_count`).
+    The one copy ``report`` and ``diff`` use.
     """
     return sum(
-        int(serialized.get(key, 0) or 0)
+        serialized_count(serialized, key)
         for key in (
             "input_tokens",
             "output_tokens",

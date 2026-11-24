@@ -12,6 +12,8 @@ import pytest
 
 from agentfluent.analytics.tokens import (
     row_unpriced_tokens,
+    serialized_cost,
+    serialized_count,
     serialized_total_tokens,
     side_unpriced_tokens,
     sum_unpriced_tokens,
@@ -121,6 +123,54 @@ class TestSerializedTotalTokens:
 
     def test_missing_or_null_components_count_as_zero(self) -> None:
         assert serialized_total_tokens({"input_tokens": 5, "output_tokens": None}) == 5
+
+    def test_non_numeric_components_count_as_zero(self) -> None:
+        # #742: int("abc") raised; a hand-edited envelope now reads as 0.
+        block = {"input_tokens": "abc", "output_tokens": "7", "cache_read_input_tokens": True}
+        assert serialized_total_tokens(block) == 7
+
+
+class TestSerializedCount:
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (12, 12),
+            (12.9, 12),
+            ("12", 12),
+            ("12.5", 12),
+            (None, 0),
+            ("abc", 0),
+            (True, 0),
+            (float("nan"), 0),
+            (float("inf"), 0),
+            ("inf", 0),
+            ([1], 0),
+        ],
+    )
+    def test_coerces_or_zeroes(self, value: Any, expected: int) -> None:
+        assert serialized_count({"k": value}, "k") == expected
+
+    def test_missing_key_is_zero(self) -> None:
+        assert serialized_count({}, "k") == 0
+
+
+class TestSerializedCost:
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (1.25, 1.25),
+            (2, 2.0),
+            ("0.5", 0.5),
+            (None, 0.0),
+            ("n/a", 0.0),
+            (False, 0.0),
+            (float("nan"), 0.0),
+            ("-inf", 0.0),
+            ({"x": 1}, 0.0),
+        ],
+    )
+    def test_coerces_or_zeroes(self, value: Any, expected: float) -> None:
+        assert serialized_cost({"k": value}, "k") == expected
 
 
 class TestSideUnpricedTokens:
