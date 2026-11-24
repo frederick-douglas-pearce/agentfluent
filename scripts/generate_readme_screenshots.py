@@ -25,6 +25,7 @@ from __future__ import annotations
 import io
 import sys
 from pathlib import Path
+from typing import Any
 
 from rich.console import Console
 
@@ -66,9 +67,40 @@ def make_console() -> Console:
     )
 
 
+def _home_markers() -> tuple[str, str]:
+    """The two spellings of the home dir that would leak a real user path:
+    the filesystem path (``/home/alice``) and Claude Code's project-dir slug
+    form (``-home-alice``)."""
+    home = str(Path.home())
+    return home, home.replace("/", "-")
+
+
+def _scrub_home(obj: Any) -> Any:
+    """Return a copy of a JSON-shaped ``obj`` with the home-dir prefix
+    replaced by ``~`` in every string. Recommendation messages cite agent
+    definition paths (``Agent 'x' is defined in /home/...``); scrubbing the
+    data before rendering keeps the real path out of the screenshot and lets
+    Rich compute column truncation on the scrubbed text."""
+    if isinstance(obj, str):
+        return obj.replace(str(Path.home()), "~")
+    if isinstance(obj, dict):
+        return {key: _scrub_home(value) for key, value in obj.items()}
+    if isinstance(obj, list):
+        return [_scrub_home(item) for item in obj]
+    return obj
+
+
 def save(console: Console, filename: str, title: str) -> None:
     out = IMAGES_DIR / filename
     console.save_svg(str(out), title=title)
+    svg = out.read_text(encoding="utf-8")
+    leaked = [marker for marker in _home_markers() if marker in svg]
+    if leaked:
+        out.unlink()
+        raise SystemExit(
+            f"refusing to write {out.relative_to(REPO_ROOT)}: it contains the "
+            f"real home-dir path ({', '.join(leaked)}); scrub it before rendering",
+        )
     print(f"wrote {out.relative_to(REPO_ROOT)}")
 
 
@@ -196,8 +228,10 @@ def generate_diff(paths: list[Path]) -> None:
         print("not enough sessions for diff screenshot; skipping")
         return
     half = len(paths) // 2
-    baseline = _analyze_with_diagnostics(paths[:half]).model_dump(mode="json")
-    current = _analyze_with_diagnostics(paths).model_dump(mode="json")
+    baseline = _scrub_home(
+        _analyze_with_diagnostics(paths[:half]).model_dump(mode="json"),
+    )
+    current = _scrub_home(_analyze_with_diagnostics(paths).model_dump(mode="json"))
     diff_result = compute_diff(baseline, current)
     console = make_console()
     format_diff_table(console, diff_result, top_n=5, verbose=False)
