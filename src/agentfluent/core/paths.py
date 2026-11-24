@@ -68,6 +68,42 @@ def claude_json_for(config_root: Path | None) -> Path:
     return config_root.parent / ".claude.json"
 
 
+def home_relative(path: Path) -> str:
+    """Render ``path`` with ``$HOME`` replaced by ``~`` for message text.
+
+    Why: diagnostic signal and recommendation messages are rendered into
+    terminal output, shared JSON and committed README screenshots, so an
+    absolute path leaks the user's home directory (#340, #753). Structured
+    fields (``DiagnosticSignal.detail["source_file"]``,
+    ``DiagnosticRecommendation.config_file``) keep the absolute path for
+    programmatic consumers. A path outside ``$HOME`` is returned unchanged.
+
+    ``path`` is matched against ``$HOME`` as given and then as resolved:
+    agent definitions are stored symlink-resolved (``config/scanner.py``),
+    so where ``$HOME`` traverses a symlink (``/home`` -> ``/var/home``, an
+    automounted home) only the resolved form matches. ``$HOME`` is resolved
+    only when the plain match fails, and a home that cannot be resolved (a
+    symlink loop raises ``RuntimeError`` on Python 3.12) falls back to the
+    unchanged path rather than failing message rendering.
+
+    Input contract: ``path`` should be symlink-resolved (as
+    ``config/scanner.py`` stores agent definitions) or spelled under
+    ``$HOME`` as given. ``path`` itself is deliberately not resolved, so an
+    in-home symlink pointing outside ``$HOME`` is never rendered as its
+    out-of-home target. The relative part is joined with ``/`` on every OS.
+    """
+    home = Path.home()
+    try:
+        return "~/" + path.relative_to(home).as_posix()
+    except ValueError:
+        pass
+    try:
+        resolved_home = home.resolve()
+        return "~/" + path.relative_to(resolved_home).as_posix()
+    except (ValueError, OSError, RuntimeError):
+        return str(path)
+
+
 def settings_path_for(config_root: Path | None) -> Path:
     """Path to the user's ``~/.claude/settings.json`` file.
 

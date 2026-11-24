@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from agentfluent.agents.models import AgentInvocation, is_builtin_agent
 from agentfluent.config.models import AgentConfig, Severity
+from agentfluent.core.paths import home_relative
 from agentfluent.diagnostics.models import DiagnosticSignal, SignalType
 
 # RAG-MCP (arXiv 2505.03275) heatmap inflection point: tool-selection
@@ -61,7 +62,8 @@ def audit_unused_agents(
                 severity=Severity.INFO,
                 agent_type=config.name,
                 message=(
-                    f"Agent '{config.name}' is defined in {config.file_path} "
+                    f"Agent '{config.name}' is defined in "
+                    f"{home_relative(config.file_path)} "
                     f"but has 0 invocations across {sessions_analyzed} "
                     "analyzed sessions."
                 ),

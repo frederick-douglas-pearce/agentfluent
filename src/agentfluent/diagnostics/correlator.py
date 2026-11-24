@@ -14,6 +14,7 @@ from typing import ClassVar, Protocol
 
 from agentfluent.agents.models import is_builtin_agent
 from agentfluent.config.models import AgentConfig, HookFieldCoverage, Severity
+from agentfluent.core.paths import home_relative as _relpath
 from agentfluent.diagnostics._complexity import (
     faster_tier,
     select_target_model,
@@ -39,21 +40,6 @@ from agentfluent.diagnostics.quality_signals import (
 from agentfluent.diagnostics.tool_orchestration import ESTIMATED_TOKEN_SAVINGS_KEY
 from agentfluent.diagnostics.trace_signals import PARAMETER_RETRY_EXAMPLE_KEY
 from agentfluent.glossary.loader import builtin_tool_names_cached
-
-
-def _relpath(path: Path) -> str:
-    """Render ``path`` with ``$HOME`` replaced by ``~`` for message text.
-
-    Why: recommendation message strings are rendered into committed
-    README screenshots, so any absolute path leaks the contributor's
-    home directory into a public image (#340). The ``config_file`` field
-    on ``DiagnosticRecommendation`` keeps the absolute path for
-    programmatic consumers.
-    """
-    try:
-        return "~/" + str(path.relative_to(Path.home()))
-    except ValueError:
-        return str(path)
 
 
 class CorrelationRule(Protocol):

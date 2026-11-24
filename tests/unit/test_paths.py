@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -15,6 +15,7 @@ from agentfluent.core.paths import (
     agentfluent_cache_dir,
     agentfluent_config_dir,
     agentfluent_state_dir,
+    home_relative,
     settings_path_for,
     validate_claude_config_dir,
 )
@@ -96,3 +97,122 @@ class TestAgentfluentStateDir:
     ) -> None:
         monkeypatch.setenv(XDG_STATE_HOME_ENV_VAR, str(tmp_path))
         assert agentfluent_state_dir() == tmp_path / "agentfluent"
+
+
+class TestHomeRelative:
+    """``home_relative`` renders ``$HOME`` as ``~`` for message text (#340, #753)."""
+
+    @pytest.fixture
+    def fake_home(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+        home = tmp_path / "al"
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+        return home
+
+    def test_path_under_home_becomes_tilde_relative(self, fake_home: Path) -> None:
+        path = fake_home / ".claude" / "agents" / "tester.md"
+        assert home_relative(path) == "~/.claude/agents/tester.md"
+
+    def test_path_outside_home_unchanged(self, fake_home: Path) -> None:
+        assert home_relative(Path("/etc/agentfluent/global.md")) == (
+            "/etc/agentfluent/global.md"
+        )
+
+    def test_sibling_sharing_home_prefix_unchanged(self, fake_home: Path) -> None:
+        # ``/.../al`` must not swallow ``/.../alice`` -- a component match,
+        # not a string-prefix match.
+        sibling = fake_home.parent / "alice" / "agents" / "pm.md"
+        assert home_relative(sibling) == str(sibling)
+
+    @pytest.fixture
+    def symlinked_home(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> tuple[Path, Path]:
+        """``$HOME`` is a symlink (``home-link`` -> ``var/home/al``);
+        returns ``(link_home, real_home)``."""
+        real_home = tmp_path / "var" / "home" / "al"
+        real_home.mkdir(parents=True)
+        link_home = tmp_path / "home-link"
+        link_home.symlink_to(real_home, target_is_directory=True)
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: link_home))
+        return link_home, real_home
+
+    def test_path_under_symlinked_home_matches_resolved_home(
+        self, symlinked_home: tuple[Path, Path],
+    ) -> None:
+        # Agent definitions are stored resolved; $HOME may be a symlink
+        # (e.g. /home -> /var/home). The resolved path must still render ~/.
+        link_home, real_home = symlinked_home
+        resolved_path = real_home / ".claude" / "agents" / "tester.md"
+        assert home_relative(resolved_path) == "~/.claude/agents/tester.md"
+        # The unresolved spelling under the symlink still matches too.
+        assert home_relative(link_home / "x.md") == "~/x.md"
+
+    def test_unresolvable_home_falls_back_to_unchanged_path(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> None:
+        # A symlink-loop $HOME makes Path.resolve() raise RuntimeError on
+        # Python 3.12; rendering must degrade to the path, not crash.
+        loop_home = tmp_path / "loop"
+        loop_home.symlink_to(loop_home)
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: loop_home))
+        assert home_relative(Path("/opt/agents/x.md")) == "/opt/agents/x.md"
+
+    def test_symlinked_home_path_outside_both_spellings_unchanged(
+        self, symlinked_home: tuple[Path, Path],
+    ) -> None:
+        assert home_relative(Path("/opt/x.md")) == "/opt/x.md"
+
+    def test_sibling_of_resolved_home_unchanged(
+        self, symlinked_home: tuple[Path, Path],
+    ) -> None:
+        # The resolved-home branch also matches whole components:
+        # ``.../al`` must not swallow ``.../alice``.
+        _, real_home = symlinked_home
+        sibling = real_home.parent / "alice" / "x.md"
+        assert home_relative(sibling) == str(sibling)
+
+    def test_home_resolved_only_when_plain_match_fails(
+        self, fake_home: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Round-2 fix (#755): resolve() is a syscall and can raise, so a
+        # path matching $HOME as given must never trigger it.
+        def _no_resolve(self: Path, strict: bool = False) -> Path:
+            raise AssertionError("home resolved on a plain match")
+
+        monkeypatch.setattr(Path, "resolve", _no_resolve)
+        assert home_relative(fake_home / "a" / "b.md") == "~/a/b.md"
+
+    def test_relative_part_joined_with_forward_slashes(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Message text is identical on every OS: a Windows-flavored path
+        # renders ``~/a/b.md``, not ``~/a\\b.md``.
+        win_home = PureWindowsPath("C:/Users/al")
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: win_home))
+        path = PureWindowsPath("C:/Users/al/.claude/agents/t.md")
+        assert home_relative(path) == "~/.claude/agents/t.md"  # type: ignore[arg-type]
+
+    def test_home_resolve_oserror_falls_back_to_unchanged_path(
+        self, fake_home: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # A home whose resolution fails with OSError (permission / stat
+        # failure) must degrade to the path, not fail message rendering.
+        def _resolve_fails(self: Path, strict: bool = False) -> Path:
+            raise PermissionError("cannot stat home")
+
+        monkeypatch.setattr(Path, "resolve", _resolve_fails)
+        assert home_relative(Path("/opt/agents/x.md")) == "/opt/agents/x.md"
+
+    def test_resolved_branch_joined_with_forward_slashes(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # The resolved-home branch posix-joins too: a Windows-flavored home
+        # that only matches once resolved renders ``~/a/b.md``.
+        class _LinkedWinHome(PureWindowsPath):
+            def resolve(self, strict: bool = False) -> PureWindowsPath:
+                return PureWindowsPath("C:/real/al")
+
+        link_home = _LinkedWinHome("C:/link/al")
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: link_home))
+        path = PureWindowsPath("C:/real/al/.claude/agents/t.md")
+        assert home_relative(path) == "~/.claude/agents/t.md"  # type: ignore[arg-type]

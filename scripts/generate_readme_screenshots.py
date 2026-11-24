@@ -91,10 +91,12 @@ def _scrub_home(obj: Any) -> Any:
     """Return a copy of a JSON-shaped ``obj`` with the home-dir prefix
     replaced by ``~`` in every string value (dict keys are left as-is; none
     carries a path today). The match ends at a path boundary, so home
-    ``/home/al`` leaves ``/home/alice`` alone. Recommendation messages cite
-    agent definition paths (``Agent 'x' is defined in /home/...``, see #753);
-    scrubbing the data before rendering keeps the real path out of the
-    screenshot and lets Rich compute column truncation on the scrubbed text."""
+    ``/home/al`` leaves ``/home/alice`` alone. Message text renders agent
+    definition paths home-relative at source (#753), but structured fields
+    keep the absolute path on purpose (``detail["source_file"]``,
+    ``config_file``); scrubbing the whole data tree before rendering keeps
+    any of them out of the screenshot whichever field a renderer reads, and
+    lets Rich compute column truncation on the scrubbed text."""
     if isinstance(obj, str):
         home = _home_dir()
         if not home:

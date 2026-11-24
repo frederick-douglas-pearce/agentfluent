@@ -11,9 +11,6 @@ from agentfluent.config.models import (
     Severity,
 )
 from agentfluent.diagnostics.correlator import (
-    _relpath,
-)
-from agentfluent.diagnostics.correlator import (
     correlate as _correlate_pairs,
 )
 from agentfluent.diagnostics.models import (
@@ -703,12 +700,15 @@ class TestUnusedAgentCorrelation:
         description: str = "Fix pytest failures",
         source_file: str = "/home/u/.claude/agents/tester.md",
     ) -> DiagnosticSignal:
+        # Mirrors audit_unused_agents (#753): the message renders the path
+        # home-relative, detail["source_file"] keeps it absolute.
         return _signal(
             signal_type=SignalType.UNUSED_AGENT,
             severity=Severity.INFO,
             agent_type=agent_name,
             message=(
-                f"Agent '{agent_name}' is defined in {source_file} but "
+                f"Agent '{agent_name}' is defined in "
+                f"~/.claude/agents/{agent_name}.md but "
                 "has 0 invocations across 11 analyzed sessions."
             ),
             detail={
@@ -1325,15 +1325,9 @@ class TestPRReviewCommentDensityRule:
 
 
 class TestRelpath:
-    """``_relpath`` rewrites ``$HOME`` to ``~`` in message text (#340)."""
-
-    def test_path_under_home_becomes_tilde_relative(self) -> None:
-        path = Path.home() / ".claude/agents/architect.md"
-        assert _relpath(path) == "~/.claude/agents/architect.md"
-
-    def test_path_outside_home_unchanged(self) -> None:
-        path = Path("/etc/agentfluent/global.md")
-        assert _relpath(path) == "/etc/agentfluent/global.md"
+    """Correlator messages render config paths home-relative (#340); the
+    helper itself is unit-tested in ``tests/unit/test_paths.py``
+    (``TestHomeRelative``)."""
 
     def test_recommendation_message_uses_relpath_when_under_home(self) -> None:
         config = AgentConfig(
