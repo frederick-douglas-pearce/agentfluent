@@ -15,6 +15,7 @@ them.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -123,6 +124,28 @@ def render_summary(data: dict[str, Any]) -> str:
     return "## Summary\n\n" + "\n".join(bullets) + "\n"
 
 
+def _token_metric_rows(by_model: object) -> tuple[list[Mapping[str, Any]], int]:
+    """Usable ``by_model`` rows plus how many entries were skipped (#742).
+
+    Schema v2 (#227) emits a list of row objects. The pre-#227 v1 envelope
+    emitted a dict keyed by model name; its rows become parent-origin rows,
+    as ``diff`` reads them (``diff/compute.py::_normalize_by_model``). An
+    entry that is not an object -- a hand-edited envelope -- is skipped and
+    counted rather than crashing the report.
+    """
+    if isinstance(by_model, Mapping):
+        rows: list[Mapping[str, Any]] = [
+            {**row, "model": model, "origin": "parent"}
+            for model, row in by_model.items()
+            if isinstance(row, Mapping)
+        ]
+        return rows, len(by_model) - len(rows)
+    if isinstance(by_model, list):
+        rows = [row for row in by_model if isinstance(row, Mapping)]
+        return rows, len(by_model) - len(rows)
+    return [], 1
+
+
 def render_token_metrics(data: dict[str, Any]) -> str:
     tm = data.get("token_metrics") or {}
     by_model = tm.get("by_model") or []
@@ -130,11 +153,16 @@ def render_token_metrics(data: dict[str, Any]) -> str:
     if not by_model:
         return "## Token Metrics\n\nNo token usage recorded.\n"
 
+    usable_rows, skipped_count = _token_metric_rows(by_model)
+
     # Mirrors table.py:166 — (model, parent-first) so the report row
     # order matches the CLI table users already know.
     sorted_rows = sorted(
-        by_model,
-        key=lambda b: (b.get("model", ""), 0 if b.get("origin") == "parent" else 1),
+        usable_rows,
+        key=lambda b: (
+            str(b.get("model") or ""),
+            0 if b.get("origin") == "parent" else 1,
+        ),
     )
 
     headers = ["Model", "Origin", "Input", "Output", "Cache", "Cost"]
@@ -146,8 +174,8 @@ def render_token_metrics(data: dict[str, Any]) -> str:
             + r.get("cache_read_input_tokens", 0)
         )
         rows.append([
-            r.get("model", ""),
-            r.get("origin", ""),
+            str(r.get("model") or ""),
+            str(r.get("origin") or ""),
             format_tokens(r.get("input_tokens", 0)),
             format_tokens(r.get("output_tokens", 0)),
             format_tokens(cache),
@@ -176,6 +204,8 @@ def render_token_metrics(data: dict[str, Any]) -> str:
     ])
 
     section = "## Token Metrics\n\n" + _md_table(headers, rows, align)
+    if skipped_count:
+        section += f"\n_{skipped_count} by_model row(s) skipped: not an object._\n"
     section += "\n" + render_cost_coverage(
         cost_coverage_footer(data.get("cost_coverage"), data.get("trace_coverage")),
     )

@@ -168,6 +168,62 @@ class TestRenderTokenMetrics:
         assert "No token usage recorded." in out
         assert "| Model" not in out
 
+    def test_clean_by_model_emits_no_skip_note(self) -> None:
+        out = render_token_metrics(_data())
+        assert "skipped" not in out
+
+    def test_non_object_row_is_skipped_and_reported(self) -> None:
+        # #742: a hand-edited list entry crashed the sort key's ``b.get``.
+        d = _data()
+        valid_row = d["token_metrics"]["by_model"][0]
+        d["token_metrics"]["by_model"] = [valid_row, "not-a-row", 7]
+        out = render_token_metrics(d)
+        assert f"| {valid_row['model']} |" in out
+        assert "not-a-row" not in out
+        assert "_2 by_model row(s) skipped: not an object._" in out
+        assert "**Total**" in out
+
+    def test_v1_dict_shaped_by_model_renders_parent_rows(self) -> None:
+        # #742: the pre-#227 envelope keyed by_model by model name, so
+        # iterating it yielded strings and crashed the sort key.
+        d = _data()
+        d["token_metrics"]["by_model"] = {
+            "claude-opus-4-7": {
+                "input_tokens": 800,
+                "output_tokens": 400,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cost": 1.0,
+                # The dict key and parent origin win over stray row fields,
+                # as diff/compute.py::_normalize_by_model reads v1 rows.
+                "model": "stale-name",
+                "origin": "subagent",
+            },
+        }
+        out = render_token_metrics(d)
+        assert "| claude-opus-4-7 | parent | 800 | 400 |" in out
+        assert "stale-name" not in out
+        assert "skipped" not in out
+
+    def test_v1_dict_non_object_value_is_skipped_and_reported(self) -> None:
+        d = _data()
+        d["token_metrics"]["by_model"] = {
+            "claude-opus-4-7": {"input_tokens": 800, "output_tokens": 400},
+            "claude-broken": "not-a-row",
+        }
+        out = render_token_metrics(d)
+        assert "| claude-opus-4-7 | parent |" in out
+        assert "claude-broken" not in out
+        assert "_1 by_model row(s) skipped: not an object._" in out
+
+    def test_non_string_model_value_does_not_crash_sort(self) -> None:
+        d = _data()
+        rows = d["token_metrics"]["by_model"]
+        rows.append({**rows[0], "model": None})
+        rows.append({**rows[0], "model": 42})
+        out = render_token_metrics(d)
+        assert "**Total**" in out
+
 
 # ---- render_agent_metrics -------------------------------------------------
 
