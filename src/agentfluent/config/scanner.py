@@ -66,6 +66,53 @@ def _to_string_list(value: Any) -> list[str]:
     return []
 
 
+def _split_top_level_commas(text: str) -> tuple[list[str], bool]:
+    """Split on commas outside parentheses; report whether a `(` was left open.
+
+    A stray `)` never takes the depth below zero, so the commas after it
+    still split.
+    """
+    pieces: list[str] = []
+    current: list[str] = []
+    depth = 0
+    for char in text:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(0, depth - 1)
+        elif char == "," and depth == 0:
+            pieces.append("".join(current))
+            current = []
+            continue
+        current.append(char)
+    pieces.append("".join(current))
+    return pieces, depth > 0
+
+
+def _to_tool_list(value: Any, path: Path, field: str) -> list[str]:
+    """Coerce a `tools` / `disallowedTools` frontmatter value to tool entries.
+
+    Claude Code accepts these fields as a comma-separated string
+    (`Read, Grep, Bash`) or a YAML list. A string is split on commas at
+    parenthesis depth 0, so a specifier such as `Agent(worker, researcher)`
+    stays one entry. An unclosed `(` keeps the rest of the string as one
+    entry and logs a warning. YAML list items are never comma-split. In
+    both forms, entries are stripped, and empty or null ones are dropped.
+    """
+    if isinstance(value, str):
+        pieces, unclosed = _split_top_level_commas(value)
+        if unclosed:
+            logger.warning(
+                "Unbalanced '(' in %s frontmatter of %s; kept the rest as one entry",
+                field, path.name,
+            )
+    elif isinstance(value, list):
+        pieces = [str(item) for item in value if item is not None]
+    else:
+        return []
+    return [piece.strip() for piece in pieces if piece.strip()]
+
+
 def parse_agent_file(path: Path, scope: Scope) -> AgentConfig | None:
     """Parse a single agent definition `.md` file.
 
@@ -92,8 +139,10 @@ def parse_agent_file(path: Path, scope: Scope) -> AgentConfig | None:
         description=str(frontmatter.get("description", "")),
         model=frontmatter.get("model"),
         prompt_body=body,
-        tools=_to_string_list(frontmatter.get("tools")),
-        disallowed_tools=_to_string_list(frontmatter.get("disallowedTools")),
+        tools=_to_tool_list(frontmatter.get("tools"), path, "tools"),
+        disallowed_tools=_to_tool_list(
+            frontmatter.get("disallowedTools"), path, "disallowedTools",
+        ),
         mcp_servers=_to_string_list(frontmatter.get("mcpServers")),
         hooks=frontmatter.get("hooks") or {},
         skills=_to_string_list(frontmatter.get("skills")),
