@@ -138,6 +138,7 @@ class TestSerializedCount:
             (12.9, 12),
             ("12", 12),
             ("12.5", 12),
+            ("12.7", 12),  # truncated, not rounded
             # Integer strings parse exactly via int(), not through float().
             ("12345678901234567890123", 12345678901234567890123),
             (" 7 ", 7),
@@ -167,6 +168,7 @@ class TestSerializedCost:
             (None, 0.0),
             ("n/a", 0.0),
             (False, 0.0),
+            (True, 0.0),
             (float("nan"), 0.0),
             ("-inf", 0.0),
             ({"x": 1}, 0.0),

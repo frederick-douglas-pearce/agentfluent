@@ -114,9 +114,14 @@ class TestRenderSummary:
         tm["input_tokens"] = None
         tm["output_tokens"] = "abc"
         tm["total_cost"] = "n/a"
+        tm["cache_creation_input_tokens"] = None
+        tm["cache_read_input_tokens"] = "x"
         out = render_summary(d)
         assert "Total cost (API rate):** $0.0000" in out
-        assert "Total tokens:** 500 (input 0, output 0," in out
+        assert (
+            "Total tokens:** 0 (input 0, output 0, cache creation 0, cache read 0)"
+            in out
+        )
 
     def test_window_null_renders_all_sessions(self) -> None:
         out = render_summary(_data(window=None))
@@ -283,6 +288,8 @@ class TestRenderTokenMetrics:
         tm["input_tokens"] = None
         tm["output_tokens"] = "abc"
         tm["total_cost"] = None
+        tm["cache_creation_input_tokens"] = None
+        tm["cache_read_input_tokens"] = "7"
         tm["by_model"] = {
             "claude-opus-4-7": {
                 "input_tokens": None,
@@ -294,7 +301,7 @@ class TestRenderTokenMetrics:
         }
         out = render_token_metrics(d)
         assert "| claude-opus-4-7 | parent | 0 | 5 | 7 | $0.0000 |" in out
-        assert "| **Total** |  | **0** | **0** | **500** | **$0.0000** |" in out
+        assert "| **Total** |  | **0** | **0** | **7** | **$0.0000** |" in out
 
 
 # ---- render_agent_metrics -------------------------------------------------
