@@ -137,3 +137,13 @@ class TestHomeRelative:
         assert home_relative(resolved_path) == "~/.claude/agents/tester.md"
         # The unresolved spelling under the symlink still matches too.
         assert home_relative(link_home / "x.md") == "~/x.md"
+
+    def test_unresolvable_home_falls_back_to_unchanged_path(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> None:
+        # A symlink-loop $HOME makes Path.resolve() raise RuntimeError on
+        # Python 3.12; rendering must degrade to the path, not crash.
+        loop_home = tmp_path / "loop"
+        loop_home.symlink_to(loop_home)
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: loop_home))
+        assert home_relative(Path("/opt/agents/x.md")) == "/opt/agents/x.md"

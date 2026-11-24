@@ -81,15 +81,21 @@ def home_relative(path: Path) -> str:
     ``path`` is matched against ``$HOME`` as given and then as resolved:
     agent definitions are stored symlink-resolved (``config/scanner.py``),
     so where ``$HOME`` traverses a symlink (``/home`` -> ``/var/home``, an
-    automounted home) only the resolved form matches.
+    automounted home) only the resolved form matches. ``$HOME`` is resolved
+    only when the plain match fails, and a home that cannot be resolved (a
+    symlink loop raises ``RuntimeError`` on Python 3.12) falls back to the
+    unchanged path rather than failing message rendering.
     """
     home = Path.home()
-    for base in (home, home.resolve()):
-        try:
-            return "~/" + str(path.relative_to(base))
-        except ValueError:
-            continue
-    return str(path)
+    try:
+        return "~/" + str(path.relative_to(home))
+    except ValueError:
+        pass
+    try:
+        resolved_home = home.resolve()
+        return "~/" + str(path.relative_to(resolved_home))
+    except (ValueError, OSError, RuntimeError):
+        return str(path)
 
 
 def settings_path_for(config_root: Path | None) -> Path:
