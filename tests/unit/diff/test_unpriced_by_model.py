@@ -138,6 +138,9 @@ class TestSerializedCount:
             (12.9, 12),
             ("12", 12),
             ("12.5", 12),
+            # Integer strings parse exactly via int(), not through float().
+            ("12345678901234567890123", 12345678901234567890123),
+            (" 7 ", 7),
             (None, 0),
             ("abc", 0),
             (True, 0),

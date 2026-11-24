@@ -233,8 +233,10 @@ class TestRenderTokenMetrics:
         rows = d["token_metrics"]["by_model"]
         rows.append({**rows[0], "model": None, "origin": "parent"})
         rows.append({**rows[0], "model": 42, "origin": "parent"})
+        rows.append({**rows[0], "model": 0, "origin": "parent"})
         out = render_token_metrics(d)
         assert "| 42 | parent |" in out
+        assert "| 0 | parent |" in out
         assert "|  | parent |" in out
         assert "None" not in out
         assert "skipped" not in out
@@ -247,6 +249,8 @@ class TestRenderTokenMetrics:
         d["token_metrics"]["by_model"] = [
             {**base, "origin": "weird"},
             {**base, "origin": 5},
+            {**base, "origin": 0},
+            {**base, "origin": False},
             {**base, "origin": "parent"},
         ]
         out = render_token_metrics(d)
@@ -254,6 +258,9 @@ class TestRenderTokenMetrics:
         parent_idx = out.index(f"| {model} | parent |")
         assert out.index(f"| {model} | weird |") > parent_idx
         assert out.index(f"| {model} | 5 |") > parent_idx
+        # A falsy non-None origin prints as found, not blank (#742 r2).
+        assert out.index(f"| {model} | 0 |") > parent_idx
+        assert out.index(f"| {model} | False |") > parent_idx
         assert "skipped" not in out
 
     def test_wrong_typed_by_model_reports_container_and_keeps_total(

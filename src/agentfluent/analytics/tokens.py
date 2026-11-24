@@ -91,8 +91,9 @@ def serialized_count(serialized: Mapping[str, Any], key: str) -> int:
 
     A saved envelope may be hand-edited, so a null, string or other
     non-numeric value reads as ``0`` instead of crashing ``report``. An int
-    or finite float is truncated to ``int``, and a numeric string such as
-    ``"5"`` is parsed, as ``int(...)`` accepted before. A bool is not a count.
+    or finite float is truncated to ``int``. An integer string such as
+    ``"5"`` is parsed exactly by ``int()``, as before; a decimal string
+    such as ``"5.5"`` is truncated via ``float()``. A bool is not a count.
     """
     value = serialized.get(key)
     if isinstance(value, bool):
@@ -102,6 +103,10 @@ def serialized_count(serialized: Mapping[str, Any], key: str) -> int:
     if isinstance(value, float):
         return int(value) if math.isfinite(value) else 0
     if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            pass
         try:
             parsed = float(value)
         except ValueError:

@@ -145,10 +145,11 @@ def _token_metric_rows(
     Malformed rows render differently from ``diff``, on purpose: ``diff``
     joins rows by ``(model, origin)`` and so must have a valid key, while
     ``report`` displays one envelope as it is. A list row whose ``model`` is
-    not a string is rendered here (blank or as its text) where ``diff`` drops
-    it; an unknown ``origin`` prints as found where ``diff`` reads it as
-    ``parent``; and a v1 value that is not an object is skipped here where
-    ``diff`` keeps it as an all-zero row.
+    not a string is rendered here where ``diff`` drops it; an unknown
+    ``origin`` prints as found where ``diff`` reads it as ``parent``; and a
+    v1 value that is not an object is skipped here where ``diff`` keeps it as
+    an all-zero row. Model and origin cells are the value's text, blank only
+    when it is ``None`` (``_display_cell``).
     """
     if isinstance(by_model, Mapping):
         rows: list[Mapping[str, Any]] = [
@@ -161,6 +162,11 @@ def _token_metric_rows(
         rows = [row for row in by_model if isinstance(row, Mapping)]
         return rows, len(by_model) - len(rows)
     return [], None
+
+
+def _display_cell(value: object) -> str:
+    """A ``by_model`` model/origin value as table text: blank only for ``None``."""
+    return "" if value is None else str(value)
 
 
 def render_token_metrics(data: dict[str, Any]) -> str:
@@ -178,7 +184,7 @@ def render_token_metrics(data: dict[str, Any]) -> str:
     sorted_rows = sorted(
         usable_rows,
         key=lambda b: (
-            str(b.get("model") or ""),
+            _display_cell(b.get("model")),
             0 if b.get("origin") == "parent" else 1,
         ),
     )
@@ -192,8 +198,8 @@ def render_token_metrics(data: dict[str, Any]) -> str:
             + serialized_count(r, "cache_read_input_tokens")
         )
         rows.append([
-            str(r.get("model") or ""),
-            str(r.get("origin") or ""),
+            _display_cell(r.get("model")),
+            _display_cell(r.get("origin")),
             format_tokens(serialized_count(r, "input_tokens")),
             format_tokens(serialized_count(r, "output_tokens")),
             format_tokens(cache),
