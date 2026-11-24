@@ -69,6 +69,7 @@ class TestScrubHome:
     ) -> None:
         _set_home(monkeypatch, "/")
         assert script._scrub_home("/opt/x/y") == "/opt/x/y"
+        assert script._scrub_home("a/ b and x/") == "a/ b and x/"
 
     def test_non_strings_and_other_paths_pass_through(self, script: ModuleType) -> None:
         data = {"count": 3, "cost": 1.5, "flag": True, "none": None, "p": "/opt/x"}
@@ -125,6 +126,13 @@ class TestSaveLeakGuard:
         with pytest.raises(SystemExit):
             script.save(_console_printing("in /home/alice/x"), "keep.svg", "t")
         assert existing.read_text(encoding="utf-8") == "committed"
+
+    def test_root_home_does_not_refuse_ordinary_paths(
+        self, script: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> None:
+        _set_home(monkeypatch, "/")
+        script.save(_console_printing("see a/b and /opt/x"), "root.svg", "t")
+        assert (tmp_path / "root.svg").exists()
 
     def test_writes_clean_svg(self, script: ModuleType, tmp_path: Path) -> None:
         script.save(_console_printing("defined in ~/proj/agents/pm.md"), "clean.svg", "t")

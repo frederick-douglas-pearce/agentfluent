@@ -22,7 +22,8 @@ Commit the regenerated SVGs alongside README / feature changes.
 No screenshot may carry a real user path: the diff snapshots are home-scrubbed
 (``_scrub_home``) before rendering, and ``save()`` refuses to write any
 screenshot whose rendered text still contains the home dir or a home-root
-prefix (``/home/``, ``/Users/``, ``-home-``, ``-Users-``).
+prefix followed by a name character (``/home/<x>``, ``/Users/<x>``,
+``-home-<x>``, ``-Users-<x>``).
 """
 
 from __future__ import annotations
