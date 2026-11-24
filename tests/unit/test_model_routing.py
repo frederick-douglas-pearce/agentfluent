@@ -597,8 +597,8 @@ class TestHelpers:
         assert classify_model_tier("opus[1m]") == "complex"
         assert faster_tier("opus[1m]") == "moderate"
         assert classify_model_tier("sonnet[1m]") == "moderate"
-        # `moderate` is also the unmatched default, so the line above cannot fail on its own:
-        # observe the binding instead.
+        # `moderate` is also the unmatched default, so the line above cannot catch a dropped
+        # `sonnet[1m]` alias (or a rebinding within the moderate tier): observe the binding instead.
         assert resolve_model_alias("sonnet[1m]") == "claude-sonnet-4-6"
 
     @pytest.mark.parametrize(
