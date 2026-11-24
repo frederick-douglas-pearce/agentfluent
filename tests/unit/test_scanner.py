@@ -137,10 +137,48 @@ class TestToolListForms:
         assert _parse(tmp_path, "tools:\n  - Read, Grep") == ["Read, Grep"]
 
     def test_skills_comma_string_is_not_split(self, tmp_path: Path) -> None:
-        # Upstream documents no comma form for `skills` (#747 AC3).
+        # Upstream documents no comma form for `skills`; #747 scopes the split to
+        # tools/disallowedTools.
         agent = parse_agent_file(_write_agent(tmp_path, "skills: a, b"), Scope.USER)
         assert agent is not None
         assert agent.skills == ["a, b"]
+
+    def test_mcp_servers_comma_string_is_not_split(self, tmp_path: Path) -> None:
+        agent = parse_agent_file(_write_agent(tmp_path, "mcpServers: a, b"), Scope.USER)
+        assert agent is not None
+        assert agent.mcp_servers == ["a, b"]
+
+    def test_nested_parentheses_track_depth(self, tmp_path: Path) -> None:
+        tools = _parse(tmp_path, "tools: Agent(a(b), c), Read")
+        assert tools == ["Agent(a(b), c)", "Read"]
+
+    def test_stray_close_paren_then_group_still_respects_parens(
+        self, tmp_path: Path,
+    ) -> None:
+        tools = _parse(tmp_path, "tools: Read), Agent(a, b), Grep")
+        assert tools == ["Read)", "Agent(a, b)", "Grep"]
+
+    def test_unclosed_paren_warning_names_disallowed_tools(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        path = _write_agent(tmp_path, "disallowedTools: Write, Agent(a, b")
+        with caplog.at_level(logging.WARNING, logger="agentfluent.config.scanner"):
+            agent = parse_agent_file(path, Scope.USER)
+        assert agent is not None
+        assert agent.disallowed_tools == ["Write", "Agent(a, b"]
+        assert "disallowedTools frontmatter" in caplog.text
+
+    def test_empty_string_is_no_allowlist(self, tmp_path: Path) -> None:
+        # Same as `tools: []` and a bare `tools:` (was [''] before #747).
+        assert _parse(tmp_path, 'tools: ""') == []
+
+    def test_padded_yaml_list_item_is_stripped(self, tmp_path: Path) -> None:
+        assert _parse(tmp_path, "tools:\n  - ' Read '\n  - Grep") == ["Read", "Grep"]
+
+    def test_yaml_list_item_with_parenthesized_commas_is_kept(
+        self, tmp_path: Path,
+    ) -> None:
+        assert _parse(tmp_path, "tools:\n  - Agent(a, b)\n  - Read") == ["Agent(a, b)", "Read"]
 
 
 class TestScanAgents:
