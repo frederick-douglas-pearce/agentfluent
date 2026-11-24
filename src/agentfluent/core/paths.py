@@ -77,11 +77,19 @@ def home_relative(path: Path) -> str:
     fields (``DiagnosticSignal.detail["source_file"]``,
     ``DiagnosticRecommendation.config_file``) keep the absolute path for
     programmatic consumers. A path outside ``$HOME`` is returned unchanged.
+
+    ``path`` is matched against ``$HOME`` as given and then as resolved:
+    agent definitions are stored symlink-resolved (``config/scanner.py``),
+    so where ``$HOME`` traverses a symlink (``/home`` -> ``/var/home``, an
+    automounted home) only the resolved form matches.
     """
-    try:
-        return "~/" + str(path.relative_to(Path.home()))
-    except ValueError:
-        return str(path)
+    home = Path.home()
+    for base in (home, home.resolve()):
+        try:
+            return "~/" + str(path.relative_to(base))
+        except ValueError:
+            continue
+    return str(path)
 
 
 def settings_path_for(config_root: Path | None) -> Path:

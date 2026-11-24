@@ -122,3 +122,18 @@ class TestHomeRelative:
         # not a string-prefix match.
         sibling = fake_home.parent / "alice" / "agents" / "pm.md"
         assert home_relative(sibling) == str(sibling)
+
+    def test_path_under_symlinked_home_matches_resolved_home(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    ) -> None:
+        # Agent definitions are stored resolved; $HOME may be a symlink
+        # (e.g. /home -> /var/home). The resolved path must still render ~/.
+        real_home = tmp_path / "var" / "home" / "al"
+        real_home.mkdir(parents=True)
+        link_home = tmp_path / "home-link"
+        link_home.symlink_to(real_home, target_is_directory=True)
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: link_home))
+        resolved_path = real_home / ".claude" / "agents" / "tester.md"
+        assert home_relative(resolved_path) == "~/.claude/agents/tester.md"
+        # The unresolved spelling under the symlink still matches too.
+        assert home_relative(link_home / "x.md") == "~/x.md"
