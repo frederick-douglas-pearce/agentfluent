@@ -18,11 +18,17 @@ The script uses the CLI's own formatter functions against the current machine's
 The diff screenshot is built by analyzing two slices of the same project (an
 earlier half vs. all sessions) so it surfaces realistic new/resolved deltas.
 Commit the regenerated SVGs alongside README / feature changes.
+
+No screenshot may carry a real user path: the diff snapshots are home-scrubbed
+(``_scrub_home``) before rendering, and ``save()`` refuses to write any
+screenshot whose rendered text still contains the home dir or a home-root
+prefix (``/home/``, ``/Users/``, ``-home-``, ``-Users-``).
 """
 
 from __future__ import annotations
 
 import io
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -61,28 +67,38 @@ MAX_AGGREGATED_RECS = 8
 
 def make_console() -> Console:
     # ``file=StringIO()`` silences the live terminal write; ``record=True``
-    # keeps the internal buffer that ``save_svg`` consumes.
+    # keeps the internal buffer that ``save`` checks and exports.
     return Console(
         record=True, width=WIDTH, force_terminal=True, file=io.StringIO(),
     )
 
 
-def _home_markers() -> tuple[str, str]:
-    """The two spellings of the home dir that would leak a real user path:
-    the filesystem path (``/home/alice``) and Claude Code's project-dir slug
-    form (``-home-alice``)."""
-    home = str(Path.home())
-    return home, home.replace("/", "-")
+# Any home-root prefix followed by a name, in path or Claude Code project-slug
+# form. Deliberately broader than the current user's home so a truncated
+# (``/home/fdpe…``) or wrapped path still trips the guard; a refusal on some
+# other ``/home/...`` path is an accepted false positive (fail loud).
+_HOME_ROOT_PATTERN = re.compile(r"(/home/|/Users/|-home-|-Users-)\w")
+
+
+def _home_dir() -> str:
+    """The current home dir without a trailing slash; ``""`` when it is the
+    filesystem root (or empty), where there is no prefix worth scrubbing."""
+    return str(Path.home()).rstrip("/")
 
 
 def _scrub_home(obj: Any) -> Any:
     """Return a copy of a JSON-shaped ``obj`` with the home-dir prefix
-    replaced by ``~`` in every string. Recommendation messages cite agent
-    definition paths (``Agent 'x' is defined in /home/...``); scrubbing the
-    data before rendering keeps the real path out of the screenshot and lets
-    Rich compute column truncation on the scrubbed text."""
+    replaced by ``~`` in every string value (dict keys are left as-is; none
+    carries a path today). The match ends at a path boundary, so home
+    ``/home/al`` leaves ``/home/alice`` alone. Recommendation messages cite
+    agent definition paths (``Agent 'x' is defined in /home/...``, see #753);
+    scrubbing the data before rendering keeps the real path out of the
+    screenshot and lets Rich compute column truncation on the scrubbed text."""
     if isinstance(obj, str):
-        return obj.replace(str(Path.home()), "~")
+        home = _home_dir()
+        if not home:
+            return obj
+        return re.sub(re.escape(home) + r"(?=/|$|[^\w.-])", "~", obj)
     if isinstance(obj, dict):
         return {key: _scrub_home(value) for key, value in obj.items()}
     if isinstance(obj, list):
@@ -90,17 +106,31 @@ def _scrub_home(obj: Any) -> Any:
     return obj
 
 
+def _leaks(text: str) -> list[str]:
+    """What in ``text`` would leak a real user path: the exact home dir, or
+    any home-root prefix (``_HOME_ROOT_PATTERN``)."""
+    found = []
+    home = _home_dir()
+    if home and home in text:
+        found.append(home)
+    found.extend(match.group(0) for match in _HOME_ROOT_PATTERN.finditer(text))
+    return found
+
+
 def save(console: Console, filename: str, title: str) -> None:
+    """Write the console's recording to ``images/<filename>`` — but only after
+    checking its rendered plain text for a home-dir path. The check runs on the
+    text a reader sees (no SVG escaping, no style segments) and before any
+    write, so a refused screenshot leaves the committed file untouched."""
     out = IMAGES_DIR / filename
-    console.save_svg(str(out), title=title)
-    svg = out.read_text(encoding="utf-8")
-    leaked = [marker for marker in _home_markers() if marker in svg]
+    leaked = _leaks(console.export_text(clear=False))
     if leaked:
-        out.unlink()
         raise SystemExit(
-            f"refusing to write {out.relative_to(REPO_ROOT)}: it contains the "
-            f"real home-dir path ({', '.join(leaked)}); scrub it before rendering",
+            f"refusing to write {out.relative_to(REPO_ROOT)}: rendered text "
+            f"contains a home-dir path ({', '.join(sorted(set(leaked)))}); "
+            "scrub it before rendering",
         )
+    out.write_text(console.export_svg(title=title), encoding="utf-8")
     print(f"wrote {out.relative_to(REPO_ROOT)}")
 
 
