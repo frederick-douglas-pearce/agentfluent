@@ -63,6 +63,9 @@ class TestScrubHome:
         assert script._scrub_home("/home/alice/x and /home/al/y") == (
             "/home/alice/x and ~/y"
         )
+        assert script._scrub_home("/home/al.bak/x and /home/al-x/y") == (
+            "/home/al.bak/x and /home/al-x/y"
+        )
 
     def test_root_home_scrubs_nothing(
         self, script: ModuleType, monkeypatch: pytest.MonkeyPatch,
@@ -88,6 +91,7 @@ class TestSaveLeakGuard:
             "defined in /home/alice/proj/agents/pm.md",
             "project -home-alice-proj",
             "defined in /Users/bob/x",
+            "project -Users-bob-proj",
         ],
     )
     def test_refuses_home_paths(
@@ -145,15 +149,15 @@ class TestGenerateDiffScrubs:
         self, script: ModuleType, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         class _Result:
-            def __init__(self, n: int) -> None:
-                self.n = n
+            def __init__(self, paths: list[Path]) -> None:
+                self.n = "".join(path.stem for path in paths)
 
             def model_dump(self, mode: str) -> dict[str, object]:
                 return {"message": f"defined in /home/alice/n{self.n}"}
 
         captured: list[object] = []
         monkeypatch.setattr(
-            script, "_analyze_with_diagnostics", lambda paths: _Result(len(paths)),
+            script, "_analyze_with_diagnostics", lambda paths: _Result(paths),
         )
         monkeypatch.setattr(
             script, "compute_diff", lambda b, c: captured.extend([b, c]) or object(),
@@ -164,6 +168,6 @@ class TestGenerateDiffScrubs:
         script.generate_diff([Path(f"{i}.jsonl") for i in range(4)])
 
         assert captured == [
-            {"message": "defined in ~/n2"},
-            {"message": "defined in ~/n4"},
+            {"message": "defined in ~/n01"},
+            {"message": "defined in ~/n0123"},
         ]
