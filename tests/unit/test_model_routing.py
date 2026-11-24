@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from agentfluent.agents.models import AgentInvocation
-from agentfluent.analytics.pricing import get_known_models
+from agentfluent.analytics.pricing import get_known_models, resolve_model_alias
 from agentfluent.config.models import AgentConfig, Scope, Severity
 from agentfluent.diagnostics._complexity import (
     _TIER_BY_FAMILY,
@@ -597,6 +597,9 @@ class TestHelpers:
         assert classify_model_tier("opus[1m]") == "complex"
         assert faster_tier("opus[1m]") == "moderate"
         assert classify_model_tier("sonnet[1m]") == "moderate"
+        # `moderate` is also the unmatched default, so the line above cannot fail on its own:
+        # observe the binding instead.
+        assert resolve_model_alias("sonnet[1m]") == "claude-sonnet-4-6"
 
     @pytest.mark.parametrize(
         "variant", ["Opus", "HAIKU", "FABLE", "Claude-Haiku-4-5", "OPUS[1M]"],

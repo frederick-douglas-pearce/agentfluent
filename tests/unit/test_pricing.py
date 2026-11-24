@@ -700,9 +700,9 @@ class TestCurrentFamilyRegression:
         # re-check): it proves the table is self-consistent, not that alias resolution consults
         # the table. Gut the `_ALIASES.get(...)` lookup in `resolve_model_alias` and this test
         # still passes against a perfectly tidy table. That half is pinned by
-        # `test_1m_variants_resolve_to_base` and the other alias-resolution tests in
-        # `TestGetPricing` -- verified: gutting that lookup fails eight of them. So the mechanism
-        # is pinned by the PAIR, and neither half is redundant.
+        # `test_1m_variants_resolve_to_base` (this class) and the alias-resolution tests in
+        # `TestGetPricing` and `TestResolveModelAlias`, which fail when that lookup is gutted.
+        # So the mechanism is pinned by the PAIR, and neither half is redundant.
         from agentfluent.analytics.pricing import _ALIASES
 
         one_m = {k: v for k, v in _ALIASES.items() if k.endswith("[1m]")}
