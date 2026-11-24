@@ -10,17 +10,26 @@ absolute path (#340, #753).
 **Adding a config-path emitter?** Add a row to ``EMITTER_CASES`` (a signal
 emitter) or ``RULE_CASES`` (a correlator rule that interpolates
 ``config.file_path``). ``test_every_path_rendering_rule_is_covered`` fails when
-a correlator rule calls ``_relpath`` but has no row here.
+a correlator rule renders a path via ``_relpath``/``home_relative`` but has no
+row here, and ``test_no_raw_config_path_interpolation`` fails when any
+f-string in the scanned modules interpolates ``config.file_path`` or
+``source_file`` without one of those helpers.
 
 Out of scope: signals that render **session-observed** file paths
 (FILE_REWORK, PARAMETER_RETRY) take tool-input paths from the session, not
 from a config definition. Whether those render home-relative is an open
 policy question (#757), so this guard neither covers nor decides it.
+
+Also out of scope: ``EnvironmentWarning`` text. The cleanupPeriodDays
+retention warning (``config/retention.py::check_cleanup_retention``) still
+renders the absolute settings path; that is tracked in #759.
 """
 
 from __future__ import annotations
 
+import ast
 import inspect
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,7 +38,7 @@ import pytest
 
 from agentfluent.agents.models import AgentInvocation
 from agentfluent.config.models import AgentConfig, McpServerConfig, Scope, Severity
-from agentfluent.diagnostics import correlator
+from agentfluent.diagnostics import agent_audit, correlator, mcp_assessment
 from agentfluent.diagnostics.agent_audit import (
     audit_tool_inventory,
     audit_unused_agents,
@@ -225,12 +234,13 @@ RULE_CASES: dict[str, RuleCase] = {
     ),
 }
 
-# Rules whose path comes from detail["source_file"]; their rows live in
-# EMITTER_CASES above.
-_SOURCE_FILE_RULES = {
-    correlator.McpAuditRule,
-    correlator.UnusedAgentRule,
-    correlator.ToolInventoryOversizedRule,
+# Rules whose path comes from detail["source_file"], mapped to the signal whose
+# EMITTER_CASES row exercises them. test_every_path_rendering_rule_is_covered
+# counts one as covered only while that row exists.
+_SOURCE_FILE_RULES: dict[type, SignalType] = {
+    correlator.McpAuditRule: SignalType.MCP_UNUSED_SERVER,
+    correlator.UnusedAgentRule: SignalType.UNUSED_AGENT,
+    correlator.ToolInventoryOversizedRule: SignalType.TOOL_INVENTORY_OVERSIZED,
 }
 
 
@@ -261,16 +271,108 @@ def test_rule_renders_no_home_path(fake_home: Path, case_id: str) -> None:
         assert str(fake_home) not in text
 
 
+# --- Static tripwire: no raw config-path interpolation ---------------------
+
+_RENDER_CALL = re.compile(r"\b(?:_relpath|home_relative)\(")
+_WRAPPERS = {"_relpath", "home_relative"}
+# Scoped to the config-path emitters and these two names on purpose: a broader
+# pattern would also match session-observed paths (FILE_REWORK's `file_path`
+# in quality_signals.py) and so pre-decide #757.
+_SCANNED_MODULES = [correlator, agent_audit, mcp_assessment]
+
+
+def _is_config_path_ref(node: ast.AST) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id == "source_file"
+    if isinstance(node, ast.Attribute):
+        return node.attr == "source_file" or (
+            node.attr == "file_path"
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "config"
+        )
+    return False
+
+
+def _raw_config_path_interpolations(source: str, name: str) -> list[str]:
+    """f-string fields in ``source`` that reference a config path outside a
+    wrapper call.
+
+    A reference is allowed inside a ``_relpath(...)``/``home_relative(...)``
+    call, or as the truthiness test of a conditional expression
+    (``{_relpath(Path(s)) if s else 'unknown'}``).
+    """
+    tree = ast.parse(source)
+    raw: list[str] = []
+
+    def visit(node: ast.AST, *, wrapped: bool) -> None:
+        if _is_config_path_ref(node) and not wrapped:
+            raw.append(f"{name}:{node.lineno}: {ast.unparse(node)}")
+            return
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in _WRAPPERS
+        ):
+            wrapped = True
+        if isinstance(node, ast.IfExp):
+            visit(node.test, wrapped=True)
+            visit(node.body, wrapped=wrapped)
+            visit(node.orelse, wrapped=wrapped)
+            return
+        for child in ast.iter_child_nodes(node):
+            visit(child, wrapped=wrapped)
+
+    for joined in (n for n in ast.walk(tree) if isinstance(n, ast.JoinedStr)):
+        for field in joined.values:
+            if isinstance(field, ast.FormattedValue):
+                visit(field.value, wrapped=False)
+    return raw
+
+
+def test_no_raw_config_path_interpolation() -> None:
+    """Fails on the leak itself: a config path interpolated into an f-string
+    without ``_relpath``/``home_relative``. Keyed on the bug rather than the
+    fix, so a new rule or branch is caught even before it has a guard row.
+    Blind spots (aliasing, ``+``, ``.format``) are left to the rows above."""
+    raw = [
+        hit
+        for module in _SCANNED_MODULES
+        for hit in _raw_config_path_interpolations(inspect.getsource(module), module.__name__)
+    ]
+    assert raw == []
+
+
+def test_static_tripwire_detects_raw_interpolation() -> None:
+    """The tripwire is not vacuous: it flags the pre-#756 MCP message shape and
+    accepts the wrapped and conditional forms used today."""
+    source = (
+        "def f(server, config, source_file):\n"
+        "    a = f'in {server.source_file} x'\n"
+        "    b = f'in {config.file_path} x'\n"
+        "    c = f'in {source_file} x'\n"
+        "    d = f'in {_relpath(config.file_path)} {home_relative(server.source_file)}'\n"
+        "    e = f'{_relpath(Path(source_file)) if source_file else \"unknown\"}'\n"
+        "    g = {'source_file': str(config.file_path)}\n"
+    )
+    hits = _raw_config_path_interpolations(source, "sample")
+    assert [h.split(": ", 1)[1] for h in hits] == [
+        "server.source_file", "config.file_path", "source_file",
+    ]
+
+
 def _matching_rule(signal: DiagnosticSignal, config: AgentConfig) -> object:
     return next(r for r in correlator.RULES if r.matches(signal, config))
 
 
 def test_every_path_rendering_rule_is_covered() -> None:
-    """A correlator rule that calls ``_relpath`` must have a guard row."""
-    covered = {case.rule for case in RULE_CASES.values()} | _SOURCE_FILE_RULES
+    """A correlator rule that renders a config path must have a guard row."""
+    covered = {case.rule for case in RULE_CASES.values()} | {
+        rule for rule, signal_type in _SOURCE_FILE_RULES.items()
+        if signal_type in EMITTER_CASES
+    }
     rendering = {
         type(rule) for rule in correlator.RULES
-        if "_relpath(" in inspect.getsource(type(rule))
+        if _RENDER_CALL.search(inspect.getsource(type(rule)))
     }
     assert rendering, "expected at least one path-rendering rule"
     assert rendering <= covered, (

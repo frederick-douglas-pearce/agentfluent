@@ -624,12 +624,14 @@ class TestMcpAuditCorrelation:
     def _unused_signal(
         self, server_name: str = "slack", source_file: str = "/home/u/.claude.json",
     ) -> DiagnosticSignal:
+        # Mirrors audit_mcp_servers (#756): the message renders the path
+        # home-relative, detail["source_file"] keeps it absolute.
         return _signal(
             signal_type=SignalType.MCP_UNUSED_SERVER,
             severity=Severity.INFO,
             agent_type="",
             message=(
-                f"MCP server '{server_name}' is configured in {source_file} "
+                f"MCP server '{server_name}' is configured in ~/.claude.json "
                 "but has 0 tool calls across 12 analyzed sessions. "
                 "Consider removing from mcpServers or marking as disabled."
             ),
@@ -662,7 +664,12 @@ class TestMcpAuditCorrelation:
             },
         )
 
-    def test_unused_signal_produces_mcp_target_recommendation(self) -> None:
+    def test_unused_signal_produces_mcp_target_recommendation(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Pin $HOME to the fixture's home so the rendering does not depend on
+        # the runner's home directory.
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: Path("/home/u")))
         recs = correlate([self._unused_signal()])
         assert len(recs) == 1
         rec = recs[0]
@@ -670,7 +677,9 @@ class TestMcpAuditCorrelation:
         assert rec.severity == Severity.INFO
         # Action names the server and points at the source file.
         assert "slack" in rec.action
-        assert "/home/u/.claude.json" in rec.action
+        assert "in ~/.claude.json, or set" in rec.action
+        assert "/home/u" not in rec.action
+        assert rec.config_file == "/home/u/.claude.json"
         assert rec.signal_types == [SignalType.MCP_UNUSED_SERVER]
 
     def test_missing_signal_produces_warning_recommendation(self) -> None:
