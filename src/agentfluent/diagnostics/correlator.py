@@ -890,12 +890,15 @@ class McpAuditRule:
 
         if signal.signal_type == SignalType.MCP_UNUSED_SERVER:
             source_file = str(signal.detail.get("source_file", ""))
+            # An empty source_file keeps its empty rendering: Path("") would
+            # render as "." (#756 AC2).
+            rendered_source = _relpath(Path(source_file)) if source_file else ""
             reason = (
                 "A configured server with no observed usage is either "
                 "unused or inactive — removing it reduces config drift."
             )
             action = (
-                f"Remove '{server_name}' from mcpServers in {source_file}, "
+                f"Remove '{server_name}' from mcpServers in {rendered_source}, "
                 "or set disabled: true if you expect to use it later."
             )
         else:  # MCP_MISSING_SERVER

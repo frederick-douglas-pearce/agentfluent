@@ -10,6 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from agentfluent.agents.models import AgentInvocation
 from agentfluent.analytics.pipeline import analyze_session
 from agentfluent.config.models import McpServerConfig, Severity
@@ -484,3 +486,37 @@ class TestCrossCuttingAgentTypeIsNone:
         )
         dumped = signals[0].model_dump(mode="json")
         assert dumped["agent_type"] is None
+
+
+class TestUnusedServerPathRendering:
+    """The MCP_UNUSED_SERVER message renders ``source_file`` home-relative;
+    ``detail["source_file"]`` stays absolute (#756, #340 precedent)."""
+
+    @pytest.fixture
+    def fake_home(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+        home = tmp_path / "home" / "u"
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+        return home
+
+    def test_path_under_home_renders_tilde(self, fake_home: Path) -> None:
+        source = fake_home / ".claude.json"
+        [sig] = audit_mcp_servers(
+            usage_by_server={},
+            configured=[_server("slack", source=str(source))],
+            sessions_analyzed=4,
+        )
+        assert sig.message.startswith(
+            "MCP server 'slack' is configured in ~/.claude.json but has 0",
+        )
+        assert str(fake_home) not in sig.message
+        assert sig.detail["source_file"] == str(source)
+
+    def test_path_outside_home_unchanged(self, fake_home: Path) -> None:
+        [sig] = audit_mcp_servers(
+            usage_by_server={},
+            configured=[_server("slack", source="/srv/repo/.mcp.json")],
+            sessions_analyzed=4,
+        )
+        assert "is configured in /srv/repo/.mcp.json but" in sig.message
+        assert sig.detail["source_file"] == "/srv/repo/.mcp.json"

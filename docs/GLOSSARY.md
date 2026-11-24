@@ -551,7 +551,7 @@ since MCP servers aren't scoped to one agent.
 **Example:**
 
 ```
-MCP server 'slack' is configured in /home/u/.claude.json but has 0 tool
+MCP server 'slack' is configured in ~/.claude.json but has 0 tool
 calls across 10 analyzed sessions. Consider removing from mcpServers or
 marking as disabled.
 ```
