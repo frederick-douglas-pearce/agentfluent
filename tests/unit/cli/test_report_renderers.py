@@ -107,6 +107,22 @@ class TestRenderSummary:
         assert "2,000" in out  # total tokens = 1000+500+200+300
         assert "0.7.0" in out
 
+    def test_non_numeric_token_metrics_fields_render_as_zero(self) -> None:
+        # #742: null/string totals raised in format_tokens / format_cost.
+        d = _data()
+        tm = d["token_metrics"]
+        tm["input_tokens"] = None
+        tm["output_tokens"] = "abc"
+        tm["total_cost"] = "n/a"
+        tm["cache_creation_input_tokens"] = None
+        tm["cache_read_input_tokens"] = "x"
+        out = render_summary(d)
+        assert "Total cost (API rate):** $0.0000" in out
+        assert (
+            "Total tokens:** 0 (input 0, output 0, cache creation 0, cache read 0)"
+            in out
+        )
+
     def test_window_null_renders_all_sessions(self) -> None:
         out = render_summary(_data(window=None))
         assert "Window:** all sessions" in out
@@ -167,6 +183,125 @@ class TestRenderTokenMetrics:
         out = render_token_metrics(d)
         assert "No token usage recorded." in out
         assert "| Model" not in out
+
+    def test_clean_by_model_emits_no_skip_note(self) -> None:
+        out = render_token_metrics(_data())
+        assert "skipped" not in out
+
+    def test_non_object_row_is_skipped_and_reported(self) -> None:
+        # #742: a hand-edited list entry crashed the sort key's ``b.get``.
+        d = _data()
+        valid_row = d["token_metrics"]["by_model"][0]
+        d["token_metrics"]["by_model"] = [valid_row, "not-a-row", 7]
+        out = render_token_metrics(d)
+        assert f"| {valid_row['model']} |" in out
+        assert "not-a-row" not in out
+        assert "_2 by_model row(s) skipped: not an object._" in out
+        assert "**Total**" in out
+
+    def test_v1_dict_shaped_by_model_renders_parent_rows(self) -> None:
+        # #742: the pre-#227 envelope keyed by_model by model name, so
+        # iterating it yielded strings and crashed the sort key.
+        d = _data()
+        d["token_metrics"]["by_model"] = {
+            "claude-opus-4-7": {
+                "input_tokens": 800,
+                "output_tokens": 400,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cost": 1.0,
+                # The dict key and parent origin win over stray row fields,
+                # as diff/compute.py::_normalize_by_model reads v1 rows.
+                "model": "stale-name",
+                "origin": "subagent",
+            },
+        }
+        out = render_token_metrics(d)
+        assert "| claude-opus-4-7 | parent | 800 | 400 |" in out
+        assert "stale-name" not in out
+        assert "skipped" not in out
+
+    def test_v1_dict_non_object_value_is_skipped_and_reported(self) -> None:
+        d = _data()
+        d["token_metrics"]["by_model"] = {
+            "claude-opus-4-7": {"input_tokens": 800, "output_tokens": 400},
+            "claude-broken": "not-a-row",
+        }
+        out = render_token_metrics(d)
+        assert "| claude-opus-4-7 | parent |" in out
+        assert "claude-broken" not in out
+        assert "_1 by_model row(s) skipped: not an object._" in out
+
+    def test_non_string_model_is_rendered_not_skipped(self) -> None:
+        # Unlike diff (which keys rows and drops these), report displays them.
+        d = _data()
+        rows = d["token_metrics"]["by_model"]
+        rows.append({**rows[0], "model": None, "origin": "parent"})
+        rows.append({**rows[0], "model": 42, "origin": "parent"})
+        rows.append({**rows[0], "model": 0, "origin": "parent"})
+        out = render_token_metrics(d)
+        assert "| 42 | parent |" in out
+        assert "| 0 | parent |" in out
+        assert "|  | parent |" in out
+        assert "None" not in out
+        assert "skipped" not in out
+
+    def test_unknown_or_non_string_origin_prints_as_found_after_parent(
+        self,
+    ) -> None:
+        d = _data()
+        base = d["token_metrics"]["by_model"][0]
+        d["token_metrics"]["by_model"] = [
+            {**base, "origin": "weird"},
+            {**base, "origin": 5},
+            {**base, "origin": 0},
+            {**base, "origin": False},
+            {**base, "origin": "parent"},
+        ]
+        out = render_token_metrics(d)
+        model = base["model"]
+        parent_idx = out.index(f"| {model} | parent |")
+        assert out.index(f"| {model} | weird |") > parent_idx
+        assert out.index(f"| {model} | 5 |") > parent_idx
+        # A falsy non-None origin prints as found, not blank (#742 r2).
+        assert out.index(f"| {model} | 0 |") > parent_idx
+        assert out.index(f"| {model} | False |") > parent_idx
+        assert "skipped" not in out
+
+    def test_wrong_typed_by_model_reports_container_and_keeps_total(
+        self,
+    ) -> None:
+        for bad in ("garbage", 5):
+            d = _data()
+            d["token_metrics"]["by_model"] = bad
+            out = render_token_metrics(d)
+            assert "_by_model skipped: not a list or object._" in out
+            assert "row(s) skipped" not in out
+            # Totals come from token_metrics itself, so they still render.
+            assert "| **Total** |  | **1,000** | **500** | **500** |" in out
+
+    def test_non_numeric_row_and_total_fields_render_as_zero(self) -> None:
+        # #742: a hand-edited envelope with null/string numbers raised in
+        # format_tokens / format_cost.
+        d = _data()
+        tm = d["token_metrics"]
+        tm["input_tokens"] = None
+        tm["output_tokens"] = "abc"
+        tm["total_cost"] = None
+        tm["cache_creation_input_tokens"] = None
+        tm["cache_read_input_tokens"] = "7"
+        tm["by_model"] = {
+            "claude-opus-4-7": {
+                "input_tokens": None,
+                "output_tokens": "5",
+                "cache_creation_input_tokens": "x",
+                "cache_read_input_tokens": 7.9,
+                "cost": None,
+            },
+        }
+        out = render_token_metrics(d)
+        assert "| claude-opus-4-7 | parent | 0 | 5 | 7 | $0.0000 |" in out
+        assert "| **Total** |  | **0** | **0** | **7** | **$0.0000** |" in out
 
 
 # ---- render_agent_metrics -------------------------------------------------

@@ -15,10 +15,13 @@ them.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
 from agentfluent.analytics.tokens import (
+    serialized_cost,
+    serialized_count,
     serialized_total_tokens,
     side_unpriced_tokens,
     sum_unpriced_tokens,
@@ -94,11 +97,11 @@ def render_summary(data: dict[str, Any]) -> str:
     diag_version = data.get("diagnostics_version")
 
     total_tokens = serialized_total_tokens(tm)
-    total_cost = tm.get("total_cost", 0.0)
-    input_tokens = tm.get("input_tokens", 0)
-    output_tokens = tm.get("output_tokens", 0)
-    cache_creation = tm.get("cache_creation_input_tokens", 0)
-    cache_read = tm.get("cache_read_input_tokens", 0)
+    total_cost = serialized_cost(tm, "total_cost")
+    input_tokens = serialized_count(tm, "input_tokens")
+    output_tokens = serialized_count(tm, "output_tokens")
+    cache_creation = serialized_count(tm, "cache_creation_input_tokens")
+    cache_read = serialized_count(tm, "cache_read_input_tokens")
 
     bullets = [
         f"- **Project:** {project}",
@@ -123,6 +126,49 @@ def render_summary(data: dict[str, Any]) -> str:
     return "## Summary\n\n" + "\n".join(bullets) + "\n"
 
 
+def _token_metric_rows(
+    by_model: object,
+) -> tuple[list[Mapping[str, Any]], int | None]:
+    """Usable ``by_model`` rows plus how many entries were skipped (#742).
+
+    Schema v2 (#227) emits a list of row objects. The pre-#227 v1 envelope
+    emitted a dict keyed by model name; each object value becomes a row whose
+    model is the dict key and whose origin is ``parent`` -- the same mapping
+    ``diff`` applies to v1 rows (``diff/compute.py::_normalize_by_model``).
+    An entry that is not an object (a hand-edited envelope) is skipped and
+    counted. The skip count is ``None`` when ``by_model`` itself is neither
+    a list nor an object, so the caller can say the container was skipped.
+
+    This guards row *shape* only; a bad value inside an object row is
+    coerced where it is rendered (``serialized_count`` / ``serialized_cost``).
+
+    Malformed rows render differently from ``diff``, on purpose: ``diff``
+    joins rows by ``(model, origin)`` and so must have a valid key, while
+    ``report`` displays one envelope as it is. A list row whose ``model`` is
+    not a string is rendered here where ``diff`` drops it; an unknown
+    ``origin`` prints as found where ``diff`` reads it as ``parent``; and a
+    v1 value that is not an object is skipped here where ``diff`` keeps it as
+    an all-zero row. Model and origin cells are the value's text, blank only
+    when it is ``None`` (``_display_cell``).
+    """
+    if isinstance(by_model, Mapping):
+        rows: list[Mapping[str, Any]] = [
+            {**row, "model": model, "origin": "parent"}
+            for model, row in by_model.items()
+            if isinstance(row, Mapping)
+        ]
+        return rows, len(by_model) - len(rows)
+    if isinstance(by_model, list):
+        rows = [row for row in by_model if isinstance(row, Mapping)]
+        return rows, len(by_model) - len(rows)
+    return [], None
+
+
+def _display_cell(value: object) -> str:
+    """A ``by_model`` model/origin value as table text: blank only for ``None``."""
+    return "" if value is None else str(value)
+
+
 def render_token_metrics(data: dict[str, Any]) -> str:
     tm = data.get("token_metrics") or {}
     by_model = tm.get("by_model") or []
@@ -130,11 +176,17 @@ def render_token_metrics(data: dict[str, Any]) -> str:
     if not by_model:
         return "## Token Metrics\n\nNo token usage recorded.\n"
 
-    # Mirrors table.py:166 — (model, parent-first) so the report row
-    # order matches the CLI table users already know.
+    usable_rows, skipped_count = _token_metric_rows(by_model)
+
+    # Mirrors the by_model sort in cli/formatters/table.py::format_analysis_table
+    # — (model, parent-first) so the report row order matches the CLI table
+    # users already know. ``str()`` additionally tolerates a non-string model.
     sorted_rows = sorted(
-        by_model,
-        key=lambda b: (b.get("model", ""), 0 if b.get("origin") == "parent" else 1),
+        usable_rows,
+        key=lambda b: (
+            _display_cell(b.get("model")),
+            0 if b.get("origin") == "parent" else 1,
+        ),
     )
 
     headers = ["Model", "Origin", "Input", "Output", "Cache", "Cost"]
@@ -142,40 +194,44 @@ def render_token_metrics(data: dict[str, Any]) -> str:
     rows: list[list[str]] = []
     for r in sorted_rows:
         cache = (
-            r.get("cache_creation_input_tokens", 0)
-            + r.get("cache_read_input_tokens", 0)
+            serialized_count(r, "cache_creation_input_tokens")
+            + serialized_count(r, "cache_read_input_tokens")
         )
         rows.append([
-            r.get("model", ""),
-            r.get("origin", ""),
-            format_tokens(r.get("input_tokens", 0)),
-            format_tokens(r.get("output_tokens", 0)),
+            _display_cell(r.get("model")),
+            _display_cell(r.get("origin")),
+            format_tokens(serialized_count(r, "input_tokens")),
+            format_tokens(serialized_count(r, "output_tokens")),
             format_tokens(cache),
             format_priced_cost(
-                r.get("cost", 0.0),
+                serialized_cost(r, "cost"),
                 total_tokens=serialized_total_tokens(r),
                 unpriced_tokens=sum_unpriced_tokens([r]),
             ),
         ])
 
     total_cache = (
-        tm.get("cache_creation_input_tokens", 0)
-        + tm.get("cache_read_input_tokens", 0)
+        serialized_count(tm, "cache_creation_input_tokens")
+        + serialized_count(tm, "cache_read_input_tokens")
     )
     rows.append([
         "**Total**",
         "",
-        f"**{format_tokens(tm.get('input_tokens', 0))}**",
-        f"**{format_tokens(tm.get('output_tokens', 0))}**",
+        f"**{format_tokens(serialized_count(tm, 'input_tokens'))}**",
+        f"**{format_tokens(serialized_count(tm, 'output_tokens'))}**",
         f"**{format_tokens(total_cache)}**",
         "**" + format_priced_cost(
-            tm.get("total_cost", 0.0),
+            serialized_cost(tm, "total_cost"),
             total_tokens=serialized_total_tokens(tm),
             unpriced_tokens=side_unpriced_tokens(tm),
         ) + "**",
     ])
 
     section = "## Token Metrics\n\n" + _md_table(headers, rows, align)
+    if skipped_count is None:
+        section += "\n_by_model skipped: not a list or object._\n"
+    elif skipped_count:
+        section += f"\n_{skipped_count} by_model row(s) skipped: not an object._\n"
     section += "\n" + render_cost_coverage(
         cost_coverage_footer(data.get("cost_coverage"), data.get("trace_coverage")),
     )
