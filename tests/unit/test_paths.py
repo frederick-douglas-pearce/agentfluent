@@ -191,3 +191,28 @@ class TestHomeRelative:
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: win_home))
         path = PureWindowsPath("C:/Users/al/.claude/agents/t.md")
         assert home_relative(path) == "~/.claude/agents/t.md"  # type: ignore[arg-type]
+
+    def test_home_resolve_oserror_falls_back_to_unchanged_path(
+        self, fake_home: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # A home whose resolution fails with OSError (permission / stat
+        # failure) must degrade to the path, not fail message rendering.
+        def _resolve_fails(self: Path, strict: bool = False) -> Path:
+            raise PermissionError("cannot stat home")
+
+        monkeypatch.setattr(Path, "resolve", _resolve_fails)
+        assert home_relative(Path("/opt/agents/x.md")) == "/opt/agents/x.md"
+
+    def test_resolved_branch_joined_with_forward_slashes(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # The resolved-home branch posix-joins too: a Windows-flavored home
+        # that only matches once resolved renders ``~/a/b.md``.
+        class _LinkedWinHome(PureWindowsPath):
+            def resolve(self, strict: bool = False) -> PureWindowsPath:
+                return PureWindowsPath("C:/real/al")
+
+        link_home = _LinkedWinHome("C:/link/al")
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: link_home))
+        path = PureWindowsPath("C:/real/al/.claude/agents/t.md")
+        assert home_relative(path) == "~/.claude/agents/t.md"  # type: ignore[arg-type]
