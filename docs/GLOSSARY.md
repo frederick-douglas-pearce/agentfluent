@@ -609,7 +609,7 @@ accumulate.
 **Example:**
 
 ```
-Agent 'tester' is defined in /home/u/.claude/agents/tester.md but has 0
+Agent 'tester' is defined in ~/.claude/agents/tester.md but has 0
 invocations across 11 analyzed sessions.
 ```
 

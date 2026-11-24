@@ -461,7 +461,7 @@
     partial-window confound; consider re-running after enough sessions
     accumulate.
   example: |
-    Agent 'tester' is defined in /home/u/.claude/agents/tester.md but has 0
+    Agent 'tester' is defined in ~/.claude/agents/tester.md but has 0
     invocations across 11 analyzed sessions.
   severity_range: info
   threshold: 0 invocations across analyzed sessions

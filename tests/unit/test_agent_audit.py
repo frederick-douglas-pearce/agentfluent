@@ -10,10 +10,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from agentfluent.agents.models import AgentInvocation
 from agentfluent.config.models import AgentConfig, Scope, Severity
 from agentfluent.diagnostics.agent_audit import audit_unused_agents
-from agentfluent.diagnostics.models import SignalType
+from agentfluent.diagnostics.correlator import correlate
+from agentfluent.diagnostics.models import DiagnosticSignal, SignalType
 
 
 def _config(name: str, *, description: str = "do a thing") -> AgentConfig:
@@ -127,3 +130,47 @@ class TestAuditUnusedAgents:
         )
         assert len(signals) == 1
         assert signals[0].detail["description"] == ""
+
+
+class TestUnusedAgentPathRendering:
+    """The message renders the definition path home-relative; structured
+    fields keep it absolute (#753, ``config_file`` precedent from #340)."""
+
+    @pytest.fixture
+    def fake_home(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+        home = tmp_path / "home" / "u"
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+        return home
+
+    def _audit(self, file_path: Path) -> list[DiagnosticSignal]:
+        config = AgentConfig(
+            name="tester", file_path=file_path, scope=Scope.USER,
+        )
+        return audit_unused_agents(
+            [_invocation("pm")], [config], sessions_analyzed=3,
+        )
+
+    def test_path_under_home_renders_tilde(self, fake_home: Path) -> None:
+        file_path = fake_home / ".claude" / "agents" / "tester.md"
+        [sig] = self._audit(file_path)
+        assert sig.message.startswith(
+            "Agent 'tester' is defined in ~/.claude/agents/tester.md but",
+        )
+        assert str(fake_home) not in sig.message
+        assert sig.detail["source_file"] == str(file_path)
+
+    def test_path_outside_home_unchanged(self, fake_home: Path) -> None:
+        file_path = Path("/opt/agents/tester.md")
+        [sig] = self._audit(file_path)
+        assert "is defined in /opt/agents/tester.md but" in sig.message
+        assert sig.detail["source_file"] == "/opt/agents/tester.md"
+
+    def test_recommendation_carries_tilde_and_absolute_config_file(
+        self, fake_home: Path,
+    ) -> None:
+        file_path = fake_home / ".claude" / "agents" / "tester.md"
+        [(_, rec)] = correlate(self._audit(file_path))
+        assert "~/.claude/agents/tester.md" in rec.message
+        assert str(fake_home) not in rec.message
+        assert str(fake_home) not in rec.observation
+        assert rec.config_file == str(file_path)

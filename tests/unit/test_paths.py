@@ -15,6 +15,7 @@ from agentfluent.core.paths import (
     agentfluent_cache_dir,
     agentfluent_config_dir,
     agentfluent_state_dir,
+    home_relative,
     settings_path_for,
     validate_claude_config_dir,
 )
@@ -96,3 +97,28 @@ class TestAgentfluentStateDir:
     ) -> None:
         monkeypatch.setenv(XDG_STATE_HOME_ENV_VAR, str(tmp_path))
         assert agentfluent_state_dir() == tmp_path / "agentfluent"
+
+
+class TestHomeRelative:
+    """``home_relative`` renders ``$HOME`` as ``~`` for message text (#340, #753)."""
+
+    @pytest.fixture
+    def fake_home(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+        home = tmp_path / "al"
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+        return home
+
+    def test_path_under_home_becomes_tilde_relative(self, fake_home: Path) -> None:
+        path = fake_home / ".claude" / "agents" / "tester.md"
+        assert home_relative(path) == "~/.claude/agents/tester.md"
+
+    def test_path_outside_home_unchanged(self, fake_home: Path) -> None:
+        assert home_relative(Path("/etc/agentfluent/global.md")) == (
+            "/etc/agentfluent/global.md"
+        )
+
+    def test_sibling_sharing_home_prefix_unchanged(self, fake_home: Path) -> None:
+        # ``/.../al`` must not swallow ``/.../alice`` -- a component match,
+        # not a string-prefix match.
+        sibling = fake_home.parent / "alice" / "agents" / "pm.md"
+        assert home_relative(sibling) == str(sibling)

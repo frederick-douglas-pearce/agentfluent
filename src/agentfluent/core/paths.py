@@ -68,6 +68,22 @@ def claude_json_for(config_root: Path | None) -> Path:
     return config_root.parent / ".claude.json"
 
 
+def home_relative(path: Path) -> str:
+    """Render ``path`` with ``$HOME`` replaced by ``~`` for message text.
+
+    Why: diagnostic signal and recommendation messages are rendered into
+    terminal output, shared JSON and committed README screenshots, so an
+    absolute path leaks the user's home directory (#340, #753). Structured
+    fields (``DiagnosticSignal.detail["source_file"]``,
+    ``DiagnosticRecommendation.config_file``) keep the absolute path for
+    programmatic consumers. A path outside ``$HOME`` is returned unchanged.
+    """
+    try:
+        return "~/" + str(path.relative_to(Path.home()))
+    except ValueError:
+        return str(path)
+
+
 def settings_path_for(config_root: Path | None) -> Path:
     """Path to the user's ``~/.claude/settings.json`` file.
 
