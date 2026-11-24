@@ -185,6 +185,33 @@ class TestModelSelectionScoring:
         assert score.dimension_scores["model_selection"] == 25
         assert not [r for r in score.recommendations if r.dimension == "model_selection"]
 
+    # #747: comma-form `tools:` frontmatter reaches the read-only check as a list.
+    def test_comma_form_read_only_complex_agent_is_flagged(self, tmp_path: Path) -> None:
+        path = tmp_path / "scout.md"
+        path.write_text(
+            "---\nname: scout\ndescription: Reads code.\n"
+            "model: claude-opus-5-5\ntools: Read, Grep, Glob\n---\nBody.\n",
+        )
+        agent = parse_agent_file(path, Scope.USER)
+        assert agent is not None
+        score = score_agent(agent)
+        assert score.dimension_scores["model_selection"] == 15
+        recs = [r for r in score.recommendations if r.dimension == "model_selection"]
+        assert len(recs) == 1
+        assert "only read-only tools" in recs[0].message
+
+    def test_comma_form_complex_agent_with_write_tool_is_not_flagged(
+        self, tmp_path: Path,
+    ) -> None:
+        path = tmp_path / "writer.md"
+        path.write_text(
+            "---\nname: writer\ndescription: Writes code.\n"
+            "model: claude-opus-5-5\ntools: Read, Write\n---\nBody.\n",
+        )
+        agent = parse_agent_file(path, Scope.USER)
+        assert agent is not None
+        assert score_agent(agent).dimension_scores["model_selection"] == 25
+
     def test_complex_model_with_mcp_tool_is_not_flagged(self) -> None:
         agent = _make_agent(
             model="claude-opus-5-5",
