@@ -2007,7 +2007,7 @@ is longer than a threshold.
 greater than the model's threshold, every token of the request,
 output included, is priced at the tier rate. A tier is never chosen
 from a sum of requests. At the pinned genai-prices version,
-`claude-haiku-5-5` charges 5x above 100K, `claude-sonnet-4-5` has a
+`claude-haiku-5-5` charges 5x above 100K, `claude-sonnet-4-5-20250929` has a
 >200K tier at every date, and `claude-opus-4-6` / `claude-sonnet-4-6`
 have one for sessions dated before 2026-03-13. Rates follow the
 session's first-message date (#738). Because each `by_model` row sums per-request costs, its
