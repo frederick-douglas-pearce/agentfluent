@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from agentfluent.config.models import EnvironmentWarning, Severity
-from agentfluent.core.paths import settings_path_for
+from agentfluent.core.paths import home_relative, settings_path_for
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +168,7 @@ def check_cleanup_retention(
         f"~/.claude/projects/ and cannot be recovered, so this analysis may "
         f"cover less history than expected. To preserve session data for "
         f'future analysis, add "{SETTINGS_KEY}": {RECOMMENDED_RETENTION_DAYS} '
-        f"to {user_settings_path}."
+        f"to {home_relative(user_settings_path)}."
     )
 
     return EnvironmentWarning(

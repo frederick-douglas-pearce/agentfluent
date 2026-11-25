@@ -20,9 +20,11 @@ Out of scope: signals that render **session-observed** file paths
 from a config definition. Whether those render home-relative is an open
 policy question (#757), so this guard neither covers nor decides it.
 
-Also out of scope: ``EnvironmentWarning`` text. The cleanupPeriodDays
-retention warning (``config/retention.py::check_cleanup_retention``) still
-renders the absolute settings path; that is tracked in #759.
+``EnvironmentWarning`` text follows the same policy: the cleanupPeriodDays
+retention warning (``config/retention.py::check_cleanup_retention``) renders
+the settings path home-relative in ``message`` and keeps it absolute in
+``remediation_path`` (#759). As of #759 the only other producer,
+``analytics/cost_coverage.py::pricing_gap_warning``, renders no path.
 """
 
 from __future__ import annotations
@@ -38,6 +40,7 @@ import pytest
 
 from agentfluent.agents.models import AgentInvocation
 from agentfluent.config.models import AgentConfig, McpServerConfig, Scope, Severity
+from agentfluent.config.retention import _load_settings, check_cleanup_retention
 from agentfluent.diagnostics import agent_audit, correlator, mcp_assessment
 from agentfluent.diagnostics.agent_audit import (
     audit_tool_inventory,
@@ -378,3 +381,94 @@ def test_every_path_rendering_rule_is_covered() -> None:
     assert rendering <= covered, (
         f"add guard rows for: {sorted(r.__name__ for r in rendering - covered)}"
     )
+
+
+# --- EnvironmentWarning text (#759) ---------------------------------------
+
+
+RETENTION_CONFIG_MODES = ("override", "default")
+
+
+def _retention_config_dir(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch, mode: str,
+) -> tuple[Path | None, Path]:
+    """Return (``claude_config_dir`` argument, expected settings path).
+
+    ``override`` passes the config dir explicitly (``--claude-config-dir``).
+    ``default`` passes ``None`` so the check falls back to
+    ``core.paths.DEFAULT_CLAUDE_CONFIG_DIR``, which is computed from
+    ``Path.home()`` at import time and so must be patched to the fake home.
+    """
+    config_dir = fake_home / ".claude"
+    config_dir.mkdir(parents=True)
+    _load_settings.cache_clear()
+    if mode == "default":
+        monkeypatch.setattr("agentfluent.core.paths.DEFAULT_CLAUDE_CONFIG_DIR", config_dir)
+        return None, config_dir / "settings.json"
+    return config_dir, config_dir / "settings.json"
+
+
+@pytest.mark.parametrize("mode", RETENTION_CONFIG_MODES)
+def test_retention_warning_renders_no_home_path(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch, mode: str,
+) -> None:
+    """The cleanupPeriodDays warning renders its settings path home-relative.
+
+    No ``settings.json`` under the fake home's config dir, so the 30-day
+    default applies and the warning fires. ``message`` carries
+    ``~/.claude/settings.json``; ``remediation_path`` keeps the absolute path.
+    """
+    config_arg, absolute = _retention_config_dir(fake_home, monkeypatch, mode)
+
+    warning = check_cleanup_retention(config_arg, None)
+
+    assert warning is not None
+    assert warning.remediation_path == absolute
+    assert str(absolute).startswith(str(fake_home))
+    assert str(fake_home) not in warning.message
+    assert "~/.claude/settings.json" in warning.message
+
+
+@pytest.mark.parametrize("mode", RETENTION_CONFIG_MODES)
+def test_retention_warning_renders_path_through_home_relative(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch, mode: str,
+) -> None:
+    """The message path goes through ``home_relative``, not an inline rewrite.
+
+    A spy replaces ``home_relative`` in ``config.retention``: the message must
+    carry the spy's output for exactly the settings path, and
+    ``remediation_path`` must not pass through it. This pins the mechanism
+    (prefix-safe matching and the resolved-home fallback live in
+    ``home_relative``), which an outcome check under a plain fake home cannot.
+    """
+    config_arg, absolute = _retention_config_dir(fake_home, monkeypatch, mode)
+    seen: list[Path] = []
+
+    def spy(path: Path) -> str:
+        seen.append(path)
+        return "<HOME_RELATIVE>"
+
+    monkeypatch.setattr("agentfluent.config.retention.home_relative", spy)
+
+    warning = check_cleanup_retention(config_arg, None)
+
+    assert warning is not None
+    assert seen == [absolute]
+    assert warning.message.endswith("to <HOME_RELATIVE>.")
+    assert warning.remediation_path == absolute
+
+
+def test_retention_warning_outside_home_rendered_unchanged(
+    fake_home: Path, tmp_path: Path,
+) -> None:
+    """A config dir outside ``$HOME`` keeps its absolute path in the message."""
+    config_dir = tmp_path / "elsewhere" / ".claude"
+    config_dir.mkdir(parents=True)
+    _load_settings.cache_clear()
+
+    warning = check_cleanup_retention(config_dir, None)
+
+    assert warning is not None
+    assert not str(config_dir).startswith(str(fake_home))
+    assert warning.message.endswith(f"to {config_dir / 'settings.json'}.")
+    assert warning.remediation_path == config_dir / "settings.json"
