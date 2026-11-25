@@ -64,15 +64,15 @@ useful dogfood data point.)
 
 Every run otherwise sits at one point in the model dimension, so the corpus never
 tells us how the diagnostics behave across models. The **synthesis parent model
-rotates** across `MAIN_MODELS` (`claude-opus-4-8` → `claude-sonnet-4-6` →
-`claude-haiku-4-5`) by run **date** — `date.toordinal() % 3` — so consecutive
+rotates** across `MAIN_MODELS` (`claude-opus-5-5` → `claude-sonnet-5-5` →
+`claude-haiku-5-5`) by run **date** — `date.toordinal() % 3` — so consecutive
 daily cron runs cycle the tiers. The rotation is keyed off the date (not a
 persistent counter) so a session's main model is reproducible from its own
 timestamp (the map #112's intended-vs-resolved check wants) and a missed cron day
 can't corrupt a counter. The subagent stays Haiku (this is a main-model-only axis;
 structural diversity — turns, delegations — is #637).
 
-- Pin one tier for an ad-hoc run: `--main-model claude-sonnet-4-6` (or
+- Pin one tier for an ad-hoc run: `--main-model claude-sonnet-5-5` (or
   `DOGFOOD_MAIN_MODEL` for the cron). Unset → rotation.
 - **Discoverability:** each synthesis run appends a line to a run manifest at
   `$XDG_STATE_HOME/agentfluent/dogfood/runs.jsonl` —
