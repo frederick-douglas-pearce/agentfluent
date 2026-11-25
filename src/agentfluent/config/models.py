@@ -80,12 +80,15 @@ class EnvironmentWarning(BaseModel):
     """How important this warning is. Drives banner color."""
 
     message: str
-    """Human-readable warning text, ready to render as-is."""
+    """Human-readable warning text, ready to render as-is. Any filesystem
+    path in it is rendered home-relative via ``core/paths.py::home_relative``
+    (#759)."""
 
     remediation_path: Path | None = None
     """Filesystem path the user should edit to resolve the warning
-    (e.g., ``~/.claude/settings.json``). ``None`` when the warning has
-    no single actionable file."""
+    (e.g., ``/home/<user>/.claude/settings.json``). Kept absolute for
+    programmatic consumers, while ``message`` spells it home-relative.
+    ``None`` when the warning has no single actionable file."""
 
 
 class AgentConfig(BaseModel):

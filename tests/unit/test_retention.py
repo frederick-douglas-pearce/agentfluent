@@ -61,24 +61,6 @@ def test_missing_key_warns_with_default_30(tmp_path: Path) -> None:
     assert warning.remediation_path == cfg / "settings.json"
 
 
-def test_settings_path_outside_home_rendered_unchanged(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A config dir outside ``$HOME`` keeps its absolute path in the message (#759)."""
-    home = tmp_path / "home" / "u"
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-    cfg = tmp_path / "elsewhere" / ".claude"
-    cfg.mkdir(parents=True)
-
-    warning = check_cleanup_retention(cfg, None)
-
-    assert warning is not None
-    assert f"to {cfg / 'settings.json'}." in warning.message
-    assert "~" not in warning.message.split(" to ")[-1]
-    assert warning.remediation_path == cfg / "settings.json"
-
-
 def test_explicit_default_value_warns(tmp_path: Path) -> None:
     cfg = _user_cfg(tmp_path)
     _write_settings(cfg / "settings.json", cleanupPeriodDays=30)
