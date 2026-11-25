@@ -624,12 +624,14 @@ class TestMcpAuditCorrelation:
     def _unused_signal(
         self, server_name: str = "slack", source_file: str = "/home/u/.claude.json",
     ) -> DiagnosticSignal:
+        # Mirrors audit_mcp_servers (#756): the message renders the path
+        # home-relative, detail["source_file"] keeps it absolute.
         return _signal(
             signal_type=SignalType.MCP_UNUSED_SERVER,
             severity=Severity.INFO,
             agent_type="",
             message=(
-                f"MCP server '{server_name}' is configured in {source_file} "
+                f"MCP server '{server_name}' is configured in ~/.claude.json "
                 "but has 0 tool calls across 12 analyzed sessions. "
                 "Consider removing from mcpServers or marking as disabled."
             ),
@@ -662,7 +664,12 @@ class TestMcpAuditCorrelation:
             },
         )
 
-    def test_unused_signal_produces_mcp_target_recommendation(self) -> None:
+    def test_unused_signal_produces_mcp_target_recommendation(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Pin $HOME to the fixture's home so the rendering does not depend on
+        # the runner's home directory.
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: Path("/home/u")))
         recs = correlate([self._unused_signal()])
         assert len(recs) == 1
         rec = recs[0]
@@ -670,7 +677,9 @@ class TestMcpAuditCorrelation:
         assert rec.severity == Severity.INFO
         # Action names the server and points at the source file.
         assert "slack" in rec.action
-        assert "/home/u/.claude.json" in rec.action
+        assert "in ~/.claude.json, or set" in rec.action
+        assert "/home/u" not in rec.action
+        assert rec.config_file == "/home/u/.claude.json"
         assert rec.signal_types == [SignalType.MCP_UNUSED_SERVER]
 
     def test_missing_signal_produces_warning_recommendation(self) -> None:
@@ -1432,3 +1441,50 @@ class TestParameterRetryRule:
         assert "Observed successful call shape (informational)" in action
         assert "Suggested `input_examples` entry" not in action
         assert '"file_path": "a.py"' in action  # shape still surfaced
+
+
+class TestMcpUnusedServerPathRendering:
+    """The MCP_UNUSED_SERVER recommendation renders ``source_file``
+    home-relative in its text; ``config_file`` stays absolute (#756)."""
+
+    @pytest.fixture
+    def fake_home(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+        home = tmp_path / "home" / "u"
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+        return home
+
+    @staticmethod
+    def _unused(source_file: str) -> DiagnosticSignal:
+        return DiagnosticSignal(
+            signal_type=SignalType.MCP_UNUSED_SERVER,
+            severity=Severity.INFO,
+            agent_type=None,
+            message="MCP server 'slack' is configured but unused.",
+            detail={"server_name": "slack", "source_file": source_file},
+        )
+
+    def test_path_under_home_renders_tilde(self, fake_home: Path) -> None:
+        source = fake_home / ".claude.json"
+        [rec] = correlate([self._unused(str(source))])
+        assert "Remove 'slack' from mcpServers in ~/.claude.json, or set" in rec.action
+        for text in (rec.message, rec.observation, rec.reason, rec.action):
+            assert str(fake_home) not in text
+        assert rec.config_file == str(source)
+
+    def test_path_outside_home_unchanged(self, fake_home: Path) -> None:
+        [rec] = correlate([self._unused("/srv/repo/.mcp.json")])
+        assert "from mcpServers in /srv/repo/.mcp.json, or set" in rec.action
+        assert rec.config_file == "/srv/repo/.mcp.json"
+
+    @pytest.mark.parametrize("detail", [{"server_name": "slack", "source_file": ""},
+                                        {"server_name": "slack"}])
+    def test_empty_or_missing_source_file_renders_empty(
+        self, fake_home: Path, detail: dict[str, object],
+    ) -> None:
+        sig = self._unused("")
+        sig.detail = detail
+        [rec] = correlate([sig])
+        assert "from mcpServers in , or set" in rec.action
+        assert "~" not in rec.action
+        assert rec.config_file == ""

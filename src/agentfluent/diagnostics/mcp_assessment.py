@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel, ConfigDict
 
 from agentfluent.config.models import Severity
+from agentfluent.core.paths import home_relative
 from agentfluent.core.session import index_tool_results_by_id
 from agentfluent.diagnostics.models import DiagnosticSignal, SignalType
 from agentfluent.diagnostics.signals import detect_is_error_from_text
@@ -303,7 +304,7 @@ def _detect_unused_servers(
             severity=Severity.INFO,
             message=(
                 f"MCP server '{server.server_name}' is configured in "
-                f"{server.source_file} but has 0 tool calls across "
+                f"{home_relative(server.source_file)} but has 0 tool calls across "
                 f"{sessions_analyzed} analyzed sessions. "
                 "Consider removing from mcpServers or marking as disabled."
             ),

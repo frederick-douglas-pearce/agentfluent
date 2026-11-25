@@ -418,7 +418,7 @@
     the `info` severity. Cross-cutting signal -- `agent_type` is `null`
     since MCP servers aren't scoped to one agent.
   example: |
-    MCP server 'slack' is configured in /home/u/.claude.json but has 0 tool
+    MCP server 'slack' is configured in ~/.claude.json but has 0 tool
     calls across 10 analyzed sessions. Consider removing from mcpServers or
     marking as disabled.
   severity_range: info
