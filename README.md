@@ -174,7 +174,7 @@ agentfluent analyze --project codefluent --format json \
   > ~/.claude/agents/new-agent.md
 ```
 
-Produces a token-usage table — including **model turns** (`model_turns`, one merged, non-synthetic assistant message — a real model response), the headline agent-efficiency metric, with a `Synthetic responses` row breaking out Claude Code's local ghost turns (e.g. "No response requested.") that are netted out of the count — a per-model cost breakdown (labeled as API rate — subscription plans differ), tool usage concentration, and an Agent Invocations table summarizing each subagent's token, duration, and tool-use count. Per-agent-type rows show average turns per invocation alongside efficiency ratios (`avg_tool_calls_per_turn`, `avg_tokens_per_turn`), and the duration column reports **active** time per call with raw wall-clock in parentheses (`470.0s (2918.0s wall)`), so an interactive agent whose wall-clock is inflated by user-approval waits no longer reads as slow. The Cost by Model table breaks out parent vs subagent rows (a model used in both shows two rows with `Origin` distinguishing them), and the top-line `Total cost` / `Total tokens` are comprehensive — parent thread + linked subagent runs combined. Behavior diagnostics run by default and surface signals across three layers (pass `--no-diagnostics` to skip):
+Produces a token-usage table — including **model turns** (`model_turns`, one merged, non-synthetic assistant message — a real model response), the headline agent-efficiency metric, with a `Synthetic responses` row breaking out Claude Code's local ghost turns (e.g. "No response requested.") that are netted out of the count — a per-model cost breakdown (labeled as API rate — subscription plans differ), tool usage concentration, and an Agent Invocations table summarizing each subagent's token spend, duration, and tool-use count, taken from the subagent's trace file when one is linked. The Tokens column is [`spend_tokens`](docs/GLOSSARY.md#spend_tokens), summed turn by turn, and reads `-` when no invocation of that type has trace spend. Per-agent-type rows show average turns per invocation alongside efficiency ratios (`avg_tool_calls_per_turn`, `avg_tokens_per_turn`), and the duration column reports **active** time per call with raw wall-clock in parentheses (`470.0s (2918.0s wall)`), so an interactive agent whose wall-clock is inflated by user-approval waits no longer reads as slow. The Cost by Model table breaks out parent vs subagent rows (a model used in both shows two rows with `Origin` distinguishing them), and the top-line `Total cost` / `Total tokens` are comprehensive: the parent thread plus every subagent trace the session owns, including nested agents and agents a skill or workflow spawned without an `Agent` call ([`trace_coverage`](docs/GLOSSARY.md#trace_coverage)). A model with no known price shows `no price` instead of `$0.00`, and a **Cost coverage** footer under the token table says what the dollar figures leave out: unpriced tokens, agent invocations with no trace-priced spend, partial diagnostics estimates ([`cost_coverage`](docs/GLOSSARY.md#cost_coverage)). Behavior diagnostics run by default and surface signals across three layers (pass `--no-diagnostics` to skip):
 
 - **Metadata-level** (from invocation summaries): tool-error keywords, token-per-tool-use outliers, duration outliers, `TOOL_ORCHESTRATION_CHAIN` (long tool-call chains whose large intermediate results pass through context — INFO with a low-confidence caveat), and `TOOL_INVENTORY_OVERSIZED` (an agent declares >30 tools but exercises under half).
 - **Trace-level** (from `~/.claude/projects/<session>/subagents/`): retry loops, stuck patterns, permission failures, consecutive tool-error sequences, and `PARAMETER_RETRY` (a tool retried with a changed parameter shape after a validation error, surfacing a paste-ready `input_examples` fix) — each with per-tool-call evidence.
@@ -189,7 +189,7 @@ Each recommendation surfaces an axis label — `[cost]`, `[speed]`, or `[quality
 
 Near-duplicate recommendations are aggregated per `(agent, target, signal)` shape into one row with an occurrence `Count` and metric range (e.g. *"4 invocations (4.9x–8.0x above 5,064 mean). Consider adding more specific instructions..."*). Each recommendation carries a specific config surface to change (prompt, tools, model, mcp) and a pointer to the file to edit. Recommendations for built-in agents (Explore, general-purpose, Plan, etc.) use concern-specific action text — wrapper subagent for scope issues, retry bounds on the delegating agent for recovery issues, reroute for tools/model — since built-in agents have no user-editable prompt or tool config.
 
-Cost numbers reflect current per-token pricing; historical sessions are priced at today's rates until [#80](https://github.com/frederick-douglas-pearce/agentfluent/issues/80) (time-series pricing) lands.
+Cost numbers are pay-per-token API rates from [genai-prices](https://github.com/pydantic/genai-prices), looked up at each session's own date and priced one API request at a time, so a request with a long prompt pays its model's [context tier](docs/GLOSSARY.md#context_tier). See [`docs/COST_MODEL.md`](docs/COST_MODEL.md) for which Claude cost levers are and are not priced.
 
 ### `agentfluent diff` — compare two analyze runs
 
@@ -205,6 +205,8 @@ agentfluent diff baseline.json current.json --json | jq '.data.regression_detect
 
 Compares two `analyze --json` envelopes and surfaces new, resolved, and persisting recommendations (keyed by `(agent_type, target, signal_types)`), token / cost deltas, per-agent invocation deltas, and model-turn deltas — both at the parent-session level and per agent type, so a prompt change that cuts the turns an agent takes for the same task shows up as a measurable delta. The `--fail-on {info|warning|critical|off}` flag gates exit code 3 on new findings at or above the chosen severity, so `agentfluent diff` slots into a PR check the same way a test runner does. Baselines are user-managed files — no internal cache — so re-running against an older snapshot at any time is just `agentfluent diff old.json new.json`.
 
+The per-agent **Tokens Δ** column is the change in trace spend, and shows `—` when either side's spend is unknown. An agent type missing from a side that carries spend counts as `0` there. A row whose only change is the `totalTokens` rollup is hidden unless you pass `--verbose`. `diff` also checks that both snapshots priced cost the same way. When their [`cost_model`](docs/GLOSSARY.md#cost_model) stamps differ, or either side has a [cost-coverage](docs/GLOSSARY.md#cost_coverage_status) gap or predates v0.12.0, it prints a caveat above the cost tables, because part of the cost delta may come from pricing rather than from your agent. Re-capture the baseline with the current release to compare like for like.
+
 ### `agentfluent report` — render an analyze snapshot as Markdown
 
 ```bash
@@ -214,7 +216,7 @@ agentfluent report snap.json --output report.md               # ...or to a file
 agentfluent analyze --project codefluent --json | agentfluent report /dev/stdin   # one-shot pipe
 ```
 
-Renders an `analyze --json` snapshot envelope as a Markdown document — the same Summary / Token Metrics / Agent Metrics / Diagnostics / Offload / Reproduction sections that `analyze` prints to the terminal, but in a form you can paste into a PR comment, attach as a CI artifact, or commit alongside a prompt change as a checked-in review trail. `report` is a separate subcommand rather than `analyze --format markdown` so the rendering layer stays decoupled from session ingestion: snapshots round-trip through file storage without re-running analysis. The Reproduction footer always echoes the original `agentfluent analyze` command line so a downstream reader can reproduce the run.
+Renders an `analyze --json` snapshot envelope as a Markdown document — the same Summary / Token Metrics / Agent Metrics / Diagnostics / Offload / Reproduction sections that `analyze` prints to the terminal, but in a form you can paste into a PR comment, attach as a CI artifact, or commit alongside a prompt change as a checked-in review trail. `report` is a separate subcommand rather than `analyze --format markdown` so the rendering layer stays decoupled from session ingestion: snapshots round-trip through file storage without re-running analysis. It carries the same Cost coverage footer as `analyze`. The Reproduction footer always echoes the original `agentfluent analyze` command line so a downstream reader can reproduce the run.
 
 ### `agentfluent config-check` — score agent definitions
 
@@ -229,7 +231,13 @@ Walks `~/.claude/agents/*.md` and `./.claude/agents/*.md`, parses each agent's Y
 
 ### Glossary
 
-`analyze --diagnostics` and `config-check` introduce AgentFluent-specific vocabulary (signal types, severity, confidence tiers, recommendation targets). [`docs/GLOSSARY.md`](docs/GLOSSARY.md) defines every term that appears in CLI output, with worked examples and detection thresholds.
+`analyze --diagnostics` and `config-check` introduce AgentFluent-specific vocabulary (signal types, severity, confidence tiers, recommendation targets). [`docs/GLOSSARY.md`](docs/GLOSSARY.md) defines every term that appears in CLI output, with worked examples and detection thresholds. The same entries are available offline from the CLI:
+
+```bash
+agentfluent explain cost_coverage            # One term (fuzzy match handles typos)
+agentfluent explain --list                   # Every term, grouped by category
+agentfluent explain --category signal_type   # One category
+```
 
 ## Configuration
 
@@ -251,8 +259,11 @@ AgentFluent's "configuration" is CLI flags — no config file, no environment va
 | `--github-no-cache` | off | `analyze` with `--github`: bypass the Tier 3 response cache for this run. Fresh data is fetched from GitHub and written back to the cache (next run sees the updated entries). No effect without `--github`. |
 | `--min-cluster-size` | 5 | Delegation clustering: minimum invocations per cluster (requires `agentfluent[clustering]`) |
 | `--min-similarity` | 0.7 | Delegation dedup: cosine-similarity threshold against existing agents |
+| `--show-negative-savings` | off | `analyze`: also list offload candidates whose estimated savings is zero or negative (offloading would cost more). Hidden by default; JSON always carries the full list. |
 | `--top-n N` | 5 | `analyze`: number of priority-ranked recommendations to summarize above the Recommendations table. Pass 0 to disable the summary block. |
 | `--min-severity` | (none) | `analyze`: drop recommendations below `info` / `warning` / `critical`. Filters both the default table and the `--verbose` per-invocation surface; signals are not affected. |
+| `--output PATH` | (stdout) | `report`: write the Markdown to a file instead of stdout |
+| `--list` / `--category` | off / (none) | `explain`: list every glossary term grouped by category, or only one category (e.g. `signal_type`) |
 | `--fail-on` | (none) | `diff`: gate exit code 3 on new recommendations at or above `info` / `warning` / `critical`, or `off` to disable. |
 | `--claude-config-dir` | `~/.claude/` | Override the Claude config root (also honors `$CLAUDE_CONFIG_DIR`) |
 | `--format` | `table` | Output format: `table` (Rich) or `json` (envelope). Shortcut: `--json` (equivalent to `--format json`) |
@@ -285,6 +296,13 @@ AgentFluent's "configuration" is CLI flags — no config file, no environment va
         {"model": "claude-opus-4-6", "origin": "subagent", "cost":  8.93, "input_tokens": 7825, ...}
       ]
     },
+    "cost_model": {"genai_prices_version": "0.2.3", "cost_method_version": 2},
+    "cost_coverage": {
+      "pricing": {"tokens": 54019983, "unpriced_tokens": 0, "unpriced_models": {}},
+      "invocations": {"total": 74, "linked": 74, "spend": 74, "priced": 74},
+      "diagnostics": {"savings_figures": 5, "partial_figures": 0, "unpriced_figures": 0}
+    },
+    "trace_coverage": {"linked": {...}, "nested": {...}, "session_spawned": {...}, ...},
     "tool_usage": [...],
     "agent_invocations": [...],
     "diagnostics": {
@@ -319,6 +337,38 @@ AgentFluent's "configuration" is CLI flags — no config file, no environment va
 **Schema v2 additions (v0.9, additive — no version bump):** a top-level `total_model_turns` (model turns aggregated across all analyzed sessions) sits alongside `session_count` in `data` — *not* nested under `token_metrics` — and each entry in `data.sessions` carries a per-session `model_turns`. A model turn is one merged, non-synthetic assistant message; Claude Code's `<synthetic>` ghost responses are excluded and tallied separately as a top-level `total_synthetic_messages` (and per-session `synthetic_message_count`), so `model_turns` equals `token_metrics.api_call_count` except on the rare case of a real-model turn with no usage block. Per-agent-type rows under `agent_metrics.by_agent_type` gain `avg_turns_per_invocation`, `avg_tool_calls_per_turn`, `avg_tokens_per_turn`, and `estimated_avg_cost_per_turn_usd` efficiency ratios. `agentfluent diff` reports model-turn deltas per agent type and at the parent-session level; pre-turn-era envelopes (pre-v0.9) degrade gracefully — the absent counts read as `0`, so a diff against an old baseline still runs without crashing.
 
 **Schema v2 additions (v0.11, additive — no version bump):** each entry in `data.sessions` carries `session_kind: "sdk" | "cli" | "unknown"` — whether the session was produced by an Agent SDK run, Claude Code interactive, or is indeterminate — alongside `entrypoint: string | null`, the raw runtime value it was derived from (`"sdk-py"`, `"cli"`, or a future/unrecognized value). Both are published because they answer different questions: an *unrecognized* runtime classifies as `"unknown"` while `entrypoint` still reports it verbatim, so a Claude Code vocabulary change surfaces as a readable value rather than an unexplained `unknown`. The pair is per-session, never aggregated at the top level — one project directory routinely mixes co-located SDK and Claude Code sessions, which is exactly the ambiguity these fields resolve. `agentfluent diff` does not consume either field, so baselines from either side of v0.11 compare unchanged. The table view shows the same classification: a composition line in the footer (`Sessions analyzed: 76 (24 Claude Code, 52 SDK)`), an `[SDK]` badge when `--session` scopes the run, and a `Kind` column in the `--verbose` per-session breakdown.
+
+**Schema v2 additions (v0.12, additive — no version bump):** every new field below is optional, and a field that is `null` means *unknown*, never zero.
+
+- **`cost_coverage`** (top level): what the run's dollar figures cover. `pricing` holds `{tokens, unpriced_tokens, unpriced_models}`; `invocations` holds `{total, linked, spend, priced}`; `diagnostics` holds `{savings_figures, partial_figures, unpriced_figures}` or `null`. It is `null` on an envelope from before v0.12.0.
+- **`trace_coverage`** (top level and per session): subagent trace files by cohort (`linked`, `nested`, `session_spawned`, `filtered`, `unparseable`), each with `files`, `tokens`, `cost`, `unpriced_files` and `folded`, plus `deduped_turns`/`deduped_tokens` for fork-replayed turns counted once. `null` on a pre-v0.12.0 envelope.
+- **`cost_model`** (top level): `{genai_prices_version, cost_method_version}`, the rate table and cost method that priced the envelope. `diff` compares the two sides' stamps.
+- **`token_metrics.by_model[].unpriced_tokens`**: an unpriced row's `cost` stays `0.0`, so this field is the only "unpriced, not free" signal.
+- **`agent_metrics.by_agent_type.*`** gains `spend_tokens`, `spend_invocation_count`, `linked_invocation_count`, `priced_invocation_count` and `priced_model_turns` (on every row, `priced ≤ spend ≤ linked ≤ invocation_count`), and `agent_metrics` gains `total_agent_spend_tokens`. `total_tokens` keeps its old meaning, the `toolUseResult.totalTokens` rollup (a context-size proxy, not spend).
+- **`diagnostics.offload_candidates[].cost_priced`**: `false` means no estimate could be priced; `null` means a legacy envelope.
+- **`warnings[]`** gains the code `unpriced_tokens` (written by the `analyze` CLI only).
+- **Subagent traces** under `sessions[].invocations[].trace` gain `parent_invocation_id` and `depth` (multi-level linking), and each trace `tool_calls[]` entry gains `turn_index` (which API turn issued the call).
+- **`diff --json`**: `by_agent_type[]` gains `baseline_spend_tokens`, `current_spend_tokens` and `spend_tokens_delta` (`null` when either side is unknown). `baseline_total_tokens`/`current_total_tokens`/`total_tokens_delta` keep their rollup meaning and are no longer rendered. Coverage on each side is reported as `baseline_cost_coverage_status`, `current_cost_coverage_status` and `cost_coverage_status`.
+
+**Comparing against a pre-v0.12 baseline.** v0.12 corrects how cost is counted, so several figures move for an unchanged agent:
+
+- Session `total_cost` and `cache_efficiency` rise, because nested and skill/workflow-spawned subagent traces are now folded in.
+- Per-agent cost and `agent_token_percentage` now come from trace spend. Before v0.12, per-agent cost was the agent's `totalTokens` rollup times a session-wide blended rate, and `agent_token_percentage` was the summed rollup over session tokens. The rollup is a final-turn snapshot: it read a median 5.8x low on tokens, and per-agent dollars came out about 15x low overall, though an agent on a cheaper model than the session mix could read high instead (D064). Where the rollup was absent (most current invocations), both were published as `$0.00` / `0.0%`.
+- Diagnostics savings (`estimated_savings_usd`, `current_cost_usd`) price trace spend instead of a 50/50 proxy split.
+- Requests over a model's context-tier threshold now cost more, so `cost_method_version` is `2`.
+- Tool-call counts, durations and the signals that read them move. Agent tool-use count and duration now come from the trace ([#690](https://github.com/frederick-douglas-pearce/agentfluent/issues/690)), so `duration_outlier`, `TOOL_ORCHESTRATION_CHAIN`, complexity and model-routing findings can fire on invocations that had no rollup. The parser used to drop 11–21% of subagent tool calls; they are now restored ([#694](https://github.com/frederick-douglas-pearce/agentfluent/issues/694)). Active duration, and so `duration_outlier` counts, move for traces with parallel calls ([#697](https://github.com/frederick-douglas-pearce/agentfluent/issues/697)).
+- `STUCK_PATTERN` and `USER_CORRECTION` fire far less: on paginated reads and machine-injected messages they were 0% precise before ([#666](https://github.com/frederick-douglas-pearce/agentfluent/issues/666), [#667](https://github.com/frederick-douglas-pearce/agentfluent/issues/667)).
+- Retry-family counts (`RETRY_LOOP`, `STUCK_PATTERN`, `PARAMETER_RETRY`, `TOOL_ERROR_SEQUENCE`, `total_retries`) are not comparable: parallel tool calls are no longer dropped, and same-turn parallel calls no longer count as retries.
+
+`diff` flags the cost side of this with its cost-model caveat. **Re-capture your baselines after upgrading.**
+
+**Known limitations (v0.12.0):**
+
+- **Fork agents replay part of their parent's conversation** ([#704](https://github.com/frederick-douglas-pearce/agentfluent/issues/704), fix planned for v0.13.0). Dollar totals count each replayed turn once, but turn, tool-call, error and retry counts for the fork's agent type include the replayed turns, and per-turn ratios read slightly low. A trace finding on a fork agent may cite errors or retries that the spawning conversation produced, pointing at the wrong agent's config. Measured: 2 fork traces in 1 of 2,363 sessions, 3.7% of that agent type's turns, no replayed errors or retries.
+- **Two invocations sharing one agent id** would each get their own parse of the same trace ([#705](https://github.com/frederick-douglas-pearce/agentfluent/issues/705)). Dollars are still deduplicated by API turn, but its turns, tool calls, errors and retries would count twice; its spend, priced and linked invocation counts would double, so per-invocation cost averages read low; turns without a message id would count twice in dollars; trace findings could repeat; the cost-coverage footer's linked figure (`trace_coverage.linked`) might not reconcile with per-agent cost; and dollars could move between agent types. Not observed: 0 of 5,228 linked invocations across 2,363 sessions. Reopen the issue if your corpus shows it.
+- **Context tiers use the session's start date** ([#738](https://github.com/frederick-douglas-pearce/agentfluent/issues/738)). A session that starts before 2026-03-13 and runs past it would over-report its later opus-4-6/sonnet-4-6 requests over 200K. No such session was measured.
+- **`TOOL_ERROR_SEQUENCE`** still counts parallel errored calls from one turn as consecutive errors ([#725](https://github.com/frederick-douglas-pearce/agentfluent/issues/725)).
+- **Subagent traces whose parent session file is gone** (deleted by Claude Code's retention cleanup, for example) are not counted or disclosed ([#702](https://github.com/frederick-douglas-pearce/agentfluent/issues/702)).
 
 No ANSI escapes in JSON output, guaranteed. The key `total_cost` is the pay-per-token equivalent; subscribers on Pro/Max/Team/Enterprise plans see a flat monthly charge regardless.
 
@@ -361,10 +411,10 @@ flowchart LR
 Step by step:
 
 1. **Parse JSONL** — `core/parser.py` reads each session file into typed `SessionMessage` objects. Handles streaming snapshot deduplication, plain-string vs. array content shapes, and Claude Code's real `toolUseResult` format (see [`CLAUDE.md`](CLAUDE.md) for the format spec).
-2. **Parse subagent traces** — `traces/parser.py` reads per-session subagent files under `<session>/subagents/agent-<agentId>.jsonl` and reconstructs the internal tool-call sequence with `is_error` flags. `traces/linker.py` attaches each trace back to its parent invocation via `agentId`. `traces/retry.py` detects retry sequences within a trace.
+2. **Parse subagent traces** — `traces/parser.py` reads per-session subagent files under `<session>/subagents/agent-<agentId>.jsonl` and reconstructs the internal tool-call sequence with `is_error` flags. `traces/linker.py` attaches each trace back to its parent invocation via `agentId`, and `traces/lineage.py` links nested agents to the agent that spawned them (`parent_invocation_id`, `depth`). `traces/coverage.py` labels every trace file the session owns, which is what the session totals fold in. `traces/retry.py` detects retry sequences within a trace.
 3. **Discover projects and sessions** — `core/discovery.py` enumerates `~/.claude/projects/` and surfaces friendly display names.
-4. **Extract agent invocations** — `agents/extractor.py` walks messages, pairs Agent `tool_use` blocks with their `tool_result` content blocks, and pulls per-invocation metadata (tokens, duration, tool-use count) from the containing user message's `toolUseResult` sibling.
-5. **Compute token and cost metrics** — `analytics/tokens.py` aggregates usage per model with `<synthetic>` sentinel filtering; `analytics/pricing.py` applies per-token rates labeled as API rate.
+4. **Extract agent invocations** — `agents/extractor.py` walks messages, pairs Agent `tool_use` blocks with their `tool_result` content blocks, and pulls per-invocation metadata from the containing user message's `toolUseResult` sibling. When step 2's linker attaches a trace, the invocation's spend, duration and tool-use count come from the trace instead.
+5. **Compute token and cost metrics** — `analytics/tokens.py` aggregates usage per model with `<synthetic>` sentinel filtering and prices each API request on its own; `analytics/pricing.py` supplies the session-dated genai-prices rates, labeled as API rate. `analytics/cost_coverage.py` records what the dollar figures cover.
 6. **Score agent configurations** — `config/scanner.py` parses YAML frontmatter from each `.md` in `.claude/agents/` and `~/.claude/agents/`; `config/scoring.py` scores description, tools, model, and prompt on a 4-dimension rubric.
 7. **Discover MCP servers** — `config/mcp_discovery.py` reads `mcpServers` from `~/.claude.json` (user + project-local scopes) and `.mcp.json` (project-shared), honoring the `enabledMcpjsonServers` / `disabledMcpjsonServers` gating arrays. Used by the audit phase to compare against observed `mcp__*` tool usage.
 8. **Diagnose behavior** — `diagnostics/` extracts metadata signals (`signals.py`), trace-level signals (`trace_signals.py` — retry loops, stuck patterns, permission failures, error sequences), model-routing mismatches (`model_routing.py`), and MCP audit signals (`mcp_assessment.py`). `correlator.py` routes each signal to a config target (prompt/tools/model/mcp) and emits an actionable recommendation.
@@ -377,7 +427,8 @@ Everything runs locally. No outbound network calls. No API key needed.
 
 - **Project and Session Discovery** — Enumerates `~/.claude/projects/`, groups sessions by project, shows per-project session count, total size, and last-modified timestamp. Handles Claude Code subagent sidechain files and Agent SDK sessions uniformly.
 - **Execution Analytics** — Token usage, **model turns** (one merged, non-synthetic assistant message — a real model response, with `<synthetic>` ghost turns excluded and tallied separately), API-rate cost, cache efficiency, per-model breakdown, tool-call concentration, and per-agent invocation metrics (tokens, active + wall-clock duration, tool-use count). Cache creation and cache read tokens are tracked separately so you can see where your prompt caching is working. Model turns surface at every level — parent session, subagent invocation, and per-agent-type rollup with efficiency ratios (`avg_tool_calls_per_turn`, `avg_tokens_per_turn`) — because reducing turns for a fixed task is the dominant lever on both cost and latency.
-- **Comprehensive Cost Attribution** — Top-line `total_cost` and `total_tokens` reflect parent + subagent runs combined. The per-model breakdown decomposes by `(model, origin)` so a user who sees "100% Opus" can tell whether their Haiku-routed Explore subagent contributed cost, and whether Opus spend lives in the parent thread or a delegated agent. JSON envelope is at schema v2.
+- **Comprehensive Cost Attribution** — Top-line `total_cost` and `total_tokens` reflect the parent thread plus every subagent trace the session owns, nested and skill-spawned agents included. Per-agent spend and cost are summed turn by turn from each agent's own trace, with each API turn counted once. The per-model breakdown decomposes by `(model, origin)` so a user who sees "100% Opus" can tell whether their Haiku-routed Explore subagent contributed cost, and whether Opus spend lives in the parent thread or a delegated agent. JSON envelope is at schema v2.
+- **Cost Coverage Disclosure** — Every `analyze` and `report` run ends its token table with a Cost coverage footer: either `full`, or a list of what the dollar figures leave out (tokens with no known price and which model ids they were, agent invocations with no trace-priced spend, partial diagnostics estimates, unparseable trace files). Unpriced figures render as `no price` or `$X (partial)`, never as a silent `$0.00`. `diff` discloses coverage for both snapshots and flags a cost delta that crosses a change in rate table or cost method.
 - **Agent Config Assessment** — 4-dimension rubric (description, tools, model, prompt) applied to every `.md` file in `~/.claude/agents/` and `./.claude/agents/`. Produces a 0–100 score plus ranked, specific recommendations ("Prompt body doesn't mention error handling"). Catches agents that are technically valid but miss well-known best practices.
 - **Subagent Trace Parsing** — Parses the internal tool-call sequences Claude Code emits under `~/.claude/projects/<session>/subagents/agent-<agentId>.jsonl`, links them back to the delegating invocation, and detects retry sequences. Gives diagnostics per-call evidence (which tool, which attempt, which error) instead of just an invocation-level summary.
 - **Behavior Diagnostics** — `--diagnostics` emits signals across three layers. *Metadata*: tool-error keywords, token-per-tool-use outliers, duration outliers. *Trace-level*: retry loops, stuck patterns (same call repeated with no progress), permission failures, consecutive tool-error sequences. *Aggregate*: model mismatch (declared/observed model wrong for the workload's complexity), MCP server audit (configured-but-unused, observed-but-missing). Near-duplicate recommendations collapse into one row per `(agent, target, signal)` shape with an occurrence `Count` and metric range. Recommendations for built-in agents (Explore, general-purpose, Plan, code-reviewer, etc.) use concern-specific action text since built-ins have no user-editable config. Each signal routes to a `target` config surface — prompt, tools, model, or mcp — and the recommendation names the file to edit and the specific change to make.
@@ -410,7 +461,7 @@ AgentFluent is designed so data stays on your machine. The attack surface is sma
 | Input validation | Pydantic models with strict type constraints | Malformed JSONL crashing the parser |
 | Safe YAML loading | `yaml.safe_load` only | Arbitrary code execution via frontmatter |
 | CI security review | Claude-powered review when `needs-security-review` label is added | New vulnerabilities |
-| Automated testing | 1600+ unit tests incl. security-focused cases | Regressions |
+| Automated testing | 3200+ unit tests incl. security-focused cases | Regressions |
 
 ### Secrets handling
 
@@ -431,7 +482,7 @@ See [`docs/SECURITY.md`](docs/SECURITY.md) for the full policy: leak vector, def
 - **[Typer](https://typer.tiangolo.com) + [Rich](https://rich.readthedocs.io)** — CLI framework and terminal formatting
 - **[Pydantic v2](https://docs.pydantic.dev)** — data models across module boundaries
 - **[PyYAML](https://pyyaml.org)** — agent definition frontmatter parsing (`safe_load` only)
-- **[pytest](https://pytest.org) + pytest-cov** — 1600+ tests
+- **[pytest](https://pytest.org) + pytest-cov** — 3200+ tests
 - **[mypy](https://mypy.readthedocs.io) strict mode** — full type coverage
 - **[ruff](https://docs.astral.sh/ruff/)** — linting and formatting
 - **[uv](https://docs.astral.sh/uv/)** — package and dependency management
@@ -464,7 +515,7 @@ uv run agentfluent --help
 ### Testing
 
 ```bash
-uv run pytest -m "not integration"            # 1600+ unit tests (CI default)
+uv run pytest -m "not integration"            # 3200+ unit tests (CI default)
 uv run pytest                                 # Full suite incl. integration tests against your real ~/.claude/projects/
 uv run pytest --cov=agentfluent               # With coverage
 ```
@@ -482,17 +533,18 @@ Both must pass cleanly before a PR merges.
 
 ### CI/CD
 
-Five GitHub Actions workflows run automatically:
+Six GitHub Actions workflows run automatically:
 
 - **CI** ([`ci.yml`](.github/workflows/ci.yml)) — Every PR: ruff, mypy strict, full unit-test suite. Must pass to merge.
 - **Security Review** ([`security-review.yml`](.github/workflows/security-review.yml)) — Claude-powered security review of code-changing PRs, triggered by the `needs-security-review` label (re-trigger by removing and re-adding).
-- **Claude Code Review** ([`claude-review.yml`](.github/workflows/claude-review.yml)) — AI-powered PR review, triggered by the `needs-review` label or `@claude` mentions.
+- **PR Template Check** ([`pr-template-check.yml`](.github/workflows/pr-template-check.yml)) — Rejects a PR whose description is missing the template's `## Security review` section (the trap when `gh pr create --body` replaces the template).
 - **Release Please** ([`release-please.yml`](.github/workflows/release-please.yml)) — Auto-generates release PRs with changelog and version bumps from [Conventional Commits](https://www.conventionalcommits.org/).
 - **Dependabot Auto-Merge** ([`dependabot-auto-merge.yml`](.github/workflows/dependabot-auto-merge.yml)) — Auto-merges dependabot PRs once CI passes.
+- **Milestone Docs Issue** ([`milestone-docs-issue.yml`](.github/workflows/milestone-docs-issue.yml)) — Opens a docs catch-up issue when a release milestone is created.
 
 ## Roadmap
 
-Current release: **v0.11.0 — "Recognize the SDK Session."** Next: **v0.12** — cost-accounting *quantity* correctness (per-agent token attribution and orphan / depth-≥2 trace coverage) and continued Claude cost-lever coverage. See the roadmap link below for the per-release theme, headline features, and design context.
+Current release: **v0.12.0 — "Cost correctness: the quantity half."** Per-agent spend priced from subagent traces, every trace a session owns counted in its totals, per-request context-tier pricing, and a cost-coverage disclosure on every run. Next: **v0.13**. See the roadmap link below for the per-release theme, headline features, and design context.
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full version history (release themes, headline features, design context per release) and [`CHANGELOG.md`](CHANGELOG.md) for the commit-level log. Browse [open issues](https://github.com/frederick-douglas-pearce/agentfluent/issues) for the full backlog.
 

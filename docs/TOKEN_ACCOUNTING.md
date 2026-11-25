@@ -19,7 +19,8 @@ Three independent defects, in descending order of subtlety:
 
 1. **`toolUseResult.totalTokens` is a single-turn context-size snapshot**, not
    cumulative spend. Summing it understates processed tokens by a **median 5.8x**
-   and dollar cost by **~15x** on measured sessions. (§1, §2)
+   and dollar cost by **~15x** on measured sessions. (§1, §2 — AgentFluent
+   prices per-agent spend from the child trace since v0.12, #646)
 2. **Streaming chunks repeat `message.id`.** Summing every `assistant` line's
    `usage` without deduplicating **double-counts by ~2x**. (§3)
 3. **Orphan / depth-≥2 traces get silently dropped**, hiding **~30%** of all
@@ -166,8 +167,8 @@ that turn's real model rate:
 defect inflates a number.
 
 Note the cost ratio (15x) exceeds the token ratio (5.8x). Two errors compound:
-the numerator is a snapshot, *and* AgentFluent applies a **cache-diluted blended
-rate** (`session_cost / session_total_tokens`, where the denominator counts cache
+the numerator is a snapshot, *and* AgentFluent applied a **cache-diluted blended
+rate** (removed in v0.12, #646) (`session_cost / session_total_tokens`, where the denominator counts cache
 reads at full token weight but they cost 0.1x). A correct fix must address both
 the quantity and the rate — see §6.
 
@@ -590,7 +591,7 @@ way.
 
 | project | §1 rollup defect | §3 dedup defect | §4 orphan defect |
 | --- | --- | --- | --- |
-| **AgentFluent** | **Affected** — [#646][i646] | clean (`core/parser.py`); locked by [#649][i649] | **Fixed** for live sessions — fold by ownership + `trace_coverage` ([#648][i648]); parent-absent → [#702][i702] |
+| **AgentFluent** | **Fixed** in v0.12 — per-agent spend and cost from the child trace ([#646][i646]) | clean (`core/parser.py`); regression lock tracked in [#649][i649] (v0.13.0) | **Fixed** for live sessions — fold by ownership + `trace_coverage` ([#648][i648]); parent-absent → [#702][i702] |
 | **CodeFluent** | **Not affected** — never reads the rollup | clean — dedups by `message.id` | **Affected** — 30.2%, [codefluent#334][cf334] |
 | **claude-code-sessions** | **Documents the inverse error** — [#144][ccs144] | gap — [#144][ccs144] | asymmetry documented correctly |
 
@@ -603,7 +604,12 @@ Published posts in claude-code-sessions need errata rather than silent edits:
 [ccs144]: https://github.com/frederick-douglas-pearce/claude-code-sessions/issues/144
 [ccs145]: https://github.com/frederick-douglas-pearce/claude-code-sessions/issues/145
 
-### AgentFluent — affected sites
+### AgentFluent — affected sites (historical, fixed in v0.12)
+
+These were the sites that read the rollup before [#646][i646] and [#675][i675]
+re-sourced them from trace spend. Line numbers are as of the 2026-07-18 audit and
+no longer match the code; `diagnostics/tool_orchestration.py:133` turned out to be a
+token count, not a dollar figure.
 
 - `analytics/agent_metrics.py:217-218` (per-type accumulation), `:250-254`
   (`blended_rate`), `:262` (`estimated_total_cost_usd`), `:267`, `:273-277`
@@ -727,14 +733,19 @@ is not a 2x inflation but a ~6x deflation.
 
 ## 9. Open design questions
 
-For [#646][i646]'s design pass — not settled here.
+Raised for [#646][i646]'s design pass. All five are now settled.
 
 1. **Replace or coexist?** Does corrected spend replace `total_tokens` at the
    aggregates, or land beside it with the existing field retained as a deliberate
    context-size metric? `total_tokens` **has shipped**, so [D029][d056] governs.
+   *Settled by #646: spend lands beside it as `spend_tokens`; `total_tokens` keeps
+   its rollup meaning.*
 2. **Mixed-coverage aggregates.** How should an aggregate behave when some
    invocations are trace-linked and some are not? (Recommendation: coverage-count
    the corrected subset, as `active_duration_invocation_count` already does.)
+   *Settled by #646: `spend_invocation_count` / `priced_invocation_count` count the
+   covered subset, and the run-level `cost_coverage` block discloses the rest
+   (#676).*
 3. **Orphan traces** (§4) — attribute to the session, report separately, or
    surface as a coverage gap? *Settled by [#648][i648]: every trace a live
    session owns is attributed to it and labeled by cohort; parent-absent traces
@@ -749,6 +760,8 @@ For [#646][i646]'s design pass — not settled here.
    with no 50/50 split and no figure for invocations without trace spend.*
 5. **Blended rate.** §2 shows the rate is diluted independently of the quantity.
    Per-turn per-model pricing fixes both; confirm that is in scope.
+   *Settled by #646: `blended_rate` is removed; each trace turn is priced at its own
+   model (one request per turn since #682).*
 
 [i143]: https://github.com/frederick-douglas-pearce/agentfluent/issues/143
 [i675]: https://github.com/frederick-douglas-pearce/agentfluent/issues/675
