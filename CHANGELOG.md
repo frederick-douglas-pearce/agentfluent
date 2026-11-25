@@ -1,6 +1,27 @@
 # Changelog
 
-## [0.12.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.11.0...v0.12.0) (2026-11-25)
+## [0.12.0](https://github.com/frederick-douglas-pearce/agentfluent/compare/v0.11.0...v0.12.0) (2026-11-25) — "Cost Correctness: the Quantity Half"
+
+v0.11 priced each token right; v0.12 counts the tokens right. Per-agent cost used to multiply `toolUseResult.totalTokens` by a session-wide blended rate. That rollup is a final-turn context-size snapshot, not spend. Where it existed it read a median 5.8x low on tokens and about 15x low on dollars overall, though an agent on a cheaper model than the session mix could read high instead. Where it was absent, which is most current invocations, per-agent cost and `agent_token_percentage` were published as `$0.00` / `0.0%` (D064). v0.12 prices per-agent spend from each agent's own trace, one API turn at a time ([#646](https://github.com/frederick-douglas-pearce/agentfluent/issues/646)). It folds every trace a session owns into its totals, including nested and skill/workflow-spawned agents, and discloses them as `trace_coverage` ([#648](https://github.com/frederick-douglas-pearce/agentfluent/issues/648), on the multi-level linker [#595](https://github.com/frederick-douglas-pearce/agentfluent/issues/595)). Fork-replayed turns count once ([#701](https://github.com/frederick-douglas-pearce/agentfluent/issues/701)), each request is priced on its own context tier ([#682](https://github.com/frederick-douglas-pearce/agentfluent/issues/682)), and every run ends with a cost-coverage footer saying what its dollar figures leave out ([#676](https://github.com/frederick-douglas-pearce/agentfluent/issues/676), [#688](https://github.com/frederick-douglas-pearce/agentfluent/issues/688)). Two `genai-prices` bumps restored prices for every current Claude model ([#661](https://github.com/frederick-douglas-pearce/agentfluent/issues/661), [#674](https://github.com/frederick-douglas-pearce/agentfluent/issues/674)).
+
+The release widened from cost correctness to **reporting trust**:
+- Unpriced figures render as `no price` / `$X (partial)` instead of `$0.00` ([#715](https://github.com/frederick-douglas-pearce/agentfluent/issues/715), [#723](https://github.com/frederick-douglas-pearce/agentfluent/issues/723)).
+- `diff` discloses both sides' coverage and flags cost deltas that cross a change of rate table or cost method ([#713](https://github.com/frederick-douglas-pearce/agentfluent/issues/713), [#543](https://github.com/frederick-douglas-pearce/agentfluent/issues/543)).
+- `STUCK_PATTERN` and `USER_CORRECTION`, both 0% precise before, were fixed ([#666](https://github.com/frederick-douglas-pearce/agentfluent/issues/666), [#667](https://github.com/frederick-douglas-pearce/agentfluent/issues/667)).
+- Three home-directory path leaks in output were closed ([#753](https://github.com/frederick-douglas-pearce/agentfluent/issues/753), [#756](https://github.com/frederick-douglas-pearce/agentfluent/issues/756), [#759](https://github.com/frederick-douglas-pearce/agentfluent/issues/759)).
+- The four cost-lever overlays planned for this release measured zero prevalence and moved to the backlog (D066).
+
+**Re-capture `diff` baselines after upgrading.** No JSON field was removed or renamed, and the envelope stays at version `"2"`, but many figures move for an unchanged agent:
+- Session `total_cost` and `cache_efficiency` rise.
+- Per-agent cost and `agent_token_percentage` change meaning.
+- Diagnostics savings price trace spend ([#675](https://github.com/frederick-douglas-pearce/agentfluent/issues/675)).
+- `COST_METHOD_VERSION` is now `2`.
+- Tool-use counts and durations come from traces ([#690](https://github.com/frederick-douglas-pearce/agentfluent/issues/690)), and parallel tool calls are no longer dropped ([#694](https://github.com/frederick-douglas-pearce/agentfluent/issues/694)). As a result, `duration_outlier`, orchestration, complexity and routing findings can fire where they could not before ([#697](https://github.com/frederick-douglas-pearce/agentfluent/issues/697)).
+- Retry-family counts are not comparable across the boundary ([#695](https://github.com/frederick-douglas-pearce/agentfluent/issues/695)).
+
+`diff` flags the cost side with its cost-model caveat. Known limitations: fork-replayed turns still inflate a fork agent's counts ([#704](https://github.com/frederick-douglas-pearce/agentfluent/issues/704), v0.13.0); shared agent ids, not observed ([#705](https://github.com/frederick-douglas-pearce/agentfluent/issues/705)); context tiers use the session's start date ([#738](https://github.com/frederick-douglas-pearce/agentfluent/issues/738)); parallel errored calls in `TOOL_ERROR_SEQUENCE` ([#725](https://github.com/frederick-douglas-pearce/agentfluent/issues/725)); traces whose parent session file is gone ([#702](https://github.com/frederick-douglas-pearce/agentfluent/issues/702)).
+
+See the README "Schema v2 additions (v0.12)" and "Comparing against a pre-v0.12 baseline" notes, [`docs/COST_MODEL.md`](docs/COST_MODEL.md), and [`docs/ROADMAP.md`](docs/ROADMAP.md); PRD [`prd-v0.12.md`](.claude/specs/prd-v0.12.md); decisions D057–D059 and D061–D067.
 
 
 ### Features
@@ -15,7 +36,6 @@
 ### Bug Fixes
 
 * **analytics:** fold every subagent trace a session owns into its totals and disclose coverage ([#648](https://github.com/frederick-douglas-pearce/agentfluent/issues/648)) ([c352372](https://github.com/frederick-douglas-pearce/agentfluent/commit/c352372db0f6716e1a14e23aff7af4641d259c4c))
-* **analytics:** price per-agent spend from subagent traces, drop blended rate ([#646](https://github.com/frederick-douglas-pearce/agentfluent/issues/646)) ([d77a00d](https://github.com/frederick-douglas-pearce/agentfluent/commit/d77a00dd30643dcc5120c4a47b132d48a1e5cee3))
 * **analytics:** price per-agent spend from subagent traces, drop blended rate ([#646](https://github.com/frederick-douglas-pearce/agentfluent/issues/646)) ([d77a00d](https://github.com/frederick-douglas-pearce/agentfluent/commit/d77a00dd30643dcc5120c4a47b132d48a1e5cee3))
 * **analytics:** session total_cost and cache_efficiency rise and agent_token_percentage falls against pre-0.12 baselines ([#648](https://github.com/frederick-douglas-pearce/agentfluent/issues/648)) ([c352372](https://github.com/frederick-douglas-pearce/agentfluent/commit/c352372db0f6716e1a14e23aff7af4641d259c4c))
 * **analytics:** source agent tool-use count and duration from subagent traces ([#690](https://github.com/frederick-douglas-pearce/agentfluent/issues/690)) ([6839604](https://github.com/frederick-douglas-pearce/agentfluent/commit/68396048f06d69f0bd9254a149f783db763cd50f))
