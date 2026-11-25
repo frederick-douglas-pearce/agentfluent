@@ -160,13 +160,16 @@ edits, or fast-changing system prompt) and merit a look at where the
 
 **Short:** Estimated dollar cost across all token categories for the session.
 
-**Detail:** Computed by multiplying each token category by its per-million-token
-rate (see `pricing.py`). Output tokens typically dominate per-call
+**Detail:** Each API request is priced on its own: every token category times its
+per-million-token rate at the session's date, at the
+[context tier](#context_tier) that request's prompt reaches. The
+session total sums every assistant message plus every subagent trace
+the session owns (see [`trace_coverage`](#trace_coverage)). Output tokens typically dominate per-call
 cost; cache_read tokens dominate by volume on long sessions. Reported
 in USD; shown as `no price` when every token is unpriced and
 `$X (partial)` when some are (see [`unpriced_tokens`](#unpriced_tokens)).
 
-**Related:** [`output`](#output), [`cache_read`](#cache_read), [`unpriced_tokens`](#unpriced_tokens)
+**Related:** [`output`](#output), [`cache_read`](#cache_read), [`unpriced_tokens`](#unpriced_tokens), [`context_tier`](#context_tier), [`trace_coverage`](#trace_coverage)
 
 
 ---
@@ -294,7 +297,8 @@ try differently. The retries may eventually succeed, in which case
 Calls the agent issued in parallel within one model turn (recorded as
 one message) are not counted as retries of each other: neither saw
 the other's result. The same rule applies to `stuck_pattern` and
-`parameter_retry`.
+`parameter_retry`. Each trace tool call carries that turn as
+`turn_index` in the JSON.
 
 **Example:**
 
@@ -1800,7 +1804,12 @@ makes [`cost_coverage`](#cost_coverage) `null` too -- unknown, never
 full. `analyze` (under the Token Usage table) and `report` (under
 Token Metrics) print one line below the cost-coverage footer when any
 cohort other than `linked` is non-empty. Unparseable files are also a
-gap in the footer itself, since their spend is in no total.
+gap in the footer itself, since their spend is in no total. A nested
+trace is placed by the multi-level linker (#595), which sets
+`parent_invocation_id` (the invocation that spawned it; `null` at
+depth 1 or when no parent can be attributed) and `depth` on each trace
+in the JSON. Cohorts are labeled separately because an unattributable
+trace also reads as depth 1.
 
 **Example:**
 
@@ -1973,12 +1982,18 @@ figure the Agent Invocations table's Tokens column shows ("-" when no
 invocation of the type has trace spend). Each API turn is counted
 once, even when a fork agent replays it in another trace file (#701).
 `estimated_total_cost_usd` prices the same turns, one request at a
-time. `total_tokens` beside it keeps its old meaning: the
+time. `priced_model_turns` is the model-turn count of the priced
+invocations, the denominator of `estimated_avg_cost_per_turn_usd`. In `diff --json`,
+`baseline_spend_tokens`, `current_spend_tokens` and
+`spend_tokens_delta` are this field per side and its change (`null`
+when a side's spend is unknown). `total_tokens` beside it keeps its old meaning: the
 `toolUseResult.totalTokens` rollup, a context-size proxy rather than
 spend, and absent on most current invocations. `total_agent_spend_tokens`
 sums `spend_tokens` across types, and `agent_token_percentage` is that
-sum as a share of session total tokens. Both read lower or higher than
-a pre-v0.12 baseline, which divided a rollup by a blended rate.
+sum as a share of session total tokens. Before v0.12 that share's
+numerator was the summed rollup (`total_agent_tokens`), and per-agent
+cost was the rollup times a session-wide blended rate, so both move
+against a pre-v0.12 baseline.
 
 **Related:** [`linked_invocation_count`](#linked_invocation_count), [`trace_coverage`](#trace_coverage), [`cost_coverage`](#cost_coverage)
 
@@ -1992,9 +2007,10 @@ is longer than a threshold.
 greater than the model's threshold, every token of the request,
 output included, is priced at the tier rate. A tier is never chosen
 from a sum of requests. At the pinned genai-prices version,
-`claude-haiku-5-5` charges 5x above 100K, and older Sonnet/Opus
-models have a >200K tier. Rates follow the session's first-message
-date (#738). Because each `by_model` row sums per-request costs, its
+`claude-haiku-5-5` charges 5x above 100K, `claude-sonnet-4-5` has a
+>200K tier at every date, and `claude-opus-4-6` / `claude-sonnet-4-6`
+have one for sessions dated before 2026-03-13. Rates follow the
+session's first-message date (#738). Because each `by_model` row sums per-request costs, its
 `cost` cannot be recomputed as row tokens times one rate.
 [`cost_model`](#cost_model)'s cost-method version is 2 from this
 change, so `diff` flags cost deltas across it.

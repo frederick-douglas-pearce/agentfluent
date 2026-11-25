@@ -79,7 +79,7 @@ The wiring is a forward-compat guarantee: the day Anthropic ships a genuine date
 
 Cost is `rate × quantity`. v0.11 rebuilt the **rate** half, the price per token: the genai-prices base ⊕ overlay seam (#547) and date-aware rate lookup (#546) above. It shipped with a caveat, because the **quantity** half, *how many tokens each agent actually burned*, was wrong. v0.12 fixes the quantity half, and this section replaces that caveat.
 
-**What was wrong.** Per-agent figures came from `toolUseResult.totalTokens`. That field is not cumulative spend: it equals the agent's **final assistant turn** (`input + output + cache_creation + cache_read`), a context-size proxy (D056; field-by-field in [`TOKEN_ACCOUNTING.md`](TOKEN_ACCOUNTING.md)). Per-agent cost multiplied it by a session-wide blended rate that counted cache reads at full weight. Where the rollup existed, per-agent cost was understated about **15x**. On current Claude Code sessions the rollup is usually absent, so per-agent cost and `agent_token_percentage` read **$0.00 / 0.0%** (D064). Separately, subagent traces that did not link to a depth-1 invocation, nested agents and agents a skill or workflow spawned, never reached the session total.
+**What was wrong.** Per-agent figures came from `toolUseResult.totalTokens`. That field is not cumulative spend: it equals the agent's **final assistant turn** (`input + output + cache_creation + cache_read`), a context-size proxy (D056; field-by-field in [`TOKEN_ACCOUNTING.md`](TOKEN_ACCOUNTING.md)). Per-agent cost multiplied it by a session-wide blended rate that counted cache reads at full weight. The rollup reads a median 5.8x low on tokens; where it existed, per-agent dollars came out about **15x** low overall, though an agent on a cheaper model than the session mix could read high instead (D064). On current Claude Code sessions the rollup is usually absent, so per-agent cost and `agent_token_percentage` read **$0.00 / 0.0%** (D064). Separately, subagent traces that did not link to a depth-1 invocation, nested agents and agents a skill or workflow spawned, never reached the session total.
 
 **What v0.12 does instead.**
 
@@ -89,14 +89,14 @@ Cost is `rate × quantity`. v0.11 rebuilt the **rate** half, the price per token
 - **Each request is priced on its own** (#682), so a long-prompt request pays its context tier ([above](#context-length-tiers-priced-per-request-682)).
 - **Every run discloses its coverage** (#676/#688): [`cost_coverage`](GLOSSARY.md#cost_coverage) and the Cost coverage footer report tokens with no known price, invocations with no trace-priced spend, and partial diagnostics estimates. Unpriced rows render as `no price`, not `$0.00` (#715/#723).
 
-**What moves against a pre-v0.12 baseline:** session `total_cost` and `cache_efficiency` rise, per-agent cost rises from its understated value, and `agent_token_percentage` changes meaning (spend share, not rollup share). `diff` attributes the change through the [`cost_model`](GLOSSARY.md#cost_model) stamp and the coverage caveat; re-capture baselines after upgrading.
+**What moves against a pre-v0.12 baseline:** session `total_cost` and `cache_efficiency` rise, per-agent cost usually rises (it was usually understated), and `agent_token_percentage` changes meaning (spend share, not rollup share). `diff` attributes the change through the [`cost_model`](GLOSSARY.md#cost_model) stamp and the coverage caveat; re-capture baselines after upgrading.
 
 **Still not covered.**
 
 - **Traces whose parent session file is gone** are neither counted nor disclosed (#702).
-- **Fork-replayed turns** are deduplicated for dollars but still inflate a fork agent's turn, tool-call, error and retry counts (#704, v0.13.0; measured at 2 fork traces in 1 of 2,363 sessions).
-- **Two invocations sharing one agent id** would each claim the whole trace (#705; not observed in 5,228 linked invocations).
-- **No external validation.** The corrected spend was not checked against the Usage & Cost Admin API (no org credentials, D059). The internal cross-check is that per-agent cost plus nested and session-spawned cost equals subagent-origin `by_model` cost.
+- **Fork-replayed turns** are deduplicated for dollars but still inflate a fork agent's turn, tool-call, error and retry counts, and a trace finding on a fork can cite the spawning conversation's errors or retries (#704, v0.13.0; measured at 2 fork traces in 1 of 2,363 sessions).
+- **Two invocations sharing one agent id** would each get their own parse of the trace. Dollar spend is still deduplicated (#701), but the type's invocation counts and per-invocation averages would be inflated, turns without a message id would count twice, and the cross-check below would no longer hold (#705; not observed in 5,228 linked invocations).
+- **No external validation.** The corrected spend was not checked against the Usage & Cost Admin API (no org credentials, D059). The internal cross-check is that per-agent cost plus nested and session-spawned cost equals subagent-origin `by_model` cost, pinned by `tests/unit/test_pipeline.py::TestAgentSpendReconciliation` and `tests/unit/test_trace_coverage.py::TestReconciliation`.
 
 ---
 

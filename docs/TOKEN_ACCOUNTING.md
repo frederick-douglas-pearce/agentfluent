@@ -167,8 +167,8 @@ that turn's real model rate:
 defect inflates a number.
 
 Note the cost ratio (15x) exceeds the token ratio (5.8x). Two errors compound:
-the numerator is a snapshot, *and* AgentFluent applies a **cache-diluted blended
-rate** (`session_cost / session_total_tokens`, where the denominator counts cache
+the numerator is a snapshot, *and* AgentFluent applied a **cache-diluted blended
+rate** (removed in v0.12, #646) (`session_cost / session_total_tokens`, where the denominator counts cache
 reads at full token weight but they cost 0.1x). A correct fix must address both
 the quantity and the rate — see §6.
 
