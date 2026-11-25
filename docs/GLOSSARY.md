@@ -1963,6 +1963,44 @@ linked_invocation_count <= invocation_count`.
 
 **Related:** [`cost_coverage`](#cost_coverage), [`trace_coverage`](#trace_coverage)
 
+### `spend_tokens`
+
+**Short:** Tokens an agent type actually burned, summed turn by turn from its
+linked subagent traces.
+
+**Detail:** Added in v0.12 (#646). A field on each `by_agent_type` row, and the
+figure the Agent Invocations table's Tokens column shows ("-" when no
+invocation of the type has trace spend). Each API turn is counted
+once, even when a fork agent replays it in another trace file (#701).
+`estimated_total_cost_usd` prices the same turns, one request at a
+time. `total_tokens` beside it keeps its old meaning: the
+`toolUseResult.totalTokens` rollup, a context-size proxy rather than
+spend, and absent on most current invocations. `total_agent_spend_tokens`
+sums `spend_tokens` across types, and `agent_token_percentage` is that
+sum as a share of session total tokens. Both read lower or higher than
+a pre-v0.12 baseline, which divided a rollup by a blended rate.
+
+**Related:** [`linked_invocation_count`](#linked_invocation_count), [`trace_coverage`](#trace_coverage), [`cost_coverage`](#cost_coverage)
+
+### `context_tier`
+
+**Short:** A higher per-token rate some models charge when one request's prompt
+is longer than a threshold.
+
+**Detail:** Priced from v0.12 (#682). The prompt is that one request's
+`input + cache_creation + cache_read` tokens. When it is strictly
+greater than the model's threshold, every token of the request,
+output included, is priced at the tier rate. A tier is never chosen
+from a sum of requests. At the pinned genai-prices version,
+`claude-haiku-5-5` charges 5x above 100K, and older Sonnet/Opus
+models have a >200K tier. Rates follow the session's first-message
+date (#738). Because each `by_model` row sums per-request costs, its
+`cost` cannot be recomputed as row tokens times one rate.
+[`cost_model`](#cost_model)'s cost-method version is 2 from this
+change, so `diff` flags cost deltas across it.
+
+**Related:** [`cost_model`](#cost_model), [`total_cost`](#total_cost)
+
 ### `session_spawned`
 
 **Short:** A subagent the session started without an `Agent` tool call, such as

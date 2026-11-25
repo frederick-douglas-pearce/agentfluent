@@ -1,10 +1,21 @@
 # PRD: AgentFluent v0.12 -- Cost Correctness, the Quantity Half
 
-**Status:** Proposed 2026-07-22 (scope recommendation; human disposes)
+**Status:** Shipped as v0.12.0 (cut 2026-11-25). Proposed 2026-07-22; re-scoped by D062 (2026-11-13) and D066 (2026-11-22). **Read §0 first** — the body below is the original proposal and is kept unedited as the planning record.
 **Date:** 2026-07-22
 **Author:** PM Agent
 **Governing decision:** [D057](decisions.md) (the `totalTokens` defect is a deterministic 100% rule, ~15x silent understatement; `#646` becomes the v0.12 headline; `#648` split out; v0.12 corrects the *quantity* half while v0.11 corrected the *rate* half). [D056](decisions.md) (aggregation convention (A) -- `totalTokens` exclusive of children -- stands). [D058](decisions.md) (dogfood milestoning: shippable-artifact test; re-measurement floats on the label -- excludes #513/#469/#558/#600/#601/#637 from this milestone). [D045](decisions.md) (genai-prices base + local overlay). [D054](decisions.md) (`COST_MODEL.md` caveat routing; tier gap split to `#639`). [D042](decisions.md) (hold scope at the epic). [D029](decisions.md) (released field -> no rename). [D059](decisions.md) (this release's scoping call). [D061](decisions.md) (pricing coverage is restored by the upstream bump, never a local rate). [D062](decisions.md) (**this release re-scoped 2026-11-13** -- D057's ~15x magnitude is unverifiable pending re-measurement; `#646` bounded to the analytics aggregates; `#675`/`#676` split out).
 **Upstream context:** v0.11 shipped the pricing *foundation* (genai-prices base⊕overlay seam #547, date-aware plumbing #546, #545) and, per D057(11), an explicit **cost caveat** (`docs/COST_MODEL.md` + README/GLOSSARY + CHANGELOG "Known limitations", via #549) stating the composite `estimated_total_cost_usd` is no more accurate than v0.10. This PRD is the release that *retires* that caveat.
+
+
+## 0. As shipped (2026-11-25)
+
+What differs from the proposal below:
+
+- **Magnitude.** D062(1) suspended the "~15x" figure pending re-measurement; D064 re-measured it after `#674`: **15.2x** understatement where the `totalTokens` rollup exists, and **total loss** (`$0.00` per-agent cost, `0.0%` agent token share) where it is absent — 0% of invocations carried the rollup on three of four corpora. The quantity fixes (`#646`, `#648`, `#701`) recover both cases.
+- **WS2 (rate levers) did not ship.** `#536`–`#539` measured zero prevalence and moved to the backlog (D066); epic `#535` stays open. `#82` was ejected (2026-08-29). Goal 4 and the "every Claude cost lever is priced" half of the pitch are therefore unmet; the disclosure half shipped as `cost_coverage` (`#676`/`#688`).
+- **Added during the release:** two `genai-prices` bumps that restored pricing for every current model (`#661`, `#674`, D061); per-request context-tier pricing (`#682`, closing `#639`, which §3 had excluded; D067); parser and trace fixes the quantity work exposed (`#690`, `#694`, `#695`, `#697`, `#701`); diagnostics savings re-sourced from trace spend (`#675`); `diff` coverage and spend deltas (`#693`, `#713`); unpriced-not-`$0` rendering (`#715`, `#723`); diagnostics precision (`#666`, `#667`); alias/tier and parsing fixes (`#679`, `#680`, `#745`, `#747`, `#742`); home-path leak fixes (`#753`, `#756`, `#759`).
+- **Moved to v0.13.0:** `#649`, `#653`, `#662`, `#684`, `#704`, `#721`, `#722`. Parent-absent traces: `#702` (unmilestoned).
+- **Known limitations** are listed in the README (v0.12 schema notes) and `docs/COST_MODEL.md`.
 
 ---
 
