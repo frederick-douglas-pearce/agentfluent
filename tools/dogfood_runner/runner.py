@@ -58,11 +58,11 @@ REPO_DIR = Path(__file__).resolve().parents[2]
 # The parent (synthesis) model is ROTATED across these tiers to diversify the SDK
 # dogfood corpus's model dimension (#636) — every run otherwise sits at one point
 # in the model dimension, and opus is overkill for orchestration+summarization
-# (#635). The subagent stays Haiku (main-model-only per #636 scope). ``sonnet-4-6``
-# is the non-dated alias the rest of the repo already trusts (fixtures, builders,
-# the #519 matrix runner).
-MAIN_MODELS = ("claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5")
-SUBAGENT_MODEL = "claude-haiku-4-5"
+# (#635). The subagent stays Haiku (main-model-only per #636 scope). Pinned to the
+# current (5.5) family so the corpus exercises the model ids the pricing layer
+# curates (#685); bump again when a new family ships.
+MAIN_MODELS = ("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5")
+SUBAGENT_MODEL = "claude-haiku-5-5"
 SYNTHESIS_MAX_TURNS = 20
 
 # Manual override for the rotated parent model (``--main-model`` or this env var,
