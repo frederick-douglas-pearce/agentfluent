@@ -20,9 +20,11 @@ Out of scope: signals that render **session-observed** file paths
 from a config definition. Whether those render home-relative is an open
 policy question (#757), so this guard neither covers nor decides it.
 
-Also out of scope: ``EnvironmentWarning`` text. The cleanupPeriodDays
-retention warning (``config/retention.py::check_cleanup_retention``) still
-renders the absolute settings path; that is tracked in #759.
+``EnvironmentWarning`` text follows the same policy: the cleanupPeriodDays
+retention warning (``config/retention.py::check_cleanup_retention``) renders
+the settings path home-relative in ``message`` and keeps it absolute in
+``remediation_path`` (#759). The only other producer,
+``analytics/cost_coverage.py::pricing_gap_warning``, renders no path.
 """
 
 from __future__ import annotations
@@ -38,6 +40,7 @@ import pytest
 
 from agentfluent.agents.models import AgentInvocation
 from agentfluent.config.models import AgentConfig, McpServerConfig, Scope, Severity
+from agentfluent.config.retention import _load_settings, check_cleanup_retention
 from agentfluent.diagnostics import agent_audit, correlator, mcp_assessment
 from agentfluent.diagnostics.agent_audit import (
     audit_tool_inventory,
@@ -378,3 +381,27 @@ def test_every_path_rendering_rule_is_covered() -> None:
     assert rendering <= covered, (
         f"add guard rows for: {sorted(r.__name__ for r in rendering - covered)}"
     )
+
+
+# --- EnvironmentWarning text (#759) ---------------------------------------
+
+
+def test_retention_warning_renders_no_home_path(fake_home: Path) -> None:
+    """The cleanupPeriodDays warning renders its settings path home-relative.
+
+    No ``settings.json`` under the fake home's config dir, so the 30-day
+    default applies and the warning fires. ``message`` carries
+    ``~/.claude/settings.json``; ``remediation_path`` keeps the absolute path.
+    """
+    config_dir = fake_home / ".claude"
+    config_dir.mkdir(parents=True)
+    _load_settings.cache_clear()
+
+    warning = check_cleanup_retention(config_dir, None)
+
+    assert warning is not None
+    absolute = config_dir / "settings.json"
+    assert warning.remediation_path == absolute
+    assert str(absolute).startswith(str(fake_home))
+    assert str(fake_home) not in warning.message
+    assert "~/.claude/settings.json" in warning.message
