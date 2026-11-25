@@ -80,14 +80,15 @@ class EnvironmentWarning(BaseModel):
     """How important this warning is. Drives banner color."""
 
     message: str
-    """Human-readable warning text, ready to render as-is. Any filesystem
-    path in it is rendered home-relative via ``core/paths.py::home_relative``
-    (#759)."""
+    """Human-readable warning text, ready to render as-is. Paths
+    interpolated from runtime values (e.g. the retention warning's settings
+    path) are rendered via ``core/paths.py::home_relative`` (#759)."""
 
     remediation_path: Path | None = None
     """Filesystem path the user should edit to resolve the warning
-    (e.g., ``/home/<user>/.claude/settings.json``). Kept absolute for
-    programmatic consumers, while ``message`` spells it home-relative.
+    (e.g., ``/home/<user>/.claude/settings.json``). Not home-relativized:
+    the path as resolved from the config dir, for programmatic consumers,
+    while ``message`` renders it via ``home_relative``.
     ``None`` when the warning has no single actionable file."""
 
 
