@@ -49,7 +49,7 @@ dependencies = [
     # from a static attribute error to a runtime one -- which is what the exact pin now bounds.
     # The 0.1.4 -> 0.2.3 bump (#674) re-ran that probe: all four ``REQUIRED_PRICE_KEYS`` are
     # still registered, and every previously-curated rate is byte-identical across the bump.
-    "genai-prices==0.2.3",
+    "genai-prices==0.2.5",
 ]
 
 [project.optional-dependencies]
